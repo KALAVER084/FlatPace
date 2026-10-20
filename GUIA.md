@@ -1,4 +1,4 @@
-# Guía de uso de FlatPace 0.36.3
+# Guía de uso de FlatPace 0.37
 
 Esta guía describe la versión actual. Los cambios entre versiones están en el [historial](CHANGELOG.md).
 
@@ -92,7 +92,8 @@ Es una ventana propia y transparente: no toca el juego.
 
 ## 10. Avisos y deshacer
 
-- **Avisos en ámbar** (en *Juegos* y en *Ahora*): el juego no sostiene su límite, va claramente mejor que cuando se decidió (por ejemplo, tras bajar ajustes), o la generación de fotogramas está al revés que cuando se aplicó.
+- **Avisos en ámbar** (en *Juegos* y en *Ahora*): el juego no sostiene su límite, va claramente mejor que cuando se decidió (por ejemplo, tras bajar ajustes), la generación de fotogramas está al revés que cuando se aplicó, o **podría sostener un límite más alto**: con el límite puesto, la app estima la capacidad real del juego y, si llega al siguiente escalón, te lo sugiere (*"Podría sostener ~X FPS reales"*). Nunca lo sube sola: para aplicarlo, pulsa *Deshacer* y la app lo recalculará.
+- **En el registro** verás además la capacidad estimada con el límite puesto (*"sin límite ~X fps"*), las **fases** de la partida (cambios de zona o de ajustes) y, en el resumen, la **memoria del juego**: lo que sostiene según todas tus partidas.
 - **Deshacer un juego:** botón *Deshacer* en su fila. Vuelve exactamente a como estaba; si "Aplicar límites" está activado, se recalcula en la próxima partida.
 - **Deshacer todo:** *Deshacer todos los cambios* (la app pasa a solo medir) o doble clic en `Deshacer cambios.bat`.
 

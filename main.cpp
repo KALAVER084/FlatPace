@@ -101,6 +101,9 @@ static std::string Trim(const std::string& s) {
 }
 
 #include "src/core/stats_basic.h"
+#include "src/core/censored.h"
+#include "src/core/bocpd.h"
+#include "src/core/game_memory.h"
 
 static bool IsElevated() {
   HANDLE token = nullptr;
@@ -121,7 +124,7 @@ static std::atomic<bool> g_quit{false};
 static std::atomic<int> g_lang{0};
 static const char* T(const char* es, const char* en) { return g_lang == 1 ? en : es; }
 
-static constexpr const char* kVersion = "0.36.3";
+static constexpr const char* kVersion = "0.37";
 
 // Carpeta donde esta este .exe.
 static std::wstring ExeDirectory() {
@@ -728,6 +731,7 @@ static std::wstring OpenLog() {
 }
 
 #include "src/core/analysis.h"
+#include "src/core/suggest.h"
 
 static void PrintAdvice(const WindowStats& st) {
   std::string b = st.Bottleneck();
@@ -1678,6 +1682,9 @@ struct Session {
 
   // Empieza una medicion limpia tras esperar a que el ritmo se estabilice.
   std::deque<std::pair<double, double>> longReal;  // (momento, ms) de los ultimos minutos
+  // Fases de juego (BOCPD sobre el log de la mediana de cada segundo). Una fase nueva solo cuenta si,
+  // tras 10 s, su ritmo difiere al menos un 8 % del de la fase anterior.
+  PhaseTracker phases;
   // Variacion entre fotogramas consecutivos en toda la partida (para el resumen).
   double jPrev = -1.0, sPrev = -1.0, jSum = 0.0, sSum = 0.0;
   size_t jN = 0, j2 = 0, sN = 0, s2 = 0;
@@ -1720,6 +1727,21 @@ struct Session {
 };
 
 static void WriteKv(const std::wstring& file, const std::string& key, const std::string& value);
+static std::string ReadKv(const std::wstring& file, const std::string& key);
+
+// Periodo (ms de fotograma real) del limite que esta actuando, para el modelo de datos censurados:
+// el de FlatPace si esta comprobado o se aplico al abrir el juego, o el que se detecta (del juego).
+static double ActiveCapMs(const Session& ss) {
+  if (ss.expectedFps > 0 && (ss.verified || ss.appliedAtStart)) return 1000.0 / ss.expectedFps;
+  if (ss.lastStats.capped && ss.lastStats.capFps > 0) return 1000.0 / ss.lastStats.capFps;
+  return 0.0;
+}
+
+static double MedianOf(std::vector<double> v) {
+  if (v.empty()) return 0.0;
+  std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end());
+  return v[v.size() / 2];
+}
 
 // ---------------------------------------------------------------------------
 // Grabacion de fotogramas: un CSV por partida en la carpeta "grabaciones" junto al programa,
@@ -1791,6 +1813,7 @@ static void PrintSessionSummary(const Session& s, double hz) {
   Log("\n=== Resumen: %s ===\n", s.label.c_str());
   Log("  Duracion: %.1f min | tirones: %d (%.1f por minuto)", minutes, s.hitchTotal,
       s.hitchTotal / minutes);
+  if (s.hitchTotal > 0) Log(", el peor de %.0f ms", s.worstHitch);
   if (s.jN > 0)
     Log(" | consistencia: %.1f %% de cambios < 2 ms entre fotogramas reales consecutivos (media %.2f ms)",
         100.0 * s.j2 / s.jN, s.jSum / s.jN);
@@ -1817,11 +1840,71 @@ static void PrintSessionSummary(const Session& s, double hz) {
         s.aeSum / s.aeN, 100.0 * s.aeOver1 / s.aeN, s.aeMax);
   else
     Log("\n  Error de animacion: no disponible para este juego");
-  if (s.hitchTotal > 0) Log(", el peor de %.0f ms", s.worstHitch);
   Log("\n  Pausas largas ignoradas: %d\n", s.pauseTotal);
   Log("  Generacion de fotogramas: %s\n", s.fgEverSeen ? "detectada" : "no detectada");
   if (!s.MainPresentMode().empty())
     Log("  Presentacion: %s\n", s.MainPresentMode().c_str());
+
+  // Modelos estadisticos: capacidad con el limite puesto (datos censurados), memoria del juego
+  // entre partidas y fases de juego. Por ahora informan y sugieren; no cambian las decisiones.
+  {
+    std::vector<double> msv;
+    msv.reserve(s.longReal.size());
+    for (const auto& r : s.longReal) msv.push_back(r.second);
+    const double capMs = ActiveCapMs(s);
+    double stableFps = 0.0;  // ritmo que el juego sostiene (criterio de Estabilidad: p99 x 1,05)
+    bool plenty = false;     // casi todo en el limite: va sobrado
+    CapacityEstimate ce;
+    if (capMs > 0) ce = EstimateCapacity(msv, capMs);
+    if (ce.valid) {
+      Log("  Capacidad estimada sin limite (%.0f %% de fotogramas en el limite, modelo de datos censurados):\n"
+          "    mediana ~%.0f fps | 1 %% mas lento ~%.0f fps\n",
+          100.0 * ce.censoredFraction, 1000.0 / ce.medianMs, 1000.0 / ce.p99Ms);
+      stableFps = 1000.0 / (ce.p99Ms * 1.05);
+    } else if (ce.censoredFraction > 0.98) {
+      plenty = true;
+      Log("  Capacidad: el juego va sobrado con su limite (%.0f %% de fotogramas en el limite).\n",
+          100.0 * ce.censoredFraction);
+    } else if (msv.size() >= 200 && ce.censoredFraction < 0.05) {
+      std::vector<double> sorted = msv;
+      std::sort(sorted.begin(), sorted.end());
+      const double p99 = PercentileSorted(sorted, 99);
+      if (p99 > 0) stableFps = 1000.0 / (p99 * 1.05);
+    }
+    GameMemory mem = GameMemory::Parse(ReadKv(L"equipo.txt", "memoria|" + s.exe));
+    if (stableFps > 0 && s.gameSecs >= 60.0 && !s.exe.empty()) {
+      mem.Add(stableFps, s.gameSecs / 60.0);
+      WriteKv(L"equipo.txt", "memoria|" + s.exe, mem.Serialize());
+    }
+    if (mem.sessions > 0)
+      Log("  Memoria del juego: %d partida%s; sostiene ~%.0f fps reales (con un 80 %% de probabilidad, al menos %.0f)\n",
+          mem.sessions, mem.sessions == 1 ? "" : "s", mem.MeanFps(), mem.LowerFps());
+    // Sugerencia: el limite confirmado podria subir al siguiente escalon.
+    if (s.verified && s.expectedFps > 0 && !s.exe.empty()) {
+      if (SuggestRaise(stableFps, plenty, mem, s.expectedFps, s.expectFg, s.expectVrr, hz) > 0) {
+        std::string tip = plenty ? Fmt(T("Va sobrado con su límite: podría sostener bastante más de %.0f FPS reales. "
+                                         "Pulsa «Deshacer» para recalcularlo.",
+                                         "It has plenty of headroom: it could hold well over %.0f real FPS. "
+                                         "Click “Undo” to recalculate it."),
+                                       s.expectedFps)
+                                 : Fmt(T("Podría sostener ~%.0f FPS reales (su límite: %.0f). Pulsa «Deshacer» para "
+                                         "recalcularlo.",
+                                         "It could hold ~%.0f real FPS (its limit: %.0f). Click “Undo” to recalculate it."),
+                                       stableFps, s.expectedFps);
+        Log("  Sugerencia: %s\n", tip.c_str());
+        std::lock_guard<std::mutex> lock(g_ui.m);
+        g_ui.warnings[s.exe] = tip;
+      }
+    }
+    // Fases de juego
+    std::vector<PhaseTracker::Phase> ph = s.phases.All(NowSec());
+    if (ph.size() >= 2) {
+      Log("  Fases de juego: %zu\n", ph.size());
+      for (const auto& f : ph)
+        Log("    %4.0f-%4.0f s: ~%.0f fps\n", f.start - s.start, f.end - s.start, 1000.0 / f.medianMs);
+    }
+  }
+
   if (s.haveRec) {
     bool lastChangeAtEnd = s.hasPrevRec && NowSec() - s.recChangedAt < 6.0;
     Log("\n  Recomendacion final:\n");
@@ -1835,6 +1918,18 @@ static void PrintSessionSummary(const Session& s, double hz) {
 }
 
 // Un segundo de analisis para el juego de la sesion.
+// Fases: un dato por segundo (mediana de los fotogramas reales de ese segundo).
+static void TrackPhases(Session& ss, const std::vector<FrameSample>& fresh, double now) {
+  std::vector<double> sec;
+  for (const auto& f : fresh)
+    if (!f.generated && f.realMs > 0 && f.realMs <= cfg::kSpikeMs) sec.push_back(f.realMs);
+  if (sec.size() < 5 || ss.paused) return;
+  PhaseTracker::Event ev = ss.phases.Push(now, MedianOf(sec));
+  if (ev.confirmed)
+    Log("[%5.0f s] Fase nueva: ~%.0f fps (antes ~%.0f fps durante %.0f s)\n", ss.T(ev.at), 1000.0 / ev.afterMs,
+        1000.0 / ev.beforeMs, ev.beforeSec);
+}
+
 static void ProcessSession(Session& ss, std::vector<FrameSample>& fresh, double now, double hz) {
   std::vector<double> longCache;
   bool longReady = false;
@@ -1893,6 +1988,8 @@ static void ProcessSession(Session& ss, std::vector<FrameSample>& fresh, double 
       Log("[%5.0f s] Pausa larga ignorada (carga o menu)\n", ss.T(now));
     }
   }
+
+  TrackPhases(ss, fresh, now);
 
   for (const auto& s : fresh) {
     if (!s.presentMode.empty()) ss.presentModes[s.presentMode]++;
@@ -2135,6 +2232,16 @@ static void ProcessSession(Session& ss, std::vector<FrameSample>& fresh, double 
       std::snprintf(buf, sizeof(buf), " | limite activo ~%.0f%s", st.capFps,
                     st.capFits ? "" : " (no encaja)");
       extra += buf;
+    }
+    if (const double capMs = ActiveCapMs(ss); capMs > 0) {
+      std::vector<double> win;
+      for (const auto& f : ss.samples)
+        if (!f.generated && f.realMs > 0 && f.t >= now - cfg::kWindowSec) win.push_back(f.realMs);
+      CapacityEstimate ce = EstimateCapacity(win, capMs);
+      if (ce.valid)
+        extra += Fmt(" | sin limite ~%.0f fps (p99 ~%.0f)", 1000.0 / ce.medianMs, 1000.0 / ce.p99Ms);
+      else if (ce.censoredFraction > 0.98)
+        extra += " | sobrado (casi todo en el limite)";
     }
     std::string rec = ss.current.valid
                           ? std::to_string(static_cast<int>(ss.current.capFps + 0.5)) + " fps"

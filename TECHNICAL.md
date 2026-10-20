@@ -1,4 +1,4 @@
-# FlatPace 0.36.3 technical documentation
+# FlatPace 0.37 technical documentation
 
 This document explains how FlatPace works inside: architecture, algorithms, formulas, data formats and the sources behind its decisions. Some names (log lines, data files and keys) are in Spanish, as they appear in the program.
 
@@ -111,7 +111,16 @@ No interface; in `%LOCALAPPDATA%\FlatPace\equipo.txt` (one `key=value` line), wi
 
 Limits already applied don't change: to recalculate a game with the new setting, use *Undo*.
 
-## 9. Foundations and sources
+## 9. Statistical models (0.37)
+
+For now they report and suggest; their effect on decisions will be enabled once they are validated with real recordings.
+
+- **Censored data** (`src/core/censored.h`): with a limit of period *c*, frames ≤ *c* × 1.03 are treated as censored ("would take at most *c*"); the rest as measurements. A log-normal is fitted by maximum likelihood (Nelder-Mead over the mean and the log of the standard deviation), without pauses (> 250 ms) or stutters (> 2.5 × median). It needs ≥ 200 frames, ≥ 5 % censoring and ≥ 30 visible frames; above 98 % censoring it reports "plenty of headroom". The median, p70 and p99 come from the log-normal. The p99 isn't affected while slow frames stay above the limit, so *Stability* was already immune to this bias; *Smoothness* (p70) wasn't.
+- **Per-game memory** (`src/core/game_memory.h`): weighted mean and variance (Welford) of the log of the pace the game holds in each session (1000 / (p99 × 1.05), with the model's p99 if censored), weighted by minutes played (up to 10) and forgetting ×0.8 per session. Uncertainty = √(between-session variance + 0.08² / sessions); 80 % lower bound = exp(mean − 0.84 × uncertainty). Saved in `equipo.txt` (`memoria|game.exe`).
+- **Phases** (`src/core/bocpd.h`): BOCPD with a normal-gamma prior (κ₀ = 0.02, α₀ = 2, prior standard deviation 0.03 on the log scale), change hazard 1/60 per second and runs truncated at 300 s, over the log of each second's median filtered with a 3 s median. A change is proposed when the most likely run returns to ≤ 3 s for two steps after having been ≥ 8 s; the phase is confirmed if, after 10 s, its median differs ≥ 8 % from the previous one.
+- **Suggestion** (`src/core/suggest.h`): next step = with VRR, min(limit × 1.13, ceiling); without VRR, the next divisor. It's suggested if the game has plenty of headroom, or if the estimated capacity reaches the step and, with two or more sessions in memory, its lower bound reaches 95 % of the step.
+
+## 10. Foundations and sources
 
 - **Refresh divisors:** without VRR, each image occupies a whole number of refreshes; only divisors give an even pace. Google applies the same rule in Android's Game Mode.
 - **Variation versus average:** average FPS alone doesn't predict perceived quality when frame times vary (WPI, CHI 2023).
@@ -119,15 +128,14 @@ Limits already applied don't change: to recalculate a game with the new setting,
 - **VRR ceiling:** Blur Busters' 3 FPS rule (G-SYNC 101) and the Hz − Hz²/4096 formula, inspired by Special K and matching Reflex's automatic cap.
 - **Measurement:** PresentMon (Intel) and NVIDIA's Reflex marker methodology.
 
-## 10. Known limitations and future work
+## 11. Known limitations and future work
 
 - **No live changes:** the driver reads the limit when the game opens. An in-game limiter (DLL) would allow it, at a risk in games with anti-cheat.
 - **AMD:** detection and recommendation work; applying limits is pending (ADLX: FRTC or Radeon Chill).
-- **Censored data:** with an active limit, the game's real capacity is hidden; today this is handled with rules ("the demonstrated pace wins"); censored-data statistical methods (Kaplan-Meier, Tobit) could estimate it.
-- **Phase detection** (BOCPD, Adams and MacKay 2007) to segment areas, menus and settings changes rigorously.
+- **Validate the statistical models with real recordings** and then let them influence decisions (raise limits with the estimated capacity, decide with the game's memory and the most demanding phase).
 - Validation on more systems, monitors and games.
 
-## 11. Building
+## 12. Building
 
 MinGW-w64 (from Linux):
 ```
@@ -139,9 +147,9 @@ x86_64-w64-mingw32-g++-posix -std=c++20 -municode -mwindows -O2 -DNDEBUG -Ithird
 ```
 Windows: `cmake -B build && cmake --build build --config Release`. Dear ImGui (with the Win32 and DX11 backends) goes in `third_party/imgui`.
 
-## 12. Automated tests
+## 13. Automated tests
 
-`tests/test_core.cpp` tests the logic in `src/core` without needing Windows (56 checks): percentiles and pace swing, consistency, the limit detector, recommendations with and without VRR (ceiling, the monitor's VRR range and LFC, Smoothness), EDID parsing and the pacing graph (tolerance, scale, stutters and stability of stretches while scrolling). Each test pins a behavior already validated with real sessions or in simulation.
+`tests/test_core.cpp` tests the logic in `src/core` without needing Windows (93 checks): percentiles and pace swing, consistency, the limit detector, recommendations with and without VRR (ceiling, the monitor's VRR range and LFC, Smoothness), EDID parsing, the pacing graph (tolerance, scale, stutters and stability of stretches while scrolling) and the statistical models (capacity recovery from censored data, phase detection and its resistance to isolated spikes, per-game memory and suggestion rules). Each test pins a behavior already validated with real sessions or in simulation.
 
 - Linux/macOS: `sh tests/run_tests.sh`
 - Windows (MSVC): `tests\run_tests.bat`, or `ctest` after building with CMake.

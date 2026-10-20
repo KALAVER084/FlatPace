@@ -22,10 +22,14 @@ static std::atomic<int> g_vrrMinHz{0}, g_vrrMaxHz{0};
 
 #include "../src/core/config.h"
 #include "../src/core/stats_basic.h"
+#include "../src/core/censored.h"
+#include "../src/core/bocpd.h"
+#include "../src/core/game_memory.h"
 #include "../src/core/display_info.h"
 #include "../src/core/edid.h"
 #include "../src/core/frame_sample.h"
 #include "../src/core/analysis.h"
+#include "../src/core/suggest.h"
 namespace overlay {
 #include "../src/core/pace_basics.h"
 #include "../src/core/pace_series.h"
@@ -338,6 +342,202 @@ TEST(RecentSwingUsesLastTenSeconds) {
   CHECK(overlay::RecentSwing(Timeline(f)) < 0.1);
 }
 
+// ---------------------------------------------------------------------------
+// Datos censurados (Tobit)
+// ---------------------------------------------------------------------------
+// Tiempos de un juego capaz de mas que el limite, medidos con el limite puesto.
+static std::vector<double> CappedFrames(double trueMedianMs, double sigma, double capMs, int n, unsigned seed,
+                                        double stutterShare = 0.0) {
+  std::mt19937 rng(seed);
+  std::lognormal_distribution<double> ln(std::log(trueMedianMs), sigma);
+  std::normal_distribution<double> jitter(0.0, 0.03);
+  std::uniform_real_distribution<double> u(0.0, 1.0);
+  std::vector<double> v;
+  for (int i = 0; i < n; ++i) {
+    double x = std::max(ln(rng), capMs) + jitter(rng);
+    if (u(rng) < stutterShare) x = 30.0;
+    v.push_back(x);
+  }
+  return v;
+}
+
+TEST(TobitRecoversCapacity) {
+  // Juego capaz de 250 fps (4,0 ms) con un limite de 225 (4,44 ms): ~85 % de fotogramas en el limite.
+  auto v = CappedFrames(4.0, 0.10, 1000.0 / 225.0, 20000, 11);
+  CapacityEstimate e = EstimateCapacity(v, 1000.0 / 225.0);
+  CHECK(e.valid);
+  CHECK(e.censoredFraction > 0.75 && e.censoredFraction < 0.92);
+  CHECK_NEAR(e.medianMs, 4.0, 4.0 * 0.02);
+  CHECK_NEAR(e.p99Ms, 4.0 * std::exp(2.3263 * 0.10), 0.15);
+}
+
+TEST(TobitIgnoresStutters) {
+  // Un 1 % de tirones de 30 ms no debe arrastrar la estimacion.
+  auto v = CappedFrames(4.0, 0.10, 1000.0 / 225.0, 20000, 12, 0.01);
+  CapacityEstimate e = EstimateCapacity(v, 1000.0 / 225.0);
+  CHECK(e.valid);
+  CHECK_NEAR(e.medianMs, 4.0, 4.0 * 0.03);
+}
+
+TEST(TobitNotNeededWithoutCensoring) {
+  // El juego no llega al limite: no hay censura y se usan las estadisticas normales.
+  auto v = CappedFrames(6.0, 0.10, 4.0, 5000, 13);
+  CHECK(!EstimateCapacity(v, 4.0).valid);
+}
+
+TEST(TobitSecondGameAtSixty) {
+  // Otro caso: capaz de ~75 fps (13,3 ms) con limite de 60 (16,7 ms) y mas variacion.
+  auto v = CappedFrames(13.3, 0.15, 1000.0 / 60.0, 6000, 14);
+  CapacityEstimate e = EstimateCapacity(v, 1000.0 / 60.0);
+  CHECK(e.valid);
+  CHECK_NEAR(e.medianMs, 13.3, 13.3 * 0.05);
+}
+
+// ---------------------------------------------------------------------------
+// Deteccion de fases (BOCPD)
+// ---------------------------------------------------------------------------
+static std::vector<int> RunBocpd(const std::vector<double>& xs) {
+  Bocpd b;
+  std::vector<int> at;
+  for (size_t i = 0; i < xs.size(); ++i)
+    if (b.Push(xs[i])) at.push_back(static_cast<int>(i));
+  return at;
+}
+
+TEST(BocpdDetectsPhaseChanges) {
+  // Zona ligera (240 fps), zona pesada (185 fps) y zona media (215 fps), con ruido y algun pico.
+  std::mt19937 rng(21);
+  std::normal_distribution<double> noise(0.0, 0.015);
+  std::uniform_real_distribution<double> u(0.0, 1.0);
+  std::vector<double> xs;
+  auto seg = [&](double ms, int secs) {
+    for (int i = 0; i < secs; ++i) xs.push_back(std::log(ms) + noise(rng) + (u(rng) < 0.02 ? 0.08 : 0.0));
+  };
+  seg(4.17, 60);
+  seg(5.40, 40);
+  seg(4.65, 60);
+  auto at = RunBocpd(xs);
+  CHECK(at.size() == 2);
+  if (at.size() == 2) {
+    CHECK(at[0] >= 60 && at[0] <= 66);
+    CHECK(at[1] >= 100 && at[1] <= 106);
+  }
+}
+
+TEST(BocpdQuietWhenStable) {
+  // Cinco minutos de ritmo estable con ruido: como mucho una falsa alarma.
+  std::mt19937 rng(22);
+  std::normal_distribution<double> noise(0.0, 0.02);
+  std::vector<double> xs;
+  for (int i = 0; i < 300; ++i) xs.push_back(std::log(4.44) + noise(rng));
+  CHECK(RunBocpd(xs).size() <= 1);
+}
+
+TEST(BocpdIgnoresIsolatedSpikes) {
+  // Ritmo estable con segundos atipicos sueltos (+10 %). El detector, con su filtro de mediana de
+  // 3 s, ignora los picos de un segundo; el seguimiento de fases ignora ademas rafagas cortas (dos
+  // segundos seguidos), porque exige 10 s y un 8 % de diferencia. Sin el filtro, un solo pico hacia
+  // que el detector reiniciara la fase.
+  std::mt19937 rng(23);
+  std::normal_distribution<double> noise(0.0, 0.015);
+  std::uniform_real_distribution<double> u(0.0, 1.0);
+  std::vector<double> isolated, withBursts;
+  bool prevSpike = false;
+  for (int i = 0; i < 300; ++i) {
+    const double base = std::log(4.65) + noise(rng);
+    const bool spike = u(rng) < 0.04;
+    withBursts.push_back(base + (spike ? 0.10 : 0.0));
+    isolated.push_back(base + (spike && !prevSpike ? 0.10 : 0.0));
+    prevSpike = spike;
+  }
+  CHECK(RunBocpd(isolated).empty());
+  PhaseTracker pt;
+  int confirmed = 0;
+  for (size_t i = 0; i < withBursts.size(); ++i)
+    confirmed += pt.Push(static_cast<double>(i), std::exp(withBursts[i])).confirmed;
+  CHECK(confirmed == 0);
+}
+
+// ---------------------------------------------------------------------------
+// Memoria por juego
+// ---------------------------------------------------------------------------
+TEST(MemoryConvergesAndIsCautious) {
+  GameMemory g;
+  g.Add(200, 8);
+  CHECK(g.sessions == 1);
+  CHECK_NEAR(g.MeanFps(), 200, 1e-6);
+  CHECK(g.LowerFps() < 190 && g.LowerFps() > 180);  // prudente con una sola partida
+  for (int i = 0; i < 4; ++i) g.Add(200, 8);
+  CHECK(g.LowerFps() > 192);                         // mas seguro tras partidas que coinciden
+}
+
+TEST(MemoryResistsAtypicalSession) {
+  GameMemory g;
+  for (int i = 0; i < 4; ++i) g.Add(200, 8);
+  g.Add(260, 3);                                     // una partida corta en una zona ligera
+  CHECK(g.MeanFps() < 220);
+  CHECK(g.LowerFps() < 205);
+}
+
+TEST(MemoryAdaptsToChanges) {
+  GameMemory g;
+  for (int i = 0; i < 5; ++i) g.Add(200, 8);
+  for (int i = 0; i < 5; ++i) g.Add(160, 8);         // un parche o ajustes mas exigentes
+  CHECK(g.MeanFps() < 170);
+}
+
+TEST(MemorySerializes) {
+  GameMemory g;
+  g.Add(188, 6);
+  g.Add(176, 9);
+  GameMemory h = GameMemory::Parse(g.Serialize());
+  CHECK(h.sessions == 2);
+  CHECK_NEAR(h.MeanFps(), g.MeanFps(), 1e-3);
+  CHECK_NEAR(h.LowerFps(), g.LowerFps(), 1e-3);
+  CHECK(GameMemory::Parse("basura").sessions == 0);
+}
+
+TEST(PhaseTrackerConfirmsRealChanges) {
+  // Zona ligera, zona pesada (-23 %) y una variacion pequena (6,5 %) que no debe contar como fase.
+  std::mt19937 rng(31);
+  std::normal_distribution<double> noise(0.0, 0.015);
+  PhaseTracker pt;
+  int confirmed = 0;
+  double t = 0;
+  auto seg = [&](double ms, int secs) {
+    for (int i = 0; i < secs; ++i, t += 1.0)
+      if (pt.Push(t, ms * std::exp(noise(rng))).confirmed) ++confirmed;
+  };
+  seg(4.17, 60);
+  seg(5.40, 50);
+  seg(5.75, 50);  // +6,5 %: el detector lo propone, pero no llega al 8 %: misma fase
+  CHECK(confirmed == 1);
+  auto all = pt.All(t);
+  CHECK(all.size() == 2);
+  if (all.size() == 2) {
+    CHECK_NEAR(all[0].medianMs, 4.17, 0.05);
+    CHECK(all[1].start >= 60 && all[1].start <= 66);
+  }
+}
+
+TEST(SuggestRaiseRules) {
+  GameMemory none;
+  // Con VRR a 240 Hz, limite de 188: siguiente escalon +13 % (212). Capacidad 220: se sugiere.
+  CHECK_NEAR(NextLimitStep(188, 1, true, 240), 188 * 1.13, 1e-9);
+  CHECK(SuggestRaise(220, false, none, 188, 1, true, 240) > 0);
+  CHECK(SuggestRaise(200, false, none, 188, 1, true, 240) == 0);   // no llega al escalon
+  // Ya en el techo con VRR (225 a 240 Hz): nada que sugerir, aunque vaya sobrado.
+  CHECK(SuggestRaise(300, true, none, 225, 1, true, 240) == 0);
+  // Sin VRR a 240 Hz, limite de 120 (240/2): el siguiente divisor es 240.
+  CHECK_NEAR(NextLimitStep(120, 1, false, 240), 240, 1e-9);
+  // La memoria del juego frena una sugerencia basada en una partida atipica.
+  GameMemory mem;
+  for (int i = 0; i < 4; ++i) mem.Add(190, 8);
+  CHECK(SuggestRaise(220, false, mem, 188, 1, true, 240) == 0);
+  // Con generacion x2 (122 en pantalla = 61 reales): el escalon se expresa en fotogramas reales.
+  CHECK(NextLimitStep(61, 2, true, 240) <= VrrCeiling(240) / 2 + 1e-9);
+}
+
 int main() {
   std::printf("Pruebas de FlatPace (src/core)\n");
   RUN(Percentiles);
@@ -358,6 +558,19 @@ int main() {
   RUN(SeriesMarksStutter);
   RUN(SeriesStableWhileScrolling);
   RUN(RecentSwingUsesLastTenSeconds);
+  RUN(TobitRecoversCapacity);
+  RUN(TobitIgnoresStutters);
+  RUN(TobitNotNeededWithoutCensoring);
+  RUN(TobitSecondGameAtSixty);
+  RUN(BocpdDetectsPhaseChanges);
+  RUN(BocpdQuietWhenStable);
+  RUN(BocpdIgnoresIsolatedSpikes);
+  RUN(MemoryConvergesAndIsCautious);
+  RUN(MemoryResistsAtypicalSession);
+  RUN(MemoryAdaptsToChanges);
+  RUN(MemorySerializes);
+  RUN(PhaseTrackerConfirmsRealChanges);
+  RUN(SuggestRaiseRules);
   std::printf("%d comprobaciones, %d fallos\n", g_checks, g_failures);
   return g_failures == 0 ? 0 : 1;
 }

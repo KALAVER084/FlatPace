@@ -4,7 +4,7 @@
 
 **FlatPace mide tus juegos y aplica el límite de FPS que hace que vayan lo más estables posible.** Hace en Windows lo que la Steam Deck hace en su sistema: un ritmo constante se siente más fluido que unos FPS más altos pero irregulares.
 
-Versión actual: **0.36.3** · Windows 10 (1803 o posterior) y Windows 11 · [Guía de uso](GUIA.md) · [Documentación técnica](TECNICO.md) · [Historial de cambios](CHANGELOG.md) · [Licencia](LICENSE) · [English](README.en.md)
+Versión actual: **0.37** · Windows 10 (1803 o posterior) y Windows 11 · [Guía de uso](GUIA.md) · [Documentación técnica](TECNICO.md) · [Historial de cambios](CHANGELOG.md) · [Licencia](LICENSE) · [English](README.en.md)
 
 ## Qué hace
 
@@ -55,7 +55,7 @@ cmake -B build
 cmake --build build --config Release
 ```
 
-Para ejecutarlo, coloca junto a `FlatPace.exe` el archivo `PresentMon-2.6.0-x64.exe` (descárgalo de las [releases de PresentMon](https://github.com/GameTechDev/PresentMon/releases)) o usa el paquete de la sección *Releases* de este repositorio, que ya lo incluye. Las pruebas automáticas se ejecutan con `sh tests/run_tests.sh` o `ctest`. Más detalles en la [documentación técnica](TECNICO.md#11-compilación).
+Para ejecutarlo, coloca junto a `FlatPace.exe` el archivo `PresentMon-2.6.0-x64.exe` (descárgalo de las [releases de PresentMon](https://github.com/GameTechDev/PresentMon/releases)) o usa el paquete de la sección *Releases* de este repositorio, que ya lo incluye. Las pruebas automáticas se ejecutan con `sh tests/run_tests.sh` o `ctest`. Más detalles en la [documentación técnica](TECNICO.md#12-compilación).
 
 ## Licencia
 

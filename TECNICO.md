@@ -1,4 +1,4 @@
-# Documentación técnica de FlatPace 0.36.3
+# Documentación técnica de FlatPace 0.37
 
 Este documento explica cómo funciona FlatPace por dentro: arquitectura, algoritmos, fórmulas, formatos de datos y las fuentes en que se basan sus decisiones.
 
@@ -111,7 +111,16 @@ Sin interfaz, en `%LOCALAPPDATA%\FlatPace\equipo.txt` (una línea `clave=valor`)
 
 Los límites ya aplicados no cambian: para recalcular un juego con el ajuste nuevo, usa *Deshacer*.
 
-## 9. Fundamentos y fuentes
+## 9. Modelos estadísticos (0.37)
+
+Por ahora informan y sugieren; su efecto en las decisiones se activará cuando se validen con grabaciones reales.
+
+- **Datos censurados** (`src/core/censored.h`): con un límite de periodo *c*, los fotogramas ≤ *c* × 1,03 se tratan como censurados ("tardarían como mucho *c*"); los demás, como medidas. Se ajusta una log-normal por máxima verosimilitud (Nelder-Mead sobre la media y el logaritmo de la desviación), sin pausas (> 250 ms) ni tirones (> 2,5 × mediana). Requiere ≥ 200 fotogramas, ≥ 5 % de censura y ≥ 30 fotogramas visibles; con > 98 % de censura se indica "sobrado". De la log-normal salen la mediana, el p70 y el p99. El p99 no se ve afectado mientras los fotogramas lentos queden por encima del límite, así que *Estabilidad* ya era inmune a este sesgo; *Fluidez* (p70) no.
+- **Memoria por juego** (`src/core/game_memory.h`): media y varianza ponderadas (Welford) del logaritmo del ritmo que el juego sostiene en cada partida (1000 / (p99 × 1,05), con el p99 del modelo si hay censura), con peso = minutos jugados (máximo 10) y olvido ×0,8 por partida. Incertidumbre = √(varianza entre partidas + 0,08² / partidas); límite inferior al 80 % = exp(media − 0,84 × incertidumbre). Se guarda en `equipo.txt` (`memoria|juego.exe`).
+- **Fases** (`src/core/bocpd.h`): BOCPD con prior normal-gamma (κ₀ = 0,02, α₀ = 2, desviación típica a priori 0,03 en escala logarítmica), riesgo de cambio 1/60 por segundo y rachas truncadas a 300 s, sobre el logaritmo de la mediana de cada segundo filtrado con una mediana de 3 s. Se propone un cambio cuando la racha más probable vuelve a ≤ 3 s durante dos pasos tras haber sido ≥ 8 s; la fase se confirma si, tras 10 s, su mediana difiere ≥ 8 % de la anterior.
+- **Sugerencia** (`src/core/suggest.h`): siguiente escalón = con VRR, mín(límite × 1,13, techo); sin VRR, el divisor siguiente. Se sugiere si el juego va sobrado, o si la capacidad estimada llega al escalón y, con dos o más partidas en memoria, su límite inferior llega al 95 % del escalón.
+
+## 10. Fundamentos y fuentes
 
 - **Divisores del refresco:** sin VRR, cada imagen ocupa un número entero de refrescos; solo los divisores dan un ritmo uniforme. Google aplica la misma regla en el Game Mode de Android.
 - **Variación frente a media:** la media de FPS por sí sola no predice la calidad percibida cuando hay variación en los tiempos de fotograma (WPI, CHI 2023).
@@ -119,15 +128,14 @@ Los límites ya aplicados no cambian: para recalcular un juego con el ajuste nue
 - **Techo con VRR:** regla de 3 FPS de Blur Busters (G-SYNC 101) y fórmula Hz − Hz²/4096, inspirada en Special K y coincidente con el límite automático de Reflex.
 - **Medición:** PresentMon (Intel) y la metodología de marcadores de Reflex de NVIDIA.
 
-## 10. Limitaciones conocidas y líneas futuras
+## 11. Limitaciones conocidas y líneas futuras
 
 - **Sin cambio en vivo:** el límite del driver se lee al abrir el juego. Un limitador propio dentro del juego (DLL) lo permitiría, con riesgo en juegos con anticheat.
 - **AMD:** detección y recomendación sí; aplicación pendiente (ADLX: FRTC o Radeon Chill).
-- **Datos censurados:** con un límite activo, la capacidad real del juego queda oculta; hoy se resuelve con reglas ("lo demostrado manda"); métodos estadísticos de datos censurados (Kaplan-Meier, Tobit) permitirían estimarla.
-- **Detección de fases** (BOCPD, Adams y MacKay 2007) para segmentar zonas, menús y cambios de ajustes con rigor.
+- **Validar los modelos estadísticos con grabaciones reales** y, después, dejar que influyan en las decisiones (subir límites con la capacidad estimada, decidir con la memoria del juego y con la fase más exigente).
 - Validación en más equipos, monitores y juegos.
 
-## 11. Compilación
+## 12. Compilación
 
 MinGW-w64 (desde Linux):
 ```
@@ -139,9 +147,9 @@ x86_64-w64-mingw32-g++-posix -std=c++20 -municode -mwindows -O2 -DNDEBUG -Ithird
 ```
 Windows: `cmake -B build && cmake --build build --config Release`. Dear ImGui (con los backends Win32 y DX11) va en `third_party/imgui`.
 
-## 12. Pruebas automáticas
+## 13. Pruebas automáticas
 
-`tests/test_core.cpp` prueba la lógica de `src/core` sin necesitar Windows (56 comprobaciones): percentiles y variación del ritmo, consistencia, detector de límites, recomendaciones con y sin VRR (techo, rango VRR del monitor y LFC, Fluidez), lectura del EDID y gráfica de ritmo (tolerancia, escala, tirones y estabilidad de los tramos al desplazarse). Cada prueba fija un comportamiento ya validado con partidas reales o en simulación.
+`tests/test_core.cpp` prueba la lógica de `src/core` sin necesitar Windows (93 comprobaciones): percentiles y variación del ritmo, consistencia, detector de límites, recomendaciones con y sin VRR (techo, rango VRR del monitor y LFC, Fluidez), lectura del EDID, gráfica de ritmo (tolerancia, escala, tirones y estabilidad de los tramos al desplazarse) y los modelos estadísticos (recuperación de la capacidad con datos censurados, detección de fases y su resistencia a picos aislados, memoria por juego y reglas de sugerencia). Cada prueba fija un comportamiento ya validado con partidas reales o en simulación.
 
 - Linux/macOS: `sh tests/run_tests.sh`
 - Windows (MSVC): `tests\run_tests.bat`, o `ctest` tras compilar con CMake.

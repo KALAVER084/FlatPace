@@ -2,6 +2,14 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). La versión más reciente va primero.
 
+## 0.37
+- **Añadido:** tres modelos estadísticos, en módulos de `src/core` con sus pruebas. Por ahora informan y sugieren; no cambian las decisiones hasta validarlos con grabaciones reales.
+  - **Datos censurados (modelo Tobit log-normal):** con un límite puesto, estima la capacidad real del juego (mediana y p99) aunque la mayoría de los fotogramas esperen en el límite. Aparece en el registro cada 5 s (*"sin límite ~X fps"*) y en el resumen. En simulación, con el 85-96 % de fotogramas en el límite, recupera la mediana real con menos de un 1 % de error. Si casi todo está en el límite (> 98 %), indica que el juego va sobrado.
+  - **Memoria por juego:** combina las partidas (ponderadas por duración, con olvido gradual de las antiguas) en una estimación del ritmo que el juego sostiene, con un límite inferior al 80 % de probabilidad. Aparece en el resumen.
+  - **Fases de juego (BOCPD, Adams y MacKay 2007):** detecta cambios de zona o de ajustes con un dato por segundo; una fase nueva cuenta si, tras 10 s, su ritmo difiere al menos un 8 %. Un filtro de mediana de 3 s evita que un segundo atípico reinicie la fase. Aparece en el registro (*"Fase nueva"*) y en el resumen.
+  - **Sugerencia de subir el límite:** con el límite confirmado, si la capacidad estimada alcanza el siguiente escalón (con VRR, un 13 % más sin pasar del techo; sin VRR, el divisor siguiente) y la memoria del juego no lo contradice, la app lo sugiere en *Juegos*. Nunca lo cambia sola.
+- **Corregido:** en el resumen, el peor tirón aparecía al final de la línea del error de animación.
+
 ## 0.36.3
 - **Añadido:** grabación de los datos de cada fotograma. Casilla *Grabar los datos de cada fotograma* en *Registro* (desactivada por defecto; la app recuerda la elección): guarda un archivo CSV por partida en la carpeta `grabaciones`, junto al programa, con una cabecera de contexto (juego, pantalla, rango VRR, prioridad y límite aplicado) y una fila por fotograma (tiempos, CPU, GPU, pantalla, error de animación, estado del VRR y del límite). Sirve para analizar y validar con datos reales las mejoras estadísticas previstas (datos censurados, memoria por juego y detección de fases). Unos 10 MB por cada 10 minutos a 240 FPS.
 

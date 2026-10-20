@@ -1,4 +1,4 @@
-# FlatPace 0.36.3 user guide
+# FlatPace 0.37 user guide
 
 This guide describes the current version. Changes between versions are listed in the [changelog](CHANGELOG.md) (in Spanish). The app has an English interface: switch it with **ES | EN** at the bottom of the sidebar.
 
@@ -92,7 +92,8 @@ It's a separate, transparent window: it doesn't touch the game.
 
 ## 10. Warnings and undo
 
-- **Amber warnings** (on *Games* and *Now*): the game isn't holding its limit, it runs clearly better than when the limit was decided (for example after lowering settings), or frame generation is the opposite of when the limit was applied.
+- **Amber warnings** (on *Games* and *Now*): the game isn't holding its limit, it runs clearly better than when the limit was decided (for example after lowering settings), frame generation is the opposite of when the limit was applied, or **it could hold a higher limit**: with the limit in place, the app estimates the game's real capacity and, if it reaches the next step, suggests it (*"It could hold ~X real FPS"*). It never raises it on its own: to apply it, click *Undo* and the app will recalculate it.
+- **The log** also shows the estimated capacity with the limit in place (*"sin límite ~X fps"*), the session's **phases** (changes of area or settings) and, in the summary, the **game's memory**: what it holds according to all your sessions.
 - **Undo one game:** the *Undo* button in its row. It goes back exactly to how it was; if "Apply limits" is on, it's recalculated next session.
 - **Undo everything:** *Undo all changes* (the app switches to measuring only) or double-click `Deshacer cambios.bat`.
 
