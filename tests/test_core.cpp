@@ -151,6 +151,39 @@ TEST(DetectCapNotWhenGpuBound) {
 // ---------------------------------------------------------------------------
 // Recomendaciones
 // ---------------------------------------------------------------------------
+TEST(GameCausedLowIgnoresLimiterDelays) {
+  // Limite de 195 (5,13 ms). El temporizador del limitador retrasa un 7 % de los fotogramas
+  // (+0,5 ms, compensado en el siguiente) con un trabajo del juego de ~2,2 ms: el 1 % bajo medido
+  // cae por debajo del limite, pero el causado por el juego es el limite (caso Megabonk real).
+  const double cap = 1000.0 / 195.0;
+  std::mt19937 rng(41);
+  std::uniform_real_distribution<double> u(0.0, 1.0);
+  std::vector<double> r, w;
+  for (int i = 0; i < 20000; ++i) {
+    const bool late = u(rng) < 0.07;
+    r.push_back(late ? cap + 0.5 : cap - (u(rng) < 0.07 ? 0.4 : 0.0));
+    w.push_back(2.2);
+  }
+  std::vector<double> sorted = r;
+  std::sort(sorted.begin(), sorted.end());
+  CHECK(1000.0 / PercentileSorted(sorted, 99) < 185);                       // medido: por debajo
+  CHECK_NEAR(GameCausedPercentileMs(r, w, cap, 99), cap, 1e-9);            // del juego: el limite
+}
+
+TEST(GameCausedLowCountsHeavyScenes) {
+  // Limite de 90 (11,11 ms) y un 3 % de fotogramas en escenas pesadas de verdad (13 ms de trabajo):
+  // esos si cuentan (caso Greylock real).
+  const double cap = 1000.0 / 90.0;
+  std::vector<double> r, w;
+  for (int i = 0; i < 10000; ++i) {
+    const bool heavy = i % 33 == 0;
+    r.push_back(heavy ? 13.0 : cap);
+    w.push_back(heavy ? 12.8 : 8.0);
+  }
+  CHECK_NEAR(GameCausedPercentileMs(r, w, cap, 99), 13.0, 1e-9);
+  CHECK_NEAR(GameCausedPercentileMs(r, w, 0.0, 99), 13.0, 1e-9);           // sin limite: percentil normal
+}
+
 TEST(VrrCeilingValues) {
   CHECK_NEAR(VrrCeiling(60), 57, 1e-9);
   CHECK_NEAR(VrrCeiling(120), 116, 1e-9);
@@ -592,6 +625,8 @@ int main() {
   RUN(Consistency);
   RUN(DetectCapAtDivisor);
   RUN(DetectCapNotWhenGpuBound);
+  RUN(GameCausedLowIgnoresLimiterDelays);
+  RUN(GameCausedLowCountsHeavyScenes);
   RUN(VrrCeilingValues);
   RUN(DivisorRecommendation);
   RUN(FluidRecommendation);

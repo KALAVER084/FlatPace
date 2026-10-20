@@ -1,4 +1,4 @@
-# FlatPace 0.37.1 user guide
+# FlatPace 0.37.2 user guide
 
 This guide describes the current version. Changes between versions are listed in the [changelog](CHANGELOG.md) (in Spanish). The app has an English interface: switch it with **ES | EN** at the bottom of the sidebar.
 
@@ -85,7 +85,8 @@ In a corner of the game: FPS, 1 % low, a tag with the limit status and the pacin
 - **Red ("UNCONFIRMED" or "NO LIMIT"):** the game has no limit yet, or has one that hasn't been checked yet.
 - The graph shows pace **deviations**: while frame times stay within the tolerance (±13 % of the target, shown in the label: *"target 8.3 ms ±1.1"*), the line is straight; only what goes outside is drawn. The same rule applies with and without a limit, so the difference you see is real. **Stutters** appear in amber.
 - At the bottom left, the pace **swing** (±ms). The first session without a limit of each game is kept as a reference, and with the limit confirmed you'll see the comparison: *"swing ±0.1 ms · before ±0.4"*.
-- With the limit confirmed, a **blue band** shows that tolerance around the target. If the line sits above the target, the game isn't quite reaching the limit: a slightly lower limit gives the limiter room to flatten it.
+- With the limit confirmed, a **blue band** shows that tolerance around the target.
+- With an active limit, the **1 % low** discounts the limiter's own delays (frames that come out slightly late even though the game had them ready): it shows what the game causes. Each session summary in *Log* shows both values. If the line sits above the target, the game isn't quite reaching the limit: a slightly lower limit gives the limiter room to flatten it.
 - It refreshes up to 60 times per second and scrolls continuously, with a small delay that adapts on its own (PresentMon delivers data in batches; with frame generation the delay can reach about 2 seconds).
 
 It's a separate, transparent window: it doesn't touch the game.

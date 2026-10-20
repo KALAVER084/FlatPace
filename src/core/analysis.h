@@ -384,3 +384,26 @@ static Recommendation RecommendVrr(const std::vector<double>& longSorted, double
   r.vrrCapFps = screen;
   return r;
 }
+
+// Percentil de los tiempos de fotograma reales causado por el juego con un limite activo (capMs).
+// Un fotograma mas lento que el limite cuenta como tal solo si su trabajo de CPU/GPU supero el 95 %
+// del limite; si no, el retraso fue del temporizador del limitador (que suele compensarlo adelantando
+// el siguiente fotograma), no del juego. Sin limite (capMs <= 0) es el percentil normal.
+// Validado con partidas reales (0.37.2): Megabonk con 195 fps, 1 % bajo medido 177 -> 195 causado por
+// el juego (el 97 % de los fotogramas tardios tenian ~2,2 ms de trabajo); Greylock con 90, 76 -> 84
+// (ahi si hay escenas pesadas en las que el juego no llega).
+static double GameCausedPercentileMs(const std::vector<double>& realMs, const std::vector<double>& workMs, double capMs,
+                                     double p) {
+  std::vector<double> v;
+  v.reserve(realMs.size());
+  for (size_t i = 0; i < realMs.size(); ++i) {
+    double x = realMs[i];
+    if (x <= 0 || x > 250.0) continue;  // pausas y cargas
+    const double w = i < workMs.size() ? workMs[i] : -1.0;
+    if (capMs > 0 && x > capMs && w >= 0 && w < capMs * 0.95) x = capMs;
+    v.push_back(x);
+  }
+  if (v.empty()) return 0.0;
+  std::sort(v.begin(), v.end());
+  return PercentileSorted(v, p);
+}

@@ -124,7 +124,7 @@ static std::atomic<bool> g_quit{false};
 static std::atomic<int> g_lang{0};
 static const char* T(const char* es, const char* en) { return g_lang == 1 ? en : es; }
 
-static constexpr const char* kVersion = "0.37.1";
+static constexpr const char* kVersion = "0.37.2";
 
 // Carpeta donde esta este .exe.
 static std::wstring ExeDirectory() {
@@ -1684,6 +1684,7 @@ struct Session {
 
   // Empieza una medicion limpia tras esperar a que el ritmo se estabilice.
   std::deque<std::pair<double, double>> longReal;  // (momento, ms) de los ultimos minutos
+  std::deque<float> longWork;                       // trabajo de CPU/GPU de esos fotogramas (ms)
   // Fases de juego (BOCPD sobre el log de la mediana de cada segundo). Una fase nueva solo cuenta si,
   // tras 10 s, su ritmo difiere al menos un 8 % del de la fase anterior.
   PhaseTracker phases;
@@ -1858,6 +1859,18 @@ static void PrintSessionSummary(const Session& s, double hz) {
     bool plenty = false;     // casi todo en el limite: va sobrado
     CapacityEstimate ce;
     if (capMs > 0) ce = EstimateCapacity(msv, capMs);
+    // Con un limite activo, el 1 % mas lento causado por el juego (sin los retrasos del limitador).
+    double gameP99 = 0.0;
+    if (capMs > 0 && msv.size() >= 200) {
+      std::vector<double> wv(s.longWork.begin(), s.longWork.end());
+      gameP99 = GameCausedPercentileMs(msv, wv, capMs, 99);
+      if (gameP99 > 0) {
+        std::vector<double> raw = msv;
+        std::sort(raw.begin(), raw.end());
+        Log("  1 %% bajo con el limite: %.0f fps medidos | %.0f fps causados por el juego (sin los retrasos del limitador)\n",
+            1000.0 / PercentileSorted(raw, 99), 1000.0 / gameP99);
+      }
+    }
     if (ce.valid) {
       if (ce.medianReliable)
         Log("  Capacidad estimada sin limite (%.0f %% de fotogramas en el limite, modelo de datos censurados):\n"
@@ -1867,7 +1880,6 @@ static void PrintSessionSummary(const Session& s, double hz) {
         Log("  Capacidad estimada (%.0f %% de fotogramas en el limite, modelo de datos censurados):\n"
             "    1 %% mas lento ~%.0f fps | la mediana queda por encima del limite (no se puede precisar)\n",
             100.0 * ce.censoredFraction, 1000.0 / ce.p99Ms);
-      stableFps = 1000.0 / (ce.p99Ms * 1.05);
     } else if (ce.censoredFraction > 0.98) {
       plenty = true;
       Log("  Capacidad: el juego va sobrado con su limite (%.0f %% de fotogramas en el limite).\n",
@@ -1877,6 +1889,13 @@ static void PrintSessionSummary(const Session& s, double hz) {
       std::sort(sorted.begin(), sorted.end());
       const double p99 = PercentileSorted(sorted, 99);
       if (p99 > 0) stableFps = 1000.0 / (p99 * 1.05);
+    }
+    // Proteccion contra la espiral: con un limite activo solo se aprende la capacidad si el juego NO
+    // lo sostuvo (su 1 % mas lento, causado por el juego, supera el limite). Si lo sostuvo, solo se
+    // sabe que da "al menos eso", y anotar el limite como capacidad haria bajarlo partida a partida.
+    if (capMs > 0) {
+      stableFps = 0.0;
+      if (!plenty && gameP99 > capMs * 1.02) stableFps = 1000.0 / (gameP99 * 1.05);
     }
     GameMemory mem = GameMemory::Parse(ReadKv(L"equipo.txt", "memoria2|" + s.exe));
     if (stableFps > 0 && s.gameSecs >= 60.0 && !s.exe.empty()) {
@@ -1925,6 +1944,22 @@ static void PrintSessionSummary(const Session& s, double hz) {
 }
 
 // Un segundo de analisis para el juego de la sesion.
+// 1 % bajo (fps) causado por el juego en los ultimos 20 s, con un limite activo (0 si no hay limite).
+static double GameLowFps(const Session& ss) {
+  const double capMs = ActiveCapMs(ss);
+  if (capMs <= 0 || ss.samples.empty()) return 0.0;
+  const double from = ss.samples.back().t - cfg::kWindowSec;
+  std::vector<double> r, w;
+  for (const auto& f : ss.samples)
+    if (!f.generated && f.realMs > 0 && f.t >= from) {
+      r.push_back(f.realMs);
+      w.push_back(std::max(f.cpuBusyMs, f.gpuBusyMs));
+    }
+  if (r.size() < 100) return 0.0;
+  const double p99 = GameCausedPercentileMs(r, w, capMs, 99);
+  return p99 > 0 ? 1000.0 / p99 : 0.0;
+}
+
 // Fases: un dato por segundo (mediana de los fotogramas reales de ese segundo).
 static void TrackPhases(Session& ss, const std::vector<FrameSample>& fresh, double now) {
   std::vector<double> sec;
@@ -2026,11 +2061,15 @@ static void ProcessSession(Session& ss, std::vector<FrameSample>& fresh, double 
       }
       ss.jPrev = s.realMs;
       ss.longReal.push_back({s.t, s.realMs});
+      ss.longWork.push_back(static_cast<float>(std::max(s.cpuBusyMs, s.gpuBusyMs)));
       int kNow = ss.fgActive ? std::max(2, ss.lastStats.FgFactor()) : 1;
       ss.sessionReal[kNow].push_back(static_cast<float>(s.realMs));
     }
   }
-  while (!ss.longReal.empty() && ss.longReal.front().first < now - 180.0) ss.longReal.pop_front();
+  while (!ss.longReal.empty() && ss.longReal.front().first < now - 180.0) {
+    ss.longReal.pop_front();
+    if (!ss.longWork.empty()) ss.longWork.pop_front();
+  }
   {
     std::string mode = ss.MainPresentMode();
     if (!mode.empty() && mode != ss.announcedMode && ss.presentModes[mode] > 200) {
@@ -2261,6 +2300,7 @@ static void ProcessSession(Session& ss, std::vector<FrameSample>& fresh, double 
         extra += Fmt(" | capacidad: p99 ~%.0f fps, mediana por encima del limite", 1000.0 / ce.p99Ms);
       else if (ce.censoredFraction > 0.98)
         extra += " | sobrado (casi todo en el limite)";
+      if (const double gl = GameLowFps(ss); gl > 0) extra += Fmt(" | 1%% bajo del juego ~%.0f fps", gl);
     }
     std::string rec = ss.current.valid
                           ? std::to_string(static_cast<int>(ss.current.capFps + 0.5)) + " fps"
@@ -2405,6 +2445,7 @@ struct Feed {
   std::string limitLabel;             // "225 fps", "122 en pantalla"...
   LimitState limitState = LimitState::None;
   double baseSwingMs = -1.0;          // variacion del ritmo de este juego sin limite ("antes")
+  double gameLowFps = 0.0;            // 1 % bajo causado por el juego con un limite activo (0 = no)
   // Bufer de reproduccion: sigue al mayor intervalo reciente entre tandas de datos de PresentMon,
   // para que el borde derecho de la grafica nunca quede vacio.
   double lagSec = 1.1;
@@ -2490,6 +2531,11 @@ static double GraphAutoRefLocked(double now, double display) {
 
 #include "src/core/pace_series.h"
 
+static void SetGameLow(double fps) {
+  std::lock_guard<std::mutex> lock(feed.m);
+  feed.gameLowFps = fps;
+}
+
 static void SetGame(DWORD pid, double targetMs, const std::string& limitLabel, LimitState state,
                     double baseSwingMs = -1.0) {
   std::lock_guard<std::mutex> lock(feed.m);
@@ -2569,7 +2615,7 @@ class Window {
     double targetMs;
     std::string limitLabel;
     LimitState limitState;
-    double baseSwing = -1.0;
+    double baseSwing = -1.0, gameLow = 0.0;
     double display = now, refAuto = 0.0;
     std::vector<std::pair<double, double>> real;
     size_t presents5 = 0;
@@ -2580,6 +2626,7 @@ class Window {
       limitLabel = feed.limitLabel;
       limitState = feed.limitState;
       baseSwing = feed.baseSwingMs;
+      gameLow = feed.gameLowFps;
       display = GraphPlaybackLocked(now);
       generation_ = feed.generation;
       refAuto = GraphAutoRefLocked(now, display);
@@ -2610,6 +2657,7 @@ class Window {
     std::vector<double> sorted = ms;
     std::sort(sorted.begin(), sorted.end());
     double low = 1000.0 / PercentileSorted(sorted, 99);
+    if (gameLow > 0) low = gameLow;  // con un limite activo, sin los retrasos del limitador
     double screenFps = presents5 / 5.0;
     bool fg2 = screenFps > fps * 1.4;
 
@@ -3056,6 +3104,8 @@ static void PublishSession(const Session& ss, const ChangeStore& store, bool app
   g_ui.steadyPct = 100.0 * st.steady2;
   g_ui.jitterMs = st.jitterMs;
   g_ui.lowFps = st.p99Ms > 0 ? 1000.0 / st.p99Ms : 0.0;
+  if (const double gl = GameLowFps(ss); gl > 0) g_ui.lowFps = gl;
+  overlay::SetGameLow(GameLowFps(ss));
   g_ui.screenFps = fg ? st.presentedFps : 0.0;
   g_ui.hitches = ss.hitchTotal;
   g_ui.capText = st.capped ? Fmt(T("~%.0f fps (%s)", "~%.0f fps (%s)"), st.capFps, st.capFits ? T("encaja", "fits") : T("no encaja", "does not fit"))
