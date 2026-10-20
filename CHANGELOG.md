@@ -2,6 +2,15 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). La versión más reciente va primero.
 
+## 0.39
+Reglas nuevas para elegir el límite con G-SYNC/FreeSync, validadas con partidas reales grabadas (Greylock y Megabonk, con y sin límite).
+- **Cambiado (Fluidez):** el ritmo que el juego alcanza el **90 %** del tiempo, sin contar los tirones (antes, el 70 %). Con la regla anterior, en Greylock el juego quedaba por debajo del límite un 22-34 % de los segundos, y un 29 % de forma perceptible. Validado: con el límite que da la regla nueva (100 FPS), el 1 % bajo causado por el juego fue de 96 FPS y solo un 1 % de los segundos bajó de forma perceptible.
+- **Cambiado (Estabilidad):** el 1 % más lento, sin tirones, puede llegar **como mucho un 13 % tarde** (la diferencia perceptible): 1,13 × 1000 / p99. Antes era 1000 / (p99 × 1,05) **con** los tirones incluidos, que inflaban el p99: Greylock pasa de 78-85 FPS a 91-108 sin caídas perceptibles. En Megabonk, la regla nueva (189) sigue siendo prudente: con 225 el juego no bajó nunca del límite, porque con un límite puesto su CPU trabaja mucho menos que sin él; para eso está la sugerencia de subir.
+- **Añadido (protección contra la espiral):** con un límite activo, la recomendación nunca sube (los datos están censurados; eso queda para la sugerencia) y usa los tiempos causados por el juego, sin los retrasos del limitador.
+- **Cambiado:** la memoria del juego usa el mismo criterio que la Estabilidad nueva y empieza de nuevo (clave `memoria3|`). Con un límite, solo aprende si el juego baja de él de forma perceptible.
+- **Corregido:** el resumen de una partida con el límite ya aceptado mostraba una recomendación sin sentido (con el formato de las pantallas sin G-SYNC); ahora indica que el límite aceptado no se recalcula.
+- Sin G-SYNC/FreeSync (divisores), las reglas no cambian hasta validarlas con una pantalla sin VRR.
+
 ## 0.38
 - **Añadido:** con cada límite (automático o manual), FlatPace pide al driver de NVIDIA que **no baje las frecuencias de la GPU** en ese juego (*Modo de administración de energía: Preferir rendimiento máximo*), en el mismo perfil y con el mismo *Deshacer*. Con un límite, el driver bajaba las frecuencias hasta que la GPU iba justa y tardaba en subirlas en las escenas pesadas, que se pasaban del límite: en Greylock con 90 FPS, la GPU tardaba casi el doble por fotograma (mediana de 9,6 ms frente a 5,1 sin límite) con el mismo 85 % de uso, y el 1 % bajo causado por el juego quedaba en 83. Es la combinación que recomienda NVIDIA para su limitador. La GPU sigue protegiéndose sola por temperatura y potencia: el ajuste no cambia esos límites.
 - **Añadido:** al abrir la app, el ajuste se añade también a los juegos que ya tenían límite (actúa la próxima vez que se abra el juego). Se muestra como *"· GPU al máximo"* en *Juegos*.

@@ -227,6 +227,34 @@ TEST(VrrRecommendation) {
   CHECK_NEAR(g.realFps * 2, g.capFps, 1e-9);
 }
 
+TEST(VrrRulesUsePerceptibleThreshold) {
+  // Distribucion como la de Greylock sin limite: mediana ~6 ms, cola hasta ~11 ms, y un 1 % de tirones.
+  std::vector<double> d;
+  std::mt19937 rng(51);
+  std::lognormal_distribution<double> ln(std::log(6.2), 0.22);
+  for (int i = 0; i < 20000; ++i) d.push_back(i % 100 == 0 ? 60.0 : ln(rng));
+  std::sort(d.begin(), d.end());
+  std::vector<double> body;
+  for (double x : d)
+    if (x <= PercentileSorted(d, 50) * 2.5) body.push_back(x);
+  Recommendation st = RecommendVrr(d, 0.0, 240.0, 1, false);
+  Recommendation fl = RecommendVrr(d, 0.0, 240.0, 1, true);
+  CHECK(st.valid && fl.valid);
+  // Estabilidad: 1,13 x 1000 / p99 sin tirones (los tirones de 60 ms no cuentan)
+  CHECK_NEAR(st.capFps, std::floor(1.13 * 1000.0 / PercentileSorted(body, 99)), 1.0);
+  // Fluidez: el ritmo alcanzado el 90 % del tiempo
+  CHECK_NEAR(fl.capFps, std::floor(1000.0 / PercentileSorted(body, 90)), 1.0);
+  CHECK(fl.capFps > st.capFps);
+}
+
+TEST(VrrNeverRaisesAboveActiveLimit) {
+  // Con un limite activo (100 fps reales) y datos censurados en el limite, no se recomienda subir.
+  std::vector<double> d(5000, 10.0);
+  Recommendation r = RecommendVrr(d, 0.0, 240.0, 1, false, 0.0, 100.0);
+  CHECK(r.valid);
+  CHECK(r.capFps <= 100.0);
+}
+
 TEST(VrrRangeCeiling) {
   // Monitor de 144 Hz cuyo VRR solo llega a 120: el techo es el del rango VRR (116).
   g_vrrMinHz = 48;
@@ -631,6 +659,8 @@ int main() {
   RUN(DivisorRecommendation);
   RUN(FluidRecommendation);
   RUN(VrrRecommendation);
+  RUN(VrrRulesUsePerceptibleThreshold);
+  RUN(VrrNeverRaisesAboveActiveLimit);
   RUN(VrrRangeCeiling);
   RUN(VrrBelowRangeWithoutLfc);
   RUN(EdidRangeAndName);

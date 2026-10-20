@@ -1,4 +1,4 @@
-# Guía de uso de FlatPace 0.38
+# Guía de uso de FlatPace 0.39
 
 Esta guía describe la versión actual. Los cambios entre versiones están en el [historial](CHANGELOG.md).
 
@@ -46,8 +46,10 @@ Al pie de la barra: **Aplicar límites** (si está apagado, la app solo mide), *
 
 En *Juegos*:
 
-- **Estabilidad** (por defecto, recomendada): un límite que el juego sostiene **siempre**, incluso en sus peores momentos. Es el ritmo más regular y la línea más plana en la gráfica, aunque a veces el límite sea algo más bajo.
-- **Fluidez:** el límite más alto que el juego alcanza **la mayor parte del tiempo** (el 70 %), aceptando irregularidades en los momentos más exigentes. Da más FPS, pero el limitador se queda sin margen cuando el juego no llega.
+- **Estabilidad** (por defecto, recomendada): un límite que el juego sostiene incluso en sus peores momentos **sin bajar de forma perceptible** (su 1 % más lento llega como mucho un 13 % tarde, una diferencia que no se nota). Es el ritmo más regular y la línea más plana en la gráfica.
+- **Fluidez:** el límite que el juego alcanza **el 90 % del tiempo**, aceptando caídas breves en los momentos más exigentes. Da más FPS; en las pruebas, las caídas perceptibles fueron de alrededor del 1 % del tiempo.
+
+Con G-SYNC/FreeSync, ninguna de las dos cuenta los **tirones** (fotogramas de más de 2,5 veces lo normal): ningún límite los arregla. Sin VRR, por ahora se mantienen las reglas anteriores.
 
 Los límites ya aceptados no cambian al cambiar la prioridad: deshaz el juego para recalcularlo con el criterio nuevo.
 

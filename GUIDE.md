@@ -1,4 +1,4 @@
-# FlatPace 0.38 user guide
+# FlatPace 0.39 user guide
 
 This guide describes the current version. Changes between versions are listed in the [changelog](CHANGELOG.md) (in Spanish). The app has an English interface: switch it with **ES | EN** at the bottom of the sidebar.
 
@@ -46,8 +46,10 @@ At the bottom of the sidebar: **Apply limits** (when off, the app only measures)
 
 On *Games*:
 
-- **Stability** (default, recommended): a limit the game **always** holds, even in its worst moments. It gives the steadiest pace and the flattest line in the graph, although the limit is sometimes a bit lower.
-- **Smoothness:** the highest limit the game reaches **most of the time** (70 %), accepting irregularities in the most demanding moments. More FPS, but the limiter runs out of margin when the game can't keep up.
+- **Stability** (default, recommended): a limit the game holds even in its worst moments **without perceptible drops** (its slowest 1 % arrives at most 13 % late, a difference you can't notice). It gives the steadiest pace and the flattest line in the graph.
+- **Smoothness:** the limit the game reaches **90 % of the time**, accepting brief drops in the most demanding moments. More FPS; in testing, perceptible drops took about 1 % of the time.
+
+With G-SYNC/FreeSync, neither counts **stutters** (frames over 2.5 times the usual): no limit fixes them. Without VRR, the previous rules are kept for now.
 
 Limits already accepted don't change when you switch priority: undo the game to recalculate it with the new criterion.
 

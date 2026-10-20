@@ -124,7 +124,7 @@ static std::atomic<bool> g_quit{false};
 static std::atomic<int> g_lang{0};
 static const char* T(const char* es, const char* en) { return g_lang == 1 ? en : es; }
 
-static constexpr const char* kVersion = "0.38";
+static constexpr const char* kVersion = "0.39";
 
 // Carpeta donde esta este .exe.
 static std::wstring ExeDirectory() {
@@ -1929,22 +1929,27 @@ static void PrintSessionSummary(const Session& s, double hz) {
       Log("  Capacidad: el juego va sobrado con su limite (%.0f %% de fotogramas en el limite).\n",
           100.0 * ce.censoredFraction);
     } else if (msv.size() >= 200 && ce.censoredFraction < 0.05) {
+      // Sin limite: el criterio de Estabilidad (1 % mas lento sin tirones, hasta un 13 % tarde).
       std::vector<double> sorted = msv;
       std::sort(sorted.begin(), sorted.end());
-      const double p99 = PercentileSorted(sorted, 99);
-      if (p99 > 0) stableFps = 1000.0 / (p99 * 1.05);
+      const double med = PercentileSorted(sorted, 50);
+      std::vector<double> body;
+      for (double x : sorted)
+        if (x <= med * 2.5) body.push_back(x);
+      const double p99 = body.empty() ? 0.0 : PercentileSorted(body, 99);
+      if (p99 > 0) stableFps = (1.0 + cfg::kJnd) * 1000.0 / p99;
     }
     // Proteccion contra la espiral: con un limite activo solo se aprende la capacidad si el juego NO
-    // lo sostuvo (su 1 % mas lento, causado por el juego, supera el limite). Si lo sostuvo, solo se
+    // lo sostuvo (su 1 % mas lento, causado por el juego, supera el limite de forma perceptible). Si lo sostuvo, solo se
     // sabe que da "al menos eso", y anotar el limite como capacidad haria bajarlo partida a partida.
     if (capMs > 0) {
       stableFps = 0.0;
-      if (!plenty && gameP99 > capMs * 1.02) stableFps = 1000.0 / (gameP99 * 1.05);
+      if (!plenty && gameP99 > capMs * (1.0 + cfg::kJnd)) stableFps = (1.0 + cfg::kJnd) * 1000.0 / gameP99;
     }
-    GameMemory mem = GameMemory::Parse(ReadKv(L"equipo.txt", "memoria2|" + s.exe));
+    GameMemory mem = GameMemory::Parse(ReadKv(L"equipo.txt", "memoria3|" + s.exe));
     if (stableFps > 0 && s.gameSecs >= 60.0 && !s.exe.empty()) {
       mem.Add(stableFps, s.gameSecs / 60.0);
-      WriteKv(L"equipo.txt", "memoria2|" + s.exe, mem.Serialize());
+      WriteKv(L"equipo.txt", "memoria3|" + s.exe, mem.Serialize());
     }
     if (mem.sessions > 0)
       Log("  Memoria del juego: %d partida%s; sostiene ~%.0f fps reales (con un 80 %% de probabilidad, al menos %.0f)\n",
@@ -1975,7 +1980,9 @@ static void PrintSessionSummary(const Session& s, double hz) {
     }
   }
 
-  if (s.haveRec) {
+  if (s.haveRec && s.accepted) {
+    Log("\n  Limite aceptado: no se recalcula (usa Deshacer para recalcularlo).\n");
+  } else if (s.haveRec) {
     bool lastChangeAtEnd = s.hasPrevRec && NowSec() - s.recChangedAt < 6.0;
     Log("\n  Recomendacion final:\n");
     if (lastChangeAtEnd) {
@@ -2019,13 +2026,29 @@ static void TrackPhases(Session& ss, const std::vector<FrameSample>& fresh, doub
 static void ProcessSession(Session& ss, std::vector<FrameSample>& fresh, double now, double hz) {
   std::vector<double> longCache;
   bool longReady = false;
+  // Ultimos minutos de fotogramas reales, ordenados. Con un limite activo, los retrasos del
+  // limitador se cuentan como el limite (tiempos causados por el juego), para que no empujen la
+  // recomendacion hacia abajo sin motivo.
   auto Long = [&]() -> const std::vector<double>& {
     if (!longReady) {
-      longCache = ss.LongSorted();
+      const double capMs = ActiveCapMs(ss);
+      if (capMs > 0 && ss.longWork.size() == ss.longReal.size()) {
+        longCache.clear();
+        longCache.reserve(ss.longReal.size());
+        for (size_t i = 0; i < ss.longReal.size(); ++i) {
+          double x = ss.longReal[i].second;
+          if (x > capMs && ss.longWork[i] >= 0 && ss.longWork[i] < capMs * 0.95) x = capMs;
+          longCache.push_back(x);
+        }
+        std::sort(longCache.begin(), longCache.end());
+      } else {
+        longCache = ss.LongSorted();
+      }
       longReady = true;
     }
     return longCache;
   };
+  const double capReal = ActiveCapMs(ss) > 0 ? 1000.0 / ActiveCapMs(ss) : 0.0;
   if (!fresh.empty()) {
     ss.lastFrameArrival = now;
     if (ss.paused) {
@@ -2222,7 +2245,7 @@ static void ProcessSession(Session& ss, std::vector<FrameSample>& fresh, double 
     ss.current = RecommendFor(st, hz, cfg::kMarginInitial);
     if (ss.vrrActive) {
       Recommendation vr = RecommendVrr(Long(), st.WorkP99(), hz, st.FgFactor(), g_priority == 1,
-                                       HeldRate(st));
+                                       HeldRate(st), capReal);
       if (vr.valid) ss.current = vr;
     } else if (g_priority == 1) {
       Recommendation fr = RecommendFluid(Long(), hz, st.FgFactor());
@@ -2270,7 +2293,7 @@ static void ProcessSession(Session& ss, std::vector<FrameSample>& fresh, double 
     // tras 10 s. Con G-SYNC solo cuenta un cambio de al menos un 5 %.
     Recommendation fr = ss.vrrActive
                             ? RecommendVrr(Long(), st.WorkP99(), hz, st.FgFactor(), g_priority == 1,
-                                           HeldRate(st))
+                                           HeldRate(st), capReal)
                             : RecommendFluid(Long(), hz, st.FgFactor());
     if (!fr.valid) fr = RecommendFor(st, hz, cfg::kMarginInitial);
     double cur = ss.current.valid ? ss.current.capFps : 0.0;
@@ -3046,7 +3069,9 @@ static Recommendation SessionRec(const Session& ss, double hz) {
   if (ss.gameSecs > 0 && ss.ownCapSecs > ss.gameSecs * 0.5)
     held = std::max(held, ss.ownCapRateSum / ss.ownCapSecs);
   if (vrr) {
-    Recommendation vr = RecommendVrr(d, p99, hz, k, fluid, held);
+    const double capReal =
+        ss.expectedFps > 0 && (ss.verified || ss.appliedAtStart) ? ss.expectedFps : 0.0;
+    Recommendation vr = RecommendVrr(d, p99, hz, k, fluid, held, capReal);
     if (vr.valid) return vr;  // si no, (por debajo del rango VRR sin LFC) un divisor
   }
   Recommendation r = fluid ? RecommendFluid(d, hz, k) : Recommendation{};

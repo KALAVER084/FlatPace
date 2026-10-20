@@ -351,16 +351,33 @@ static Recommendation RecommendFluid(const std::vector<double>& sorted, double h
 // heldReal: ritmo real que el juego esta sosteniendo bajo un limite (el suyo o el nuestro),
 // o 0. Con un limite activo ningun fotograma va mas rapido que el limite pero algunos van
 // mas lentos, asi que los percentiles quedan sesgados hacia abajo: lo demostrado manda.
+// Con VRR (0.39, validado con partidas reales de Greylock y Megabonk), sobre los tiempos de
+// fotograma reales sin tirones (> 2,5 x mediana: ningun limite los arregla, e inflaban el p99):
+// - Fluidez: el ritmo que el juego alcanza el 90 % del tiempo (antes, el 70 %: el juego quedaba por
+//   debajo del limite un 22-34 % de los segundos, y un 29 % de forma perceptible).
+// - Estabilidad: su 1 % mas lento puede llegar como mucho un 13 % tarde (la diferencia perceptible):
+//   1,13 x 1000 / p99 (antes 1000 / (p99 x 1,05) con tirones: Greylock 78-85 fps; ahora ~91-109,
+//   sin caidas perceptibles).
+// Con un limite activo (capReal), los datos estan censurados: nunca se recomienda subir (eso queda
+// para la sugerencia, que exige que el juego vaya sobrado).
+constexpr double kVrrFluidPercentile = 90.0;
 static Recommendation RecommendVrr(const std::vector<double>& longSorted, double workP99, double hz, int k,
-                                   bool fluid, double heldReal = 0.0) {
+                                   bool fluid, double heldReal = 0.0, double capReal = 0.0) {
   Recommendation r;
   k = std::max(1, k);
   double realRate = 0.0;
-  if (fluid && longSorted.size() >= 200) {
-    realRate = 1000.0 / PercentileSorted(longSorted, kFluidPercentile);
+  if (longSorted.size() >= 200) {
+    const double med = PercentileSorted(longSorted, 50);
+    std::vector<double> body;
+    body.reserve(longSorted.size());
+    for (double x : longSorted)
+      if (x <= med * 2.5) body.push_back(x);  // ya ordenado: sigue ordenado
+    if (fluid) realRate = 1000.0 / PercentileSorted(body, kVrrFluidPercentile);
+    else realRate = (1.0 + cfg::kJnd) * 1000.0 / PercentileSorted(body, 99);
   } else if (workP99 > 0) {
     realRate = 1000.0 / (workP99 * (1.0 + cfg::kMarginInitial));
   }
+  if (capReal > 0) realRate = std::min(realRate, capReal);
   double maxScreen = VrrCeiling(hz);
   const int vmin = g_vrrMinHz, vmax = g_vrrMaxHz;
   // Si el VRR del monitor no llega a su frecuencia maxima, el techo es el de su rango VRR.
