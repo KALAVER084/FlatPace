@@ -1,4 +1,4 @@
-# Documentación técnica de FlatPace 0.37.2
+# Documentación técnica de FlatPace 0.38
 
 Este documento explica cómo funciona FlatPace por dentro: arquitectura, algoritmos, fórmulas, formatos de datos y las fuentes en que se basan sus decisiones.
 
@@ -76,6 +76,7 @@ Si el monitor ofrece otras frecuencias en la resolución actual y alguna permite
   - `FRL_FPS` (0x10835002): limitador de FPS (enteros).
   - `VSYNCMODE` (0x00A879CF): `FORCEON` con VRR; intervalos 1/2, 1/3 o 1/4 del refresco sin VRR cuando la presentación es directa y el equipo lo admite.
   - `PRERENDERLIMIT` (0x007BA09E) = 1, junto con el VSync por intervalos.
+  - `PREFERRED_PSTATE` (0x1057EB71) = 1, *Preferir rendimiento máximo*, con cada límite: evita que el driver baje las frecuencias de la GPU hasta ir justa (en Greylock con 90 FPS, el trabajo por fotograma casi se duplicaba con el mismo 85 % de uso, y las escenas pesadas se pasaban del límite). Al abrir la app se añade a los cambios que no lo tenían. Desactivable con `rendimiento-maximo=no`.
 - Antes de cambiar un ajuste se guarda su valor original; **deshacer** lo restaura o borra el perfil propio.
 - **Aprendizajes por equipo:** si el driver impone su VSync (comprobado al reabrir el juego) y si, con generación de fotogramas, el limitador actúa sobre lo que se ve en pantalla o sobre los fotogramas reales (comprobado con la generación estable al menos 8 s).
 
@@ -107,6 +108,7 @@ Sin interfaz, en `%LOCALAPPDATA%\FlatPace\equipo.txt` (una línea `clave=valor`)
 
 | Clave | Efecto |
 |---|---|
+| `rendimiento-maximo=no` | No acompañar los límites de *Preferir rendimiento máximo* (los cambios ya aplicados lo pierden al reaplicarse o al deshacerlos). |
 | `divisores-siempre=si` | Usa siempre divisores de los Hz, aunque G-SYNC/FreeSync actúe. Para pantallas que parpadean con VRR (algunas OLED y VA). La sección *Equipo* lo indica en la fila *VRR*. |
 
 Los límites ya aplicados no cambian: para recalcular un juego con el ajuste nuevo, usa *Deshacer*.

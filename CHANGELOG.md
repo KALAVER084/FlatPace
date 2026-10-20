@@ -2,6 +2,11 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). La versión más reciente va primero.
 
+## 0.38
+- **Añadido:** con cada límite (automático o manual), FlatPace pide al driver de NVIDIA que **no baje las frecuencias de la GPU** en ese juego (*Modo de administración de energía: Preferir rendimiento máximo*), en el mismo perfil y con el mismo *Deshacer*. Con un límite, el driver bajaba las frecuencias hasta que la GPU iba justa y tardaba en subirlas en las escenas pesadas, que se pasaban del límite: en Greylock con 90 FPS, la GPU tardaba casi el doble por fotograma (mediana de 9,6 ms frente a 5,1 sin límite) con el mismo 85 % de uso, y el 1 % bajo causado por el juego quedaba en 83. Es la combinación que recomienda NVIDIA para su limitador. La GPU sigue protegiéndose sola por temperatura y potencia: el ajuste no cambia esos límites.
+- **Añadido:** al abrir la app, el ajuste se añade también a los juegos que ya tenían límite (actúa la próxima vez que se abra el juego). Se muestra como *"· GPU al máximo"* en *Juegos*.
+- **Añadido:** ajuste avanzado `rendimiento-maximo=no` en `equipo.txt` para no aplicarlo.
+
 ## 0.37.2
 - **Corregido:** con un límite puesto, el **1 % bajo** caía por debajo del propio límite (Megabonk con 195 FPS: 176). En tus grabaciones, el 96-97 % de esos fotogramas tardíos no se debían al juego (su CPU y GPU habían terminado de sobra, ~2,2 ms en Megabonk), sino al temporizador del limitador del driver, que a veces despierta tarde y compensa adelantando el siguiente fotograma (en el 78-89 % de los casos). Ahora, con un límite activo, un fotograma tardío solo cuenta como lento si su trabajo de CPU/GPU también superó el 95 % del límite. En la ventana, el overlay y el registro se muestra ese **1 % bajo causado por el juego** (Megabonk: 195 FPS; Greylock con 90: 83, porque ahí sí hay escenas pesadas en las que no llega), y el resumen muestra ambos valores.
 - **Añadido (protección contra la espiral):** con un límite puesto, la memoria del juego solo aprende si el juego **no** lo sostuvo. Si lo sostuvo, solo se sabe que da "al menos eso", y anotar el límite como capacidad haría bajarlo partida a partida (como la espiral 231 → 226 → 222 de versiones antiguas). Las decisiones de *Estabilidad* ya eran inmunes: usan el trabajo de CPU/GPU, que el limitador no distorsiona.

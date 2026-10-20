@@ -124,7 +124,7 @@ static std::atomic<bool> g_quit{false};
 static std::atomic<int> g_lang{0};
 static const char* T(const char* es, const char* en) { return g_lang == 1 ? en : es; }
 
-static constexpr const char* kVersion = "0.37.2";
+static constexpr const char* kVersion = "0.38";
 
 // Carpeta donde esta este .exe.
 static std::wstring ExeDirectory() {
@@ -658,6 +658,9 @@ static std::atomic<int> g_priority{0};  // 0 = estabilidad (por defecto), 1 = fl
 // "divisores-siempre=si" en equipo.txt fuerza los divisores de los Hz aunque haya VRR, para
 // pantallas que parpadean con VRR (algunas OLED y VA).
 static std::atomic<bool> g_useVrr{true};
+// Con cada limite, pedir al driver de NVIDIA que no baje las frecuencias de la GPU (avanzado:
+// rendimiento-maximo=no en equipo.txt lo desactiva).
+static std::atomic<bool> g_maxPerf{true};
 // Rango de VRR del monitor segun su EDID (0 = desconocido): el rango FreeSync si lo declara, si no
 // el rango de frecuencias. Por encima del maximo el VRR deja de actuar; por debajo del minimo, el
 // monitor solo sigue el ritmo si puede duplicar fotogramas (LFC, cuando maximo >= 2 x minimo).
@@ -1065,6 +1068,13 @@ constexpr Status NVIDIA_DEVICE_NOT_FOUND = -6;
 constexpr NvU32 FRL_FPS_ID = 0x10835002;  // "Frame Rate Limiter" (Velocidad maxima de fotogramas)
 constexpr NvU32 VSYNCMODE_ID = 0x00A879CF;       // "Vertical Sync"
 constexpr NvU32 PRERENDERLIMIT_ID = 0x007BA09E;  // "Maximum pre-rendered frames"
+// "Power management mode" (Modo de administracion de energia): 1 = preferir rendimiento maximo.
+// Con un limite, el driver baja las frecuencias de la GPU hasta que va justa y tarda en subirlas en
+// las escenas pesadas, que se pasan del limite (Greylock con 90 fps: el doble de trabajo por fotograma
+// con el 85 % de uso). Es la combinacion que recomienda NVIDIA para su limitador; la GPU sigue
+// protegiendose sola por temperatura y potencia.
+constexpr NvU32 PREFERRED_PSTATE_ID = 0x1057EB71;
+constexpr NvU32 PSTATE_PREFER_MAX = 1;
 constexpr NvU32 VSYNC_FORCEON = 0x47814940;
 constexpr NvU32 VSYNC_FLIP2 = 0x32610244;        // VSync a 1/2 del refresco
 constexpr NvU32 VSYNC_FLIP3 = 0x71271021;        // 1/3
@@ -1199,10 +1209,17 @@ struct AppliedChange {
 };
 
 static std::string DescribeChangeBase(const AppliedChange& c);
+static bool HasMaxPerf(const AppliedChange& c) {
+  for (const auto& sv : c.saved)
+    if (sv.id == 0x1057EB71u) return true;
+  return false;
+}
+
 static std::string DescribeChange(const AppliedChange& c) {
   std::string d = DescribeChangeBase(c);
   if (c.vrr) d += " · G-SYNC";
   if (c.manual) d += T(" · manual", " · manual");
+  if (HasMaxPerf(c)) d += T(" · GPU al máximo", " · GPU at max");
   if (c.displayHz > 0) d += std::string(T(" · pantalla a ", " · display at ")) + std::to_string(c.displayHz) + " Hz";
   return d;
 }
@@ -1300,6 +1317,33 @@ class NvDriver {
     if (st == nv::OK) st = save_(s);
     Close(s);
     if (st != nv::OK) { error = Describe(st); return false; }
+    return true;
+  }
+
+  // Anade un ajuste a un cambio ya aplicado (guarda su valor original para deshacerlo).
+  bool AddSetting(AppliedChange& change, uint32_t id, uint32_t value) {
+    if (!ok_) return false;
+    for (const auto& sv : change.saved)
+      if (sv.id == id) return true;  // ya estaba
+    nv::Session s = nullptr;
+    if (!Open(s)) return false;
+    nv::Profile p = nullptr;
+    bool created = false;
+    if (!FindOrCreateProfile(s, change.exe, p, created)) { Close(s); return false; }
+    SavedSetting sv;
+    sv.id = id;
+    nv::Setting cur{};
+    cur.version = nv::SETTING_VER;
+    if (getSetting_(s, p, id, &cur) == nv::OK && cur.settingLocation == nv::CURRENT_PROFILE_LOCATION &&
+        !cur.isCurrentPredefined) {
+      sv.had = true;
+      sv.old = cur.u32CurrentValue;
+    }
+    nv::Status st = SetDword(s, p, id, value);
+    if (st == nv::OK) st = save_(s);
+    Close(s);
+    if (st != nv::OK) { error = Describe(st); return false; }
+    change.saved.push_back(sv);
     return true;
   }
 
@@ -3199,6 +3243,20 @@ static void RunEngine(std::wstring presentMonPath) {
   store.Load();
   if (int moved = store.Migrate(ExeDirectory() + L"\\cambios-aplicados.txt"))
     Log("Cambios de una version anterior movidos a la carpeta de datos: %d\n", moved);
+  if (ReadKv(L"equipo.txt", "rendimiento-maximo") == "no") g_maxPerf = false;
+  if (nvOk && g_maxPerf) {
+    int added = 0;
+    for (auto& [exe, c] : store.items) {
+      bool has = false;
+      for (const auto& sv : c.saved) has = has || sv.id == nv::PREFERRED_PSTATE_ID;
+      if (!has && nvd.AddSetting(c, nv::PREFERRED_PSTATE_ID, nv::PSTATE_PREFER_MAX)) ++added;
+    }
+    if (added > 0) {
+      store.Save();
+      Log("Rendimiento maximo de la GPU anadido a %d juego%s con limite (actua al abrir el juego).\n", added,
+          added == 1 ? "" : "s");
+    }
+  }
   PublishChanges(store);
 
   // 1. Hardware ------------------------------------------------------------
@@ -3442,6 +3500,7 @@ static void RunEngine(std::wstring presentMonPath) {
         n = div;
         desired = {{nv::FRL_FPS_ID, intFps}};
       }
+      if (g_maxPerf && !desired.empty()) desired.push_back({nv::PREFERRED_PSTATE_ID, nv::PSTATE_PREFER_MAX});
       uint32_t frlWanted = 0;
       for (const auto& d : desired)
         if (d.first == nv::FRL_FPS_ID) frlWanted = d.second;
@@ -3684,6 +3743,7 @@ static void RunEngine(std::wstring presentMonPath) {
         const uint32_t frl = k > 1 && frlFgMode == "reales" ? screen / static_cast<uint32_t>(k) : screen;
         std::vector<std::pair<uint32_t, uint32_t>> desired = {{nv::FRL_FPS_ID, frl}};
         if (vrrNow) desired.push_back({nv::VSYNCMODE_ID, nv::VSYNC_FORCEON});
+        if (g_maxPerf) desired.push_back({nv::PREFERRED_PSTATE_ID, nv::PSTATE_PREFER_MAX});
         bool ok = nvOk;
         // Se parte de cero: se deshace lo anterior (puede incluir otros ajustes, como el VSync por intervalos).
         if (ok && known != store.items.end()) {

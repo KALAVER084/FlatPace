@@ -76,6 +76,7 @@ If the monitor offers other refresh rates at the current resolution and one of t
   - `FRL_FPS` (0x10835002): FPS limiter (whole numbers).
   - `VSYNCMODE` (0x00A879CF): `FORCEON` with VRR; 1/2, 1/3 or 1/4 refresh intervals without VRR when presentation is direct and the system supports it.
   - `PRERENDERLIMIT` (0x007BA09E) = 1, together with interval VSync.
+  - `PREFERRED_PSTATE` (0x1057EB71) = 1, *Prefer maximum performance*, with every limit: it keeps the driver from lowering the GPU clocks until it barely keeps up (in Greylock at 90 FPS, work per frame almost doubled at the same 85 % utilization, and heavy scenes went over the limit). When the app opens it's added to changes that lacked it. Can be disabled with `rendimiento-maximo=no`.
 - Before changing a setting its original value is saved; **undo** restores it or deletes the app's own profile.
 - **Per-system learning:** whether the driver enforces its VSync (checked when the game reopens) and whether, with frame generation, the limiter acts on what's shown on screen or on the real frames (checked with frame generation stable for at least 8 s).
 
@@ -107,6 +108,7 @@ No interface; in `%LOCALAPPDATA%\FlatPace\equipo.txt` (one `key=value` line), wi
 
 | Key | Effect |
 |---|---|
+| `rendimiento-maximo=no` | Don't pair limits with *Prefer maximum performance* (changes already applied lose it when reapplied or undone). |
 | `divisores-siempre=si` | Always use divisors of the refresh rate, even when G-SYNC/FreeSync is active. For displays that flicker with VRR (some OLED and VA panels). The *System* section shows it in the *VRR* row. |
 
 Limits already applied don't change: to recalculate a game with the new setting, use *Undo*.

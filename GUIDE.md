@@ -1,4 +1,4 @@
-# FlatPace 0.37.2 user guide
+# FlatPace 0.38 user guide
 
 This guide describes the current version. Changes between versions are listed in the [changelog](CHANGELOG.md) (in Spanish). The app has an English interface: switch it with **ES | EN** at the bottom of the sidebar.
 
@@ -64,6 +64,7 @@ The app **never changes** a manual limit: it only checks that it works (the over
 
 ## 7. G-SYNC, FreeSync and displays without VRR
 
+- **With NVIDIA, every limit comes with "GPU at max"** (*Prefer maximum performance* in the game's profile): with a limit, the driver would lower the GPU clocks until it barely keeps up, and it wouldn't make it in time in heavy scenes, worsening the 1 % low. The GPU still protects itself against temperature and power. It's undone together with the limit.
 - **With VRR active**, the limit matches the exact pace the game holds (for example 116 or 122), always below your display's ceiling (225 on a 240 Hz display, 138 on a 144 Hz one). The app also turns on the driver's VSync, the recommended combination with G-SYNC.
 - **The monitor's VRR range** (read from its EDID) is taken into account: if its VRR range ends below its refresh rate, the limit stays below the end of the range; and if a game runs below the bottom of the range on a monitor that can't double frames (no LFC), the app uses a divisor of the refresh rate instead. *System* shows the range and whether LFC is available.
 - **Without VRR**, the limit divides the real refresh rate exactly (240, 120, 80, 60…), so every image stays on screen for the same time.

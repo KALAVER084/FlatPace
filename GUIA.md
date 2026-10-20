@@ -1,4 +1,4 @@
-# Guía de uso de FlatPace 0.37.2
+# Guía de uso de FlatPace 0.38
 
 Esta guía describe la versión actual. Los cambios entre versiones están en el [historial](CHANGELOG.md).
 
@@ -64,6 +64,7 @@ La app **no cambiará nunca** un límite manual: solo comprobará que funciona (
 
 ## 7. G-SYNC, FreeSync y pantallas sin VRR
 
+- **Con NVIDIA, cada límite va acompañado de "GPU al máximo"** (*Preferir rendimiento máximo* en el perfil del juego): con un límite, el driver bajaría las frecuencias de la GPU hasta ir justa y no llegaría a tiempo en las escenas pesadas, que empeorarían el 1 % bajo. La GPU sigue protegiéndose sola por temperatura y potencia. Se deshace junto con el límite.
 - **Con VRR actuando**, el límite se ajusta al ritmo exacto que el juego sostiene (por ejemplo 116 o 122), siempre por debajo del techo de tu pantalla (225 en una de 240 Hz, 138 en una de 144 Hz). La app activa además el VSync del driver, la combinación recomendada con G-SYNC.
 - **Se tiene en cuenta el rango de VRR del monitor** (leído de su EDID): si su rango VRR acaba por debajo de su frecuencia, el límite queda por debajo del final del rango; y si un juego va por debajo del mínimo del rango en un monitor que no puede duplicar fotogramas (sin LFC), la app usa un divisor de los Hz. *Equipo* muestra el rango y si hay LFC.
 - **Sin VRR**, el límite divide exactamente los Hz reales (240, 120, 80, 60…), para que cada imagen dure lo mismo en pantalla.
