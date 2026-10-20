@@ -1,0 +1,4 @@
+# Finales de linea coherentes en el repositorio; los scripts de Windows conservan CRLF
+* text=auto
+*.bat text eol=crlf
+*.ico binary

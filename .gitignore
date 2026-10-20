@@ -1,0 +1,24 @@
+# Compilacion
+build/
+out/
+*.exe
+*.obj
+*.o
+*.res
+*.pdb
+*.ilk
+
+# Pruebas compiladas
+tests/test_core
+tests/*.exe
+tests/*.obj
+
+# Programas de terceros que no van en el codigo (se incluyen en las releases)
+PresentMon*.exe
+
+# Registros y archivos del sistema
+registro-*.txt
+.vs/
+.vscode/
+Thumbs.db
+.DS_Store
