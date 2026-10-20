@@ -1,4 +1,4 @@
-# Documentación técnica de FlatPace 0.36.2
+# Documentación técnica de FlatPace 0.36.3
 
 Este documento explica cómo funciona FlatPace por dentro: arquitectura, algoritmos, fórmulas, formatos de datos y las fuentes en que se basan sus decisiones.
 
@@ -94,9 +94,12 @@ Si el monitor ofrece otras frecuencias en la resolución actual y alguna permite
 | `equipo.txt` | `%LOCALAPPDATA%\FlatPace` | `idioma`, `prioridad`, `overlay`, `divisores-siempre` (ajuste avanzado), nombres de juegos (`nombre|exe`), variación sin límite de cada juego (`ritmo-antes|exe`), aprendizajes del VSync del driver y del limitador con generación, pantalla pendiente de restaurar |
 | `pantalla.txt` | `%LOCALAPPDATA%\FlatPace` | Última frecuencia real medida por monitor y modo |
 | `registro-AAAAMMDD-HHMMSS.txt` | Carpeta del programa | Registro completo de cada ejecución |
+| `grabaciones/grabacion-juego.exe-AAAAMMDD-HHMMSS.csv` | Carpeta del programa | Opcional: un fotograma por fila (ver formato) |
 
 **Formato de `cambios-aplicados.txt` (v2), separado por tabuladores:**
 `v2  exe  creado(0/1)  método(0 límite / 1 VSync)  divisor  fps  n  [id_hex  tenía(0/1)  original_hex]×n` seguido de campos opcionales: `fg k frl`, `hz frecuencia`, `ok 1` (aceptado), `base fps_reales`, `vrr 1`, `manual 1` (puesto por el usuario: la app no lo cambia).
+
+**Formato de las grabaciones (CSV):** líneas de cabecera que empiezan por `#` (versión, juego, frecuencia real, rango VRR, prioridad y límite al empezar) y una fila por fotograma del juego con: `t_llegada_s` (cuándo llegó el dato, por tandas), `t_acumulado_s` (suma de presentaciones), `presentacion_ms`, `real_ms` (con marcadores de Reflex, intervalo de simulación), `real_presentacion_ms`, `generado` (0/1), `cpu_ms`, `gpu_ms`, `pantalla_ms`, `error_animacion_ms`, `vrr` y `limite_confirmado` (estado en ese momento). Los valores no disponibles quedan vacíos.
 
 ## 8. Ajustes avanzados
 

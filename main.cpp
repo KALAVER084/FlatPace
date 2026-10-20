@@ -121,7 +121,7 @@ static std::atomic<bool> g_quit{false};
 static std::atomic<int> g_lang{0};
 static const char* T(const char* es, const char* en) { return g_lang == 1 ? en : es; }
 
-static constexpr const char* kVersion = "0.36.2";
+static constexpr const char* kVersion = "0.36.3";
 
 // Carpeta donde esta este .exe.
 static std::wstring ExeDirectory() {
@@ -659,6 +659,8 @@ static std::atomic<bool> g_useVrr{true};
 // el rango de frecuencias. Por encima del maximo el VRR deja de actuar; por debajo del minimo, el
 // monitor solo sigue el ritmo si puede duplicar fotogramas (LFC, cuando maximo >= 2 x minimo).
 static std::atomic<int> g_vrrMinHz{0}, g_vrrMaxHz{0};
+// Grabar los datos de cada fotograma en un CSV por partida (para analisis; desactivado por defecto).
+static std::atomic<bool> g_recordFrames{false};
 static std::atomic<bool> g_undoRequested{false};
 static std::atomic<bool> g_applyNowRequest{false};
 // Limites manuales pedidos desde la ventana: (.exe, fps en pantalla).
@@ -1718,6 +1720,70 @@ struct Session {
 };
 
 static void WriteKv(const std::wstring& file, const std::string& key, const std::string& value);
+
+// ---------------------------------------------------------------------------
+// Grabacion de fotogramas: un CSV por partida en la carpeta "grabaciones" junto al programa,
+// con una cabecera de contexto (lineas que empiezan por #) y una fila por fotograma del juego.
+// Sirve para analizar y validar modelos con datos reales, sin tocar la app.
+// ---------------------------------------------------------------------------
+static std::wstring RecordingsDirectory() {
+  std::wstring dir = ExeDirectory() + L"\\grabaciones";
+  CreateDirectoryW(dir.c_str(), nullptr);
+  return dir;
+}
+
+struct FrameRecorder {
+  FILE* f = nullptr;
+  std::wstring path;
+  double t0 = 0.0, tSum = 0.0;
+  size_t rows = 0;
+
+  bool Open(const std::string& exe, const std::vector<std::string>& header) {
+    SYSTEMTIME t;
+    GetLocalTime(&t);
+    std::string base = exe;
+    for (char& c : base)
+      if (c == '\\' || c == '/' || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' || c == '>' || c == '|') c = '_';
+    path = RecordingsDirectory() + L"\\grabacion-" + Widen(base) + L"-" + std::to_wstring(t.wYear) + Pad2(t.wMonth) +
+           Pad2(t.wDay) + L"-" + Pad2(t.wHour) + Pad2(t.wMinute) + Pad2(t.wSecond) + L".csv";
+    f = _wfopen(path.c_str(), L"wb");
+    if (!f) return false;
+    setvbuf(f, nullptr, _IOFBF, 1 << 16);
+    for (const auto& h : header) std::fprintf(f, "# %s\n", h.c_str());
+    std::fprintf(f, "t_llegada_s,t_acumulado_s,presentacion_ms,real_ms,real_presentacion_ms,generado,"
+                    "cpu_ms,gpu_ms,pantalla_ms,error_animacion_ms,vrr,limite_confirmado\n");
+    rows = 0;
+    tSum = 0.0;
+    return true;
+  }
+
+  void Write(const FrameSample& s, double sessionStart, bool vrr, bool verified) {
+    if (!f) return;
+    if (s.presentMs > 0) tSum += s.presentMs / 1000.0;
+    auto num = [](double v, const char* fmt) { return std::isnan(v) || v < -1e8 ? std::string() : Fmt(fmt, v); };
+    std::fprintf(f, "%.4f,%.4f,%.3f,%s,%s,%d,%s,%s,%s,%s,%d,%d\n", s.t - sessionStart, tSum, s.presentMs,
+                 num(s.realMs > 0 ? s.realMs : NAN, "%.3f").c_str(),
+                 num(s.presentRealMs > 0 ? s.presentRealMs : NAN, "%.3f").c_str(), s.generated ? 1 : 0,
+                 num(s.cpuBusyMs >= 0 ? s.cpuBusyMs : NAN, "%.3f").c_str(),
+                 num(s.gpuBusyMs >= 0 ? s.gpuBusyMs : NAN, "%.3f").c_str(),
+                 num(s.displayMs > 0 ? s.displayMs : NAN, "%.3f").c_str(), num(s.animErrMs, "%.3f").c_str(),
+                 vrr ? 1 : 0, verified ? 1 : 0);
+    ++rows;
+  }
+
+  void Flush() {
+    if (f) std::fflush(f);
+  }
+
+  // Devuelve el numero de filas escritas.
+  size_t Close() {
+    size_t n = rows;
+    if (f) std::fclose(f);
+    f = nullptr;
+    rows = 0;
+    return n;
+  }
+};
 
 static void PrintSessionSummary(const Session& s, double hz) {
   if (s.start <= 0.0 || !s.seenForeground) return;
@@ -3116,6 +3182,7 @@ static void RunEngine(std::wstring presentMonPath) {
   Log("\n=== Deteccion automatica del juego ===\n");
 
   Session session;
+  FrameRecorder recorder;
   DWORD candidatePid = 0;
   // Al cerrarse un juego, su proceso puede seguir presentando un instante (o relanzarse para
   // cerrarse): durante unos segundos no se vuelve a detectar el mismo .exe.
@@ -3579,6 +3646,11 @@ static void RunEngine(std::wstring presentMonPath) {
 
     if (session.pid != 0 && !ProcessAlive(session.pid)) {
       Log("\n[%5.0f s] %s se ha cerrado.\n", session.T(now), session.label.c_str());
+      if (recorder.f) {
+        std::wstring recPath = recorder.path;
+        size_t n = recorder.Close();
+        Log("  Grabacion guardada: %s (%zu fotogramas)\n", Narrow(recPath).c_str(), n);
+      }
       lastClosedExe = session.exe;
       lastClosedAt = now;
       CloseDecision(now);
@@ -3790,6 +3862,36 @@ static void RunEngine(std::wstring presentMonPath) {
     }
 
     ProcessSession(session, mine, now, hz);
+
+    // Grabacion de fotogramas (si esta activada)
+    if (g_recordFrames && !recorder.f && !mine.empty()) {
+      std::vector<std::string> h = {
+          Fmt("FlatPace %s - grabacion de fotogramas", kVersion),
+          "juego: " + session.label + " (" + session.exe + ")",
+          Fmt("pantalla: %.3f Hz reales; rango VRR del monitor: %d-%d Hz (0 = desconocido)", hz, g_vrrMinHz.load(),
+              g_vrrMaxHz.load()),
+          std::string("prioridad: ") + (g_priority == 0 ? "estabilidad" : "fluidez"),
+      };
+      auto known = store.items.find(session.exe);
+      h.push_back("limite al empezar: " + (known != store.items.end() && session.appliedAtStart
+                                               ? DescribeChange(known->second)
+                                               : std::string("ninguno de FlatPace")));
+      h.push_back("columnas: tiempos en ms; t_llegada = cuando llego el dato (por tandas); t_acumulado = suma de "
+                  "presentaciones; vrr y limite_confirmado = estado en ese momento");
+      if (recorder.Open(session.exe, h))
+        Log("[%5.0f s] Grabando los fotogramas en %s\n", session.T(now), Narrow(recorder.path).c_str());
+      else
+        Log("[%5.0f s] No pude crear el archivo de grabacion.\n", session.T(now));
+    }
+    if (recorder.f) {
+      if (!g_recordFrames) {
+        size_t n = recorder.Close();
+        Log("[%5.0f s] Grabacion detenida (%zu fotogramas).\n", session.T(now), n);
+      } else {
+        for (const auto& fr : mine) recorder.Write(fr, session.start, session.vrrActive, session.verified);
+        recorder.Flush();
+      }
+    }
 
     // ---- Verificar y aplicar el limite ----
     const WindowStats& st = session.lastStats;
@@ -4943,6 +5045,20 @@ static void PageLog(const View& v) {
   Section(T("Registro", "Log"));
   if (ImGui::Button(T("Abrir el archivo", "Open the file")) && !v.logPath.empty())
     ShellExecuteW(nullptr, L"open", v.logPath.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+  ImGui::SameLine();
+  bool rec = g_recordFrames;
+  if (ImGui::Checkbox(T("Grabar los datos de cada fotograma", "Record per-frame data"), &rec)) {
+    g_recordFrames = rec;
+    WriteKv(L"equipo.txt", "grabar-fotogramas", rec ? "si" : "no");
+  }
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("%s", T("Guarda un archivo CSV por partida con cada fotograma medido, para analizarlo.\n"
+                              "Unos 10 MB por cada 10 minutos a 240 FPS. Empieza con la próxima partida.",
+                              "Saves a CSV file per session with every measured frame, for analysis.\n"
+                              "About 10 MB per 10 minutes at 240 FPS. Starts with the next session."));
+  ImGui::SameLine();
+  if (ImGui::Button(T("Abrir grabaciones", "Open recordings")))
+    ShellExecuteW(nullptr, L"explore", RecordingsDirectory().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
   ImGui::Dummy(ImVec2(0, 6 * scale));
   ImGui::PushStyleColor(ImGuiCol_ChildBg, kCard);
   ImGui::BeginChild("log", ImVec2(0, 0), ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_HorizontalScrollbar);
@@ -5049,6 +5165,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
     g_priority = ReadKv(L"equipo.txt", "prioridad") == "fluidez" ? 1 : 0;
     if (ReadKv(L"equipo.txt", "divisores-siempre") == "si") g_useVrr = false;
     if (ReadKv(L"equipo.txt", "overlay") == "no") overlay::enabled = false;
+    if (ReadKv(L"equipo.txt", "grabar-fotogramas") == "si") g_recordFrames = true;
     std::string lang = ReadKv(L"equipo.txt", "idioma");
     if (lang == "en") g_lang = 1;
     else if (lang.empty()) g_lang = (PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_SPANISH) ? 0 : 1;

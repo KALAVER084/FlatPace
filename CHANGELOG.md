@@ -2,6 +2,9 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). La versión más reciente va primero.
 
+## 0.36.3
+- **Añadido:** grabación de los datos de cada fotograma. Casilla *Grabar los datos de cada fotograma* en *Registro* (desactivada por defecto; la app recuerda la elección): guarda un archivo CSV por partida en la carpeta `grabaciones`, junto al programa, con una cabecera de contexto (juego, pantalla, rango VRR, prioridad y límite aplicado) y una fila por fotograma (tiempos, CPU, GPU, pantalla, error de animación, estado del VRR y del límite). Sirve para analizar y validar con datos reales las mejoras estadísticas previstas (datos censurados, memoria por juego y detección de fases). Unos 10 MB por cada 10 minutos a 240 FPS.
+
 ## 0.36.2
 - **Añadido:** la app usa el **rango de VRR del monitor** (el rango FreeSync del EDID si lo declara, si no su rango de frecuencias). Si el VRR del monitor no llega a su frecuencia máxima, el límite queda por debajo del máximo del rango VRR. Si un juego va por debajo del mínimo del rango y el monitor no puede duplicar fotogramas (LFC, cuando el máximo es menor que el doble del mínimo), la app usa un divisor de los Hz en lugar del límite con VRR. La fila *VRR* indica el rango y si hay LFC.
 - **Cambiado:** la sección *Ahora* adopta la identidad visual: cabecera con la etiqueta de estado del límite (la misma que el overlay: *FIJADO* en azul, *SIN CONFIRMAR* o *SIN LÍMITE* en rojo), tarjeta principal con la cifra de FPS, cuatro métricas (1 % bajo, consistencia, tirones y variación) y la gráfica, y dos tarjetas de la misma altura, *Límite* (con *Aplicar ya*, *Límite manual…* y *Deshacer*) y *Detalles* (VRR, presentación, límite del juego, cuello de botella y pantalla).

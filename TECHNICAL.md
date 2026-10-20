@@ -1,4 +1,4 @@
-# FlatPace 0.36.2 technical documentation
+# FlatPace 0.36.3 technical documentation
 
 This document explains how FlatPace works inside: architecture, algorithms, formulas, data formats and the sources behind its decisions. Some names (log lines, data files and keys) are in Spanish, as they appear in the program.
 
@@ -94,9 +94,12 @@ If the monitor offers other refresh rates at the current resolution and one of t
 | `equipo.txt` | `%LOCALAPPDATA%\FlatPace` | `idioma` (language), `prioridad` (priority), `overlay`, `divisores-siempre` (advanced setting), game names (`nombre|exe`), each game's swing without a limit (`ritmo-antes|exe`), learned driver VSync and limiter behavior with frame generation, display rate pending restore |
 | `pantalla.txt` | `%LOCALAPPDATA%\FlatPace` | Last real refresh rate measured per monitor and mode |
 | `registro-YYYYMMDD-HHMMSS.txt` | Program folder | Full log of each run (in Spanish) |
+| `grabaciones/grabacion-game.exe-YYYYMMDD-HHMMSS.csv` | Program folder | Optional: one frame per row (see format) |
 
 **`cambios-aplicados.txt` format (v2), tab-separated:**
 `v2  exe  created(0/1)  method(0 limit / 1 VSync)  divisor  fps  n  [id_hex  had(0/1)  original_hex]×n` followed by optional fields: `fg k frl`, `hz rate`, `ok 1` (accepted), `base real_fps`, `vrr 1`, `manual 1` (set by the user: the app doesn't change it).
+
+**Recording format (CSV):** header lines starting with `#` (version, game, real refresh rate, VRR range, priority and limit at start) and one row per game frame with: `t_llegada_s` (when the data arrived, in batches), `t_acumulado_s` (sum of presents), `presentacion_ms`, `real_ms` (with Reflex markers, the simulation interval), `real_presentacion_ms`, `generado` (0/1), `cpu_ms`, `gpu_ms`, `pantalla_ms`, `error_animacion_ms`, `vrr` and `limite_confirmado` (state at that moment). Unavailable values are left empty.
 
 ## 8. Advanced settings
 
