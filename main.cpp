@@ -124,7 +124,7 @@ static std::atomic<bool> g_quit{false};
 static std::atomic<int> g_lang{0};
 static const char* T(const char* es, const char* en) { return g_lang == 1 ? en : es; }
 
-static constexpr const char* kVersion = "0.39";
+static constexpr const char* kVersion = "0.39.1";
 
 // Carpeta donde esta este .exe.
 static std::wstring ExeDirectory() {
@@ -735,6 +735,7 @@ static std::wstring OpenLog() {
 
 #include "src/core/analysis.h"
 #include "src/core/suggest.h"
+#include "src/core/decision.h"
 
 static void PrintAdvice(const WindowStats& st) {
   std::string b = st.Bottleneck();
@@ -1747,9 +1748,7 @@ struct Session {
   double ownCapSecs = 0.0, ownCapRateSum = 0.0;  // juego limitado por si mismo (sin limite nuestro)
   // Regla de fallos de un limite aceptado: mas de un 13 % por debajo, en tramos de al
   // menos 5 s, durante al menos el 10 % de la partida y 1 minuto en total.
-  double limPlaySecs = 0.0, failSecs = 0.0;
-  int belowRun = 0;
-  std::vector<float> secRates;
+  FailureTracker fail;  // regla de fallos (tramos claramente por debajo del limite)
   int vrrOnCount = 0, vrrOffCount = 0;
   bool expectVrr = false;
 
@@ -3048,35 +3047,16 @@ static RatePlan BestRate(const Stats& st, double currentHz, int currentRate,
 // Recomendacion con TODA la partida: el estado de generacion de fotogramas dominante, la
 // prioridad elegida y G-SYNC si actuo la mayor parte del tiempo.
 static Recommendation SessionRec(const Session& ss, double hz) {
-  Recommendation none;
-  int k = 1;
-  size_t best = 0;
-  for (const auto& [kk, v] : ss.sessionReal)
-    if (v.size() > best) { best = v.size(); k = kk; }
-  if (best < 600) return none;
-  const auto& vf = ss.sessionReal.at(k);
-  std::vector<double> d(vf.begin(), vf.end());
-  std::sort(d.begin(), d.end());
-  bool vrr = ss.gameSecs > 0 && ss.vrrSecs > ss.gameSecs * 0.5;
-  bool fluid = g_priority == 1;
-  double p99 = PercentileSorted(d, 99), p10 = PercentileSorted(d, 10), p90 = PercentileSorted(d, 90);
-  double med = PercentileSorted(d, 50);
-  // Si casi todos los fotogramas duran lo mismo, el juego estaba limitado (su VSync o su
-  // propio limite): ese ritmo esta demostrado y no se puede recomendar menos.
-  double held = (p10 > 0 && p90 / p10 < 1.06) ? 1000.0 / med : 0.0;
-  // Si el detector vio al juego limitado (su VSync o su limite) la mayor parte de la
-  // partida, ese ritmo esta demostrado.
-  if (ss.gameSecs > 0 && ss.ownCapSecs > ss.gameSecs * 0.5)
-    held = std::max(held, ss.ownCapRateSum / ss.ownCapSecs);
-  if (vrr) {
-    const double capReal =
-        ss.expectedFps > 0 && (ss.verified || ss.appliedAtStart) ? ss.expectedFps : 0.0;
-    Recommendation vr = RecommendVrr(d, p99, hz, k, fluid, held, capReal);
-    if (vr.valid) return vr;  // si no, (por debajo del rango VRR sin LFC) un divisor
-  }
-  Recommendation r = fluid ? RecommendFluid(d, hz, k) : Recommendation{};
-  if (!r.valid) r = Recommend(hz, p99, cfg::kMarginInitial, k);
-  return r;
+  SessionDecisionInput in;
+  in.realByFg = ss.sessionReal;
+  in.gameSecs = ss.gameSecs;
+  in.vrrSecs = ss.vrrSecs;
+  in.ownCapSecs = ss.ownCapSecs;
+  in.ownCapRateSum = ss.ownCapRateSum;
+  in.fluid = g_priority == 1;
+  in.hz = hz;
+  in.capReal = ss.expectedFps > 0 && (ss.verified || ss.appliedAtStart) ? ss.expectedFps : 0.0;
+  return DecideFromSession(in);
 }
 
 // ---------------------------------------------------------------------------
@@ -3669,35 +3649,17 @@ static void RunEngine(std::wstring presentMonPath) {
       }
     } else if (known->second.manual) {
       // Limite manual: no se cambia nunca; solo se informa si no se sostuvo.
-      if (session.failSecs >= 60.0 && session.failSecs >= 0.10 * session.limPlaySecs)
+      if (session.fail.Failed())
         Log("\n  Al cerrar: el juego no sostuvo su limite manual durante %.0f s (%.0f%% de la partida).\n"
             "  No lo cambio porque es manual; si quieres, ajustalo o deshazlo.\n",
-            session.failSecs, 100.0 * session.failSecs / std::max(1.0, session.limPlaySecs));
+            session.fail.failSecs, session.fail.Percent());
       return;
     } else if (known->second.verified || session.accepted) {
       const AppliedChange& c = known->second;
-      bool failed = session.failSecs >= 60.0 && session.failSecs >= 0.10 * session.limPlaySecs;
-      if (failed) {
-        std::vector<float> r = session.secRates;
-        std::sort(r.begin(), r.end());
-        int k = std::max(1, c.fgFactor);
-        Recommendation lower;
-        if (c.vrr) {
-          double held = r.empty() ? 0.0 : r[r.size() / 10];  // ritmo sostenido el 90 % del tiempo
-          double real = std::floor(held);
-          if (real >= cfg::kMinCapFps) {
-            lower.valid = lower.vrr = lower.vrrValid = true;
-            lower.fgFactor = k;
-            lower.realFps = real;
-            lower.capFps = real * k;
-            lower.vrrCapFps = lower.capFps;
-          }
-        } else {
-          int n = std::max(1, static_cast<int>(std::lround(hz / std::max(1.0, session.expectedFps * k))));
-          lower = DivisorRec(hz, n + 1, k);
-        }
+      if (session.fail.Failed()) {
+        Recommendation lower = LowerAfterFailure(session.fail.secRates, c.vrr, c.fgFactor, session.expectedFps, hz);
         Log("\n  Al cerrar: el limite no se sostuvo durante %.0f s (%.0f %% de la partida).\n",
-            session.failSecs, 100.0 * session.failSecs / std::max(1.0, session.limPlaySecs));
+            session.fail.failSecs, session.fail.Percent());
         if (lower.valid) {
           session.current = lower;
           session.lowerPending = true;
@@ -3706,13 +3668,13 @@ static void RunEngine(std::wstring presentMonPath) {
             auto nc = store.items.find(session.exe);
             result = Fmt(T("%s no sostuvo su límite durante el %.0f %% de la partida. En la próxima usaré: %s.",
                            "%s didn't hold its limit for %.0f %% of the session. Next time I'll use: %s."),
-                         session.label.c_str(), 100.0 * session.failSecs / std::max(1.0, session.limPlaySecs),
+                         session.label.c_str(), session.fail.Percent(),
                          DescribeChange(nc->second).c_str());
           }
         }
-      } else if (session.failSecs > 0) {
+      } else if (session.fail.failSecs > 0) {
         Log("\n  Al cerrar: bajadas aisladas del limite (%.0f s, %.0f %% de la partida): no cambio nada.\n",
-            session.failSecs, 100.0 * session.failSecs / std::max(1.0, session.limPlaySecs));
+            session.fail.failSecs, session.fail.Percent());
       }
     }
     if (!result.empty()) {
@@ -4186,16 +4148,20 @@ static void RunEngine(std::wstring presentMonPath) {
       double fpsNow = st.medianMs > 0 ? 1000.0 / st.medianMs : 0.0;
       // Con generacion la GPU parece siempre ocupada y el detector de limites no sirve:
       // se comparan directamente los ritmos real y en pantalla con los esperados.
-      bool fgMatch = session.expectFg > 1 && st.FgFactor() > 1 && fpsNow > 0 &&
-                     std::fabs(fpsNow - exp) / exp < 0.02 &&
-                     std::fabs(st.presentedFps - exp * session.expectFg) / (exp * session.expectFg) < 0.04;
+      VerifyInput vin;
+      vin.expectedFps = exp;
+      vin.expectFg = session.expectFg;
+      vin.fpsNow = fpsNow;
+      vin.fgNow = st.FgFactor();
+      vin.presentedFps = st.presentedFps;
+      vin.fractionFast = st.FractionRealUnder((1000.0 / exp) * 0.93);
+      vin.capped = st.capped;
+      vin.capFps = st.capFps;
       // Verificacion directa: el juego va al ritmo exacto esperado (+-1,5 %) y casi ningun
       // fotograma va mas rapido. Reconoce limites que no son divisores (G-SYNC).
       // El limitador del driver deja pasar algun fotograma algo mas rapido: se acepta si el
       // ritmo coincide (+-1,5 %) y menos del 10 % va mas de un 7 % por debajo del periodo.
-      bool directMatch = session.expectFg <= 1 && fpsNow > 0 && std::fabs(fpsNow - exp) / exp < 0.015 &&
-                         st.FractionRealUnder((1000.0 / exp) * 0.93) < 0.10;
-      if (fgMatch || directMatch || (st.capped && std::fabs(st.capFps - exp) / exp < 0.02)) {
+      if (LimitVerified(vin)) {
         session.verified = true;
         Log("[%5.0f s] LIMITE FUNCIONANDO: el juego va a ~%.3f fps estables.\n", session.T(now), exp);
         {
@@ -4250,16 +4216,7 @@ static void RunEngine(std::wstring presentMonPath) {
         auto kc = store.items.find(session.exe);
         bool fgSame = kc != store.items.end() && ((kc->second.fgFactor > 1) == (st.FgFactor() > 1));
         if (session.expectedFps > 0 && (session.verified || session.accepted) && fgSame && st.medianMs > 0) {
-          double rate = 1000.0 / st.medianMs;
-          session.limPlaySecs += dt;
-          session.secRates.push_back(static_cast<float>(rate));
-          if (rate < session.expectedFps * (1.0 - cfg::kJnd)) {
-            session.belowRun++;
-            if (session.belowRun == 5) session.failSecs += 5.0;
-            else if (session.belowRun > 5) session.failSecs += dt;
-          } else {
-            session.belowRun = 0;
-          }
+          session.fail.Add(1000.0 / st.medianMs, session.expectedFps, dt);
         }
       }
     }

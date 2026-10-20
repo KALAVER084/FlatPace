@@ -30,6 +30,7 @@ static std::atomic<int> g_vrrMinHz{0}, g_vrrMaxHz{0};
 #include "../src/core/frame_sample.h"
 #include "../src/core/analysis.h"
 #include "../src/core/suggest.h"
+#include "../src/core/decision.h"
 namespace overlay {
 #include "../src/core/pace_basics.h"
 #include "../src/core/pace_series.h"
@@ -646,6 +647,169 @@ TEST(SuggestRaiseRules) {
   CHECK(NextLimitStep(61, 2, true, 240) <= VrrCeiling(240) / 2 + 1e-9);
 }
 
+// ---------------------------------------------------------------------------
+// Ciclo de decision: verificacion, regla de fallos, bajada y decision al cerrar
+// ---------------------------------------------------------------------------
+TEST(VerifyDirectMatch) {
+  VerifyInput v;
+  v.expectedFps = 100;
+  v.fpsNow = 100.4;        // +0,4 %
+  v.fractionFast = 0.03;   // pocos fotogramas rapidos
+  CHECK(LimitVerified(v));
+  v.fpsNow = 98.0;         // -2 %: no es el ritmo esperado
+  CHECK(!LimitVerified(v));
+  v.fpsNow = 100.0;
+  v.fractionFast = 0.15;   // demasiados fotogramas rapidos: el limite no actua
+  CHECK(!LimitVerified(v));
+}
+
+TEST(VerifyWithFrameGeneration) {
+  VerifyInput v;
+  v.expectedFps = 61;
+  v.expectFg = 2;
+  v.fgNow = 2;
+  v.fpsNow = 61.5;
+  v.presentedFps = 122.5;
+  CHECK(LimitVerified(v));
+  v.presentedFps = 110;    // en pantalla no coincide
+  CHECK(!LimitVerified(v));
+}
+
+TEST(VerifyByDetectedCap) {
+  VerifyInput v;
+  v.expectedFps = 225;
+  v.fpsNow = 221;          // fuera del +-1,5 %
+  v.capped = true;
+  v.capFps = 224;          // pero el detector ve el limite
+  CHECK(LimitVerified(v));
+}
+
+TEST(FailureRuleCountsOnlySustainedDrops) {
+  FailureTracker f;
+  // 10 min con el limite de 100: bajadas de 4 s (no cuentan) y bajadas del 10 % (no perceptibles)
+  for (int s = 0; s < 600; ++s) {
+    double rate = 100;
+    if (s % 30 < 4) rate = 70;          // 4 s seguidos muy por debajo
+    else if (s % 30 < 20) rate = 90;    // -10 %: no perceptible
+    f.Add(rate, 100, 1.0);
+  }
+  CHECK(f.failSecs == 0);
+  CHECK(!f.Failed());
+}
+
+TEST(FailureRuleNeedsSixtySecondsAndTenPercent) {
+  FailureTracker a;
+  for (int s = 0; s < 600; ++s) a.Add(s < 70 ? 80 : 100, 100, 1.0);  // 70 s seguidos a -20 %
+  CHECK_NEAR(a.failSecs, 70, 1e-9);
+  CHECK(a.Failed());                                                  // >= 60 s y 11,7 %
+  FailureTracker b;
+  for (int s = 0; s < 900; ++s) b.Add(s < 70 ? 80 : 100, 100, 1.0);  // los mismos 70 s, en 15 min
+  CHECK(!b.Failed());                                                 // solo el 7,8 %
+  FailureTracker c;
+  for (int s = 0; s < 300; ++s) c.Add(s < 50 ? 80 : 100, 100, 1.0);  // 50 s: menos de un minuto
+  CHECK(!c.Failed());
+}
+
+TEST(LowerAfterFailureVrrAndDivisors) {
+  // Con VRR: el ritmo superado el 90 % de los segundos
+  // Ritmos por segundo repartidos de 70 a 99,7: el percentil 10 es 73 (la mediana seria 85).
+  std::vector<float> rates;
+  for (int i = 0; i < 100; ++i) rates.push_back(static_cast<float>(70 + i * 0.3));
+  Recommendation v = LowerAfterFailure(rates, true, 1, 100, 240);
+  CHECK(v.valid && v.vrr);
+  CHECK_NEAR(v.realFps, 73, 1e-9);
+  // Sin VRR, a 240 Hz con 120 (240/2): el divisor siguiente, 80 (240/3)
+  Recommendation d = LowerAfterFailure({}, false, 1, 120, 240);
+  CHECK(d.valid);
+  CHECK(d.divisor == 3);
+  CHECK_NEAR(d.capFps, 80, 1e-9);
+}
+
+static SessionDecisionInput SessionFrom(const std::vector<double>& ms, bool vrr, bool fluid, double capReal = 0) {
+  SessionDecisionInput in;
+  for (double x : ms) in.realByFg[1].push_back(static_cast<float>(x));
+  in.gameSecs = 300;
+  in.vrrSecs = vrr ? 300 : 0;
+  in.fluid = fluid;
+  in.hz = 240;
+  in.capReal = capReal;
+  return in;
+}
+
+TEST(DecideFromSessionBasics) {
+  std::mt19937 rng(61);
+  std::lognormal_distribution<double> ln(std::log(6.0), 0.2);
+  std::vector<double> ms;
+  for (int i = 0; i < 30000; ++i) ms.push_back(ln(rng));
+  Recommendation st = DecideFromSession(SessionFrom(ms, true, false));
+  Recommendation fl = DecideFromSession(SessionFrom(ms, true, true));
+  CHECK(st.valid && st.vrr && fl.valid && fl.vrr);
+  CHECK(fl.capFps > st.capFps);
+  // Pocos fotogramas: no se decide
+  CHECK(!DecideFromSession(SessionFrom(std::vector<double>(500, 6.0), true, false)).valid);
+  // Ritmo demostrado: el juego clavado a 144 por si mismo no se rebaja
+  Recommendation h = DecideFromSession(SessionFrom(std::vector<double>(5000, 1000.0 / 144.0), true, false));
+  CHECK_NEAR(h.capFps, 144, 1.0);
+  // Con un limite activo nunca sube
+  Recommendation c = DecideFromSession(SessionFrom(ms, true, true, 120));
+  CHECK(c.capFps <= 120);
+}
+
+// Una partida con el limite puesto: el juego da lo que puede (capacidad) sin pasar del limite, y el
+// limitador del driver deja su temblor simetrico alrededor del limite (+-4 % del periodo).
+static std::vector<double> PlayCapped(double capacityMedianMs, double sigma, double limitFps, unsigned seed,
+                                      int n = 20000) {
+  std::mt19937 rng(seed);
+  std::lognormal_distribution<double> ln(std::log(capacityMedianMs), sigma);
+  std::normal_distribution<double> jitter(0.0, 0.04 * 1000.0 / limitFps);
+  std::vector<double> ms;
+  for (int i = 0; i < n; ++i) {
+    const double cap = 1000.0 / limitFps;
+    const double x = ln(rng);
+    ms.push_back(x > cap ? x : cap + jitter(rng));
+  }
+  return ms;
+}
+
+TEST(NoDownwardSpiralAcrossSessions) {
+  // Un juego capaz de mucho mas que su limite: decidir una y otra vez con partidas jugadas con el
+  // limite puesto no debe hacerlo bajar (la espiral 231 -> 226 -> 222 de versiones antiguas).
+  for (bool fluid : {false, true}) {
+    double limit = 150;
+    for (int session = 0; session < 10; ++session) {
+      std::vector<double> ms = PlayCapped(4.5, 0.12, limit, 70 + session);
+      Recommendation r = DecideFromSession(SessionFrom(ms, true, fluid, limit));
+      CHECK(r.valid);
+      if (r.valid) limit = r.realFps;
+    }
+    CHECK_NEAR(limit, 150, 1e-9);
+  }
+}
+
+TEST(FailureCycleLowersOnceThenHolds) {
+  // El juego tiene un limite aceptado de 120, pero tras un parche solo da ~95-100: la regla de fallos
+  // lo baja una vez al ritmo superado el 90 % del tiempo, y con el nuevo limite ya no falla.
+  std::mt19937 rng(81);
+  std::normal_distribution<double> noise(0.0, 3.0);
+  double limit = 120;
+  int lowered = 0;
+  for (int session = 0; session < 5; ++session) {
+    FailureTracker f;
+    for (int s = 0; s < 600; ++s) {
+      const double capacity = 98 + noise(rng);
+      f.Add(std::min(capacity, limit), limit, 1.0);
+    }
+    if (f.Failed()) {
+      Recommendation lower = LowerAfterFailure(f.secRates, true, 1, limit, 240);
+      CHECK(lower.valid);
+      limit = lower.realFps;
+      ++lowered;
+    }
+  }
+  CHECK(lowered == 1);
+  CHECK(limit >= 90 && limit <= 95);  // el ritmo superado el 90 % del tiempo (~94), no la mediana (~98)
+}
+
 int main() {
   std::printf("Pruebas de FlatPace (src/core)\n");
   RUN(Percentiles);
@@ -686,6 +850,15 @@ int main() {
   RUN(MemorySerializes);
   RUN(PhaseTrackerConfirmsRealChanges);
   RUN(SuggestRaiseRules);
+  RUN(VerifyDirectMatch);
+  RUN(VerifyWithFrameGeneration);
+  RUN(VerifyByDetectedCap);
+  RUN(FailureRuleCountsOnlySustainedDrops);
+  RUN(FailureRuleNeedsSixtySecondsAndTenPercent);
+  RUN(LowerAfterFailureVrrAndDivisors);
+  RUN(DecideFromSessionBasics);
+  RUN(NoDownwardSpiralAcrossSessions);
+  RUN(FailureCycleLowersOnceThenHolds);
   std::printf("%d comprobaciones, %d fallos\n", g_checks, g_failures);
   return g_failures == 0 ? 0 : 1;
 }

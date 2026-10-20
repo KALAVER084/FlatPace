@@ -359,7 +359,12 @@ static Recommendation RecommendFluid(const std::vector<double>& sorted, double h
 //   1,13 x 1000 / p99 (antes 1000 / (p99 x 1,05) con tirones: Greylock 78-85 fps; ahora ~91-109,
 //   sin caidas perceptibles).
 // Con un limite activo (capReal), los datos estan censurados: nunca se recomienda subir (eso queda
-// para la sugerencia, que exige que el juego vaya sobrado).
+// para la sugerencia, que exige que el juego vaya sobrado), y solo se baja si el juego queda por
+// debajo de forma perceptible (> 13 %), como en la regla de fallos. Sin esa histeresis, el temblor
+// del limitador hacia bajar el limite 1-2 fps en cada partida: 150 -> 87 en diez partidas (detectado
+// por las pruebas del ciclo completo).
+// Con un ritmo demostrado (heldReal: el juego clavado por su propio limite o VSync), su capacidad
+// real es desconocida: se usa ese ritmo, ni mas ni menos.
 constexpr double kVrrFluidPercentile = 90.0;
 static Recommendation RecommendVrr(const std::vector<double>& longSorted, double workP99, double hz, int k,
                                    bool fluid, double heldReal = 0.0, double capReal = 0.0) {
@@ -377,13 +382,13 @@ static Recommendation RecommendVrr(const std::vector<double>& longSorted, double
   } else if (workP99 > 0) {
     realRate = 1000.0 / (workP99 * (1.0 + cfg::kMarginInitial));
   }
-  if (capReal > 0) realRate = std::min(realRate, capReal);
+  if (capReal > 0) realRate = realRate >= capReal * (1.0 - cfg::kJnd) ? capReal : realRate;
   double maxScreen = VrrCeiling(hz);
   const int vmin = g_vrrMinHz, vmax = g_vrrMaxHz;
   // Si el VRR del monitor no llega a su frecuencia maxima, el techo es el de su rango VRR.
   if (vmax > 0 && vmax < hz - 1.0) maxScreen = std::min(maxScreen, VrrCeiling(vmax));
   if (heldReal > 0) {
-    realRate = std::max(realRate, heldReal);
+    realRate = heldReal;
     // Si lo que limita es el maximo de la pantalla, el juego puede al menos eso.
     if (heldReal * k >= maxScreen) realRate = std::max(realRate, maxScreen / k);
   }

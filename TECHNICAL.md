@@ -13,7 +13,7 @@ This document explains how FlatPace works inside: architecture, algorithms, form
 
 Threads communicate through mutex-protected structures (window state, overlay data, undo requests). The engine never blocks the interface.
 
-**Stack:** C++20, Win32, Dear ImGui, Direct3D 11, NVAPI (loaded at runtime from `nvapi64.dll`), PresentMon. Code in two parts: `main.cpp` (~5,200 lines: Windows, interface, engine, driver and overlay) and `src/core/` (~660 lines: the pure logic, with no Windows dependencies, in eight modules: parameters, statistics, analysis and recommendations, EDID and pacing graph). `main.cpp` includes each module at the same point where its code used to be. Builds with MinGW-w64 (cross-compiling) or with CMake + MSVC.
+**Stack:** C++20, Win32, Dear ImGui, Direct3D 11, NVAPI (loaded at runtime from `nvapi64.dll`), PresentMon. Code in two parts: `main.cpp` (~5,200 lines: Windows, interface, engine, driver and overlay) and `src/core/` (~660 lines: the pure logic, with no Windows dependencies, in several modules: parameters, statistics, analysis and recommendations, the decision cycle (`decision.h`), statistical models, EDID and pacing graph). `main.cpp` includes each module at the same point where its code used to be. Builds with MinGW-w64 (cross-compiling) or with CMake + MSVC.
 
 ## 2. Measurement
 
@@ -55,7 +55,7 @@ Candidates: on-screen rate = Hz / *n* (*n* = 1…8·*k*), real rate = on-screen 
 ### 3.2 With VRR (G-SYNC, FreeSync, Adaptive-Sync)
 - **Ceiling:** `floor(min(Hz − 3, Hz − Hz²/4096))`; if the monitor's VRR range ends below its refresh rate, the same formula is applied to that maximum. At high refresh rates the formula wins (240 Hz → 225; 144 Hz → 138); at low ones, the classic 3 FPS margin (60 Hz → 57).
 - On real frame times **without stutters** (> 2.5 × median) from the last minutes (or the whole session when deciding on close): **Smoothness:** real rate = 1000 / p90; **Stability:** (1 + 0.13) × 1000 / p99, that is, the slowest 1 % arrives at most 13 % late. Validated in 0.39 with real sessions: in Greylock the previous Smoothness rule (p70) left the game perceptibly below the limit 29 % of the seconds, and the Stability one (1000 / (p99 × 1.05) with stutters) gave 78-85 FPS; with the new ones, 100 and 91, and at 100 the game-caused 1 % low was 96 FPS.
-- **With an active limit** (censored data), the recommendation never exceeds the limit and uses game-caused times.
+- **With an active limit** (censored data), the recommendation never exceeds the limit, uses game-caused times and only goes down if the game falls perceptibly below it (> 13 %); without that hysteresis, the limiter's jitter lowered it 1-2 FPS per session. With a demonstrated pace (the game locked by its own limit or VSync), exactly that pace is used.
 - On-screen rate = min(ceiling, real rate × *k*), rounded down to a whole multiple of *k*.
 - **Demonstrated pace:** if the game holds a limit (with few late frames), the recommendation never goes below that pace, and if the limit is the display's maximum, the ceiling is used. This avoids the bias of measuring with a limit in place (no frame can be faster than the limit, but some can be slower).
 
@@ -153,7 +153,7 @@ Windows: `cmake -B build && cmake --build build --config Release`. Dear ImGui (w
 
 ## 13. Automated tests
 
-`tests/test_core.cpp` tests the logic in `src/core` without needing Windows (111 checks): percentiles and pace swing, consistency, the limit detector, recommendations with and without VRR (ceiling, the monitor's VRR range and LFC, Smoothness), EDID parsing, the pacing graph (tolerance, scale, stutters and stability of stretches while scrolling) and the statistical models (capacity recovery from censored data, phase detection and its resistance to isolated spikes, per-game memory and suggestion rules). Each test pins a behavior already validated with real sessions or in simulation.
+`tests/test_core.cpp` tests the logic in `src/core` without needing Windows (158 checks): percentiles and pace swing, consistency, the limit detector, recommendations with and without VRR (ceiling, the monitor's VRR range and LFC, Smoothness), EDID parsing, the pacing graph (tolerance, scale, stutters and stability of stretches while scrolling) the statistical models (capacity recovery from censored data, phase detection and its resistance to isolated spikes, per-game memory and suggestion rules) and the decision cycle (verification, failure rule, lowering after a failure, the decision on close and multi-session simulations that check there is no downward spiral). Each test pins a behavior already validated with real sessions or in simulation.
 
 - Linux/macOS: `sh tests/run_tests.sh`
 - Windows (MSVC): `tests\run_tests.bat`, or `ctest` after building with CMake.

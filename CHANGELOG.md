@@ -2,6 +2,11 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). La versión más reciente va primero.
 
+## 0.39.1
+- **Mejorado:** el ciclo de decisión (verificar el límite, la regla de fallos, el valor al que se baja tras un fallo y la decisión al cerrar el juego) pasa de `main.cpp` al módulo `src/core/decision.h`, con pruebas automáticas, incluidas simulaciones del ciclo completo a lo largo de varias partidas (158 comprobaciones). Se comprobó que detectan cinco errores introducidos a propósito.
+- **Corregido (encontrado por las pruebas):** con un límite puesto, la decisión al cerrar podía bajarlo 1-2 FPS en cada partida por el temblor del limitador (en la simulación, de 150 a 87 en diez partidas): una espiral descendente como la de versiones antiguas. Ahora, con un límite activo, solo se baja si el juego queda por debajo de forma perceptible (más de un 13 %), igual que en la regla de fallos.
+- **Corregido (encontrado por las pruebas):** un juego clavado por su propio límite (por ejemplo, a 144) recibía con la *Estabilidad* de la 0.39 un límite mayor (162), aunque su capacidad real es desconocida. Ahora se usa ese ritmo demostrado, ni más ni menos.
+
 ## 0.39
 Reglas nuevas para elegir el límite con G-SYNC/FreeSync, validadas con partidas reales grabadas (Greylock y Megabonk, con y sin límite).
 - **Cambiado (Fluidez):** el ritmo que el juego alcanza el **90 %** del tiempo, sin contar los tirones (antes, el 70 %). Con la regla anterior, en Greylock el juego quedaba por debajo del límite un 22-34 % de los segundos, y un 29 % de forma perceptible. Validado: con el límite que da la regla nueva (100 FPS), el 1 % bajo causado por el juego fue de 96 FPS y solo un 1 % de los segundos bajó de forma perceptible.

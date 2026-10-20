@@ -1,4 +1,4 @@
-# Documentación técnica de FlatPace 0.39
+# Documentación técnica de FlatPace 0.39.1
 
 Este documento explica cómo funciona FlatPace por dentro: arquitectura, algoritmos, fórmulas, formatos de datos y las fuentes en que se basan sus decisiones.
 
@@ -13,7 +13,7 @@ Este documento explica cómo funciona FlatPace por dentro: arquitectura, algorit
 
 Los hilos se comunican con estructuras protegidas por mutex (estado de la ventana, datos del overlay, peticiones de deshacer). El motor nunca bloquea la interfaz.
 
-**Pila:** C++20, Win32, Dear ImGui, Direct3D 11, NVAPI (cargada en tiempo de ejecución desde `nvapi64.dll`), PresentMon. Código en dos partes: `main.cpp` (~5.200 líneas: Windows, interfaz, motor, driver y overlay) y `src/core/` (~660 líneas: la lógica pura, sin dependencias de Windows, en ocho módulos: parámetros, estadísticas, análisis y recomendaciones, EDID y gráfica de ritmo). `main.cpp` incluye cada módulo en el mismo punto donde estaba su código. Se compila con MinGW-w64 (compilación cruzada) o con CMake + MSVC.
+**Pila:** C++20, Win32, Dear ImGui, Direct3D 11, NVAPI (cargada en tiempo de ejecución desde `nvapi64.dll`), PresentMon. Código en dos partes: `main.cpp` (~5.200 líneas: Windows, interfaz, motor, driver y overlay) y `src/core/` (~660 líneas: la lógica pura, sin dependencias de Windows, en varios módulos: parámetros, estadísticas, análisis y recomendaciones, ciclo de decisión (`decision.h`), modelos estadísticos, EDID y gráfica de ritmo). `main.cpp` incluye cada módulo en el mismo punto donde estaba su código. Se compila con MinGW-w64 (compilación cruzada) o con CMake + MSVC.
 
 ## 2. Medición
 
@@ -55,7 +55,7 @@ Candidatos: ritmo en pantalla = Hz / *n* (*n* = 1…8·*k*), ritmo real = ritmo 
 ### 3.2 Con VRR (G-SYNC, FreeSync, Adaptive-Sync)
 - **Techo:** `floor(min(Hz − 3, Hz − Hz²/4096))`; si el rango VRR del monitor acaba por debajo de su frecuencia, se aplica la misma fórmula a ese máximo. A frecuencias altas manda la fórmula (240 Hz → 225; 144 Hz → 138); a bajas, el margen clásico de 3 FPS (60 Hz → 57).
 - Sobre los tiempos de fotograma reales **sin tirones** (> 2,5 × mediana) de los últimos minutos (o de toda la partida al decidir al cerrar): **Fluidez:** ritmo real = 1000 / p90; **Estabilidad:** (1 + 0,13) × 1000 / p99, es decir, el 1 % más lento llega como mucho un 13 % tarde. Validado en 0.39 con partidas reales: en Greylock la regla anterior de Fluidez (p70) dejaba el juego por debajo del límite de forma perceptible un 29 % de los segundos, y la de Estabilidad (1000 / (p99 × 1,05) con tirones) daba 78-85 FPS; con las nuevas, 100 y 91, y con 100 el 1 % bajo causado por el juego fue de 96 FPS.
-- **Con un límite activo** (datos censurados), la recomendación nunca supera el límite y usa los tiempos causados por el juego.
+- **Con un límite activo** (datos censurados), la recomendación nunca supera el límite, usa los tiempos causados por el juego y solo baja si el juego queda por debajo de forma perceptible (> 13 %); sin esa histéresis, el temblor del limitador lo bajaba 1-2 FPS por partida. Con un ritmo demostrado (el juego clavado por su propio límite o VSync), se usa exactamente ese ritmo.
 - Ritmo en pantalla = min(techo, ritmo real × *k*), redondeado hacia abajo a un múltiplo entero de *k*.
 - **Ritmo demostrado:** si el juego sostiene un límite (con pocos fotogramas tardíos), la recomendación nunca baja de ese ritmo, y si el límite es el máximo de la pantalla, se usa el techo. Esto evita el sesgo de medir con un límite puesto (ningún fotograma puede ir más rápido que el límite, pero algunos sí más lentos).
 
@@ -153,7 +153,7 @@ Windows: `cmake -B build && cmake --build build --config Release`. Dear ImGui (c
 
 ## 13. Pruebas automáticas
 
-`tests/test_core.cpp` prueba la lógica de `src/core` sin necesitar Windows (111 comprobaciones): percentiles y variación del ritmo, consistencia, detector de límites, recomendaciones con y sin VRR (techo, rango VRR del monitor y LFC, Fluidez), lectura del EDID, gráfica de ritmo (tolerancia, escala, tirones y estabilidad de los tramos al desplazarse) y los modelos estadísticos (recuperación de la capacidad con datos censurados, detección de fases y su resistencia a picos aislados, memoria por juego y reglas de sugerencia). Cada prueba fija un comportamiento ya validado con partidas reales o en simulación.
+`tests/test_core.cpp` prueba la lógica de `src/core` sin necesitar Windows (158 comprobaciones): percentiles y variación del ritmo, consistencia, detector de límites, recomendaciones con y sin VRR (techo, rango VRR del monitor y LFC, Fluidez), lectura del EDID, gráfica de ritmo (tolerancia, escala, tirones y estabilidad de los tramos al desplazarse) los modelos estadísticos (recuperación de la capacidad con datos censurados, detección de fases y su resistencia a picos aislados, memoria por juego y reglas de sugerencia) y el ciclo de decisión (verificación, regla de fallos, bajada tras un fallo, decisión al cerrar y simulaciones de varias partidas seguidas que comprueban que no hay espiral descendente). Cada prueba fija un comportamiento ya validado con partidas reales o en simulación.
 
 - Linux/macOS: `sh tests/run_tests.sh`
 - Windows (MSVC): `tests\run_tests.bat`, o `ctest` tras compilar con CMake.
