@@ -9,12 +9,22 @@
 // nunca se sabe si podria dar mas. El modelo Tobit lo resuelve: supone que los tiempos de fotograma
 // siguen una distribucion log-normal y la ajusta por maxima verosimilitud usando los fotogramas
 // visibles (mas lentos que el limite) como medidas y los que estan en el limite como "<= limite".
-// En simulacion, con el 85 % de los fotogramas en el limite, recupera la mediana real con un error
-// menor del 1 %. El p99 no se ve afectado mientras los fotogramas lentos queden por encima del limite.
+//
+// Validacion con partidas reales (0.37.1): con el limitador del driver, los tiempos quedan repartidos
+// de forma simetrica alrededor del limite (+-0,2 ms en Megabonk, +-0,4 ms en Greylock): cuando un
+// fotograma sale algo tarde, el siguiente sale algo antes. Por eso un fotograma solo cuenta como
+// "lento de verdad" si supera el limite en mas de 3 veces esa variacion (medida en cada partida con
+// la desviacion absoluta mediana), y no en un 3 % fijo, que confundia el ruido del limitador con
+// falta de capacidad (Megabonk: estimaba 205 fps con un juego capaz de 300).
+// Con mucha censura, la mediana es pura extrapolacion (error del 9-20 % en las partidas reales):
+// solo se considera fiable con un 90 % de censura o menos. El p99 si es fiable (Greylock: 74 fps
+// estimados frente a 76 medidos). Con mas del 98 %, el juego va sobrado.
 
 struct CapacityEstimate {
   bool valid = false;
+  bool medianReliable = false;    // la mediana solo es fiable con censura moderada (<= 90 %)
   double censoredFraction = 0.0;  // fotogramas en el limite
+  double boundMs = 0.0;           // por debajo: "en el limite" (limite + 3 x variacion del limitador)
   double medianMs = 0.0, p70Ms = 0.0, p99Ms = 0.0;
   double mu = 0.0, sigma = 0.0;   // parametros de la log-normal (sobre ms)
   size_t frames = 0;
@@ -72,9 +82,9 @@ static void NelderMead2(F f, double& x0, double& x1, double step0, double step1,
 // Estima la capacidad del juego a partir de tiempos de fotograma reales (ms) medidos con un limite
 // de periodo capMs. Se ignoran pausas (> 250 ms) y tirones (> 2,5 x mediana), que no forman parte
 // del ritmo normal. Un fotograma cuenta como "en el limite" si no supera el periodo en mas de tol
-// (el limitador deja algo de variacion). Devuelve valid = false si no hay censura apreciable
+// (el limitador deja algo de variacion: se mide en cada partida). Devuelve valid = false si no hay censura apreciable
 // (entonces basta con las estadisticas normales) o si faltan datos para ajustar el modelo.
-static CapacityEstimate EstimateCapacity(const std::vector<double>& framesMs, double capMs, double tol = 0.03) {
+static CapacityEstimate EstimateCapacity(const std::vector<double>& framesMs, double capMs, double minTol = 0.03) {
   CapacityEstimate e;
   if (capMs <= 0 || framesMs.size() < 200) return e;
   std::vector<double> v;
@@ -85,7 +95,22 @@ static CapacityEstimate EstimateCapacity(const std::vector<double>& framesMs, do
   std::vector<double> sorted = v;
   std::sort(sorted.begin(), sorted.end());
   const double median = PercentileSorted(sorted, 50);
-  const double bound = capMs * (1.0 + tol);
+  // Variacion del limitador: desviacion absoluta mediana (x 1,4826) de los fotogramas cercanos al limite.
+  std::vector<double> nearCap;
+  for (double x : v)
+    if (x > capMs * 0.85 && x < capMs * 1.15) nearCap.push_back(x);
+  double jitter = 0.0;
+  if (nearCap.size() >= 50) {
+    std::sort(nearCap.begin(), nearCap.end());
+    const double center = PercentileSorted(nearCap, 50);
+    std::vector<double> dev;
+    dev.reserve(nearCap.size());
+    for (double x : nearCap) dev.push_back(std::fabs(x - center));
+    std::sort(dev.begin(), dev.end());
+    jitter = 1.4826 * PercentileSorted(dev, 50);
+  }
+  const double bound = capMs + std::max(capMs * minTol, 3.0 * jitter);
+  e.boundMs = bound;
   std::vector<double> obs;  // log de los fotogramas visibles
   size_t censored = 0, used = 0;
   for (double x : v) {
@@ -96,7 +121,10 @@ static CapacityEstimate EstimateCapacity(const std::vector<double>& framesMs, do
   }
   e.frames = used;
   e.censoredFraction = used ? static_cast<double>(censored) / used : 0.0;
-  if (e.censoredFraction < 0.05 || obs.size() < 30) return e;
+  // Sin censura apreciable no hace falta el modelo; con mas del 98 % el juego va sobrado y los pocos
+  // fotogramas lentos no reflejan su capacidad (en partidas reales, son retrasos puntuales del
+  // limitador o del sistema: Megabonk tenia un trabajo de CPU y GPU de ~2,5 ms con un limite de 5,13).
+  if (e.censoredFraction < 0.05 || e.censoredFraction > 0.98 || obs.size() < 30) return e;
   const double c = std::log(bound);
   const double nc = static_cast<double>(censored);
   auto nll = [&](double m, double logS) {
@@ -118,5 +146,6 @@ static CapacityEstimate EstimateCapacity(const std::vector<double>& framesMs, do
   e.p70Ms = std::exp(m + 0.5244005127 * s);
   e.p99Ms = std::exp(m + 2.3263478740 * s);
   e.valid = true;
+  e.medianReliable = e.censoredFraction <= 0.90;
   return e;
 }

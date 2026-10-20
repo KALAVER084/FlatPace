@@ -124,7 +124,7 @@ static std::atomic<bool> g_quit{false};
 static std::atomic<int> g_lang{0};
 static const char* T(const char* es, const char* en) { return g_lang == 1 ? en : es; }
 
-static constexpr const char* kVersion = "0.37";
+static constexpr const char* kVersion = "0.37.1";
 
 // Carpeta donde esta este .exe.
 static std::wstring ExeDirectory() {
@@ -787,7 +787,9 @@ static void PrintRecommendation(const Recommendation& r, double hz, const Window
 
 static void PrintCap(const WindowStats& st, double hz) {
   if (!st.capped) return;
-  if (st.capFits)
+  if (st.capFits && st.capDivisor == 0)
+    Log("  Limite activo detectado: ~%.0f fps. Encaja: G-SYNC/FreeSync actua dentro de su rango.\n", st.capFps);
+  else if (st.capFits)
     Log("  Limite activo detectado: ~%.0f fps. Encaja con tu monitor (%.3f Hz / %d)%s.\n",
         st.capFps, hz, st.capDivisor, st.capDivisor == 1 ? ", probablemente VSync" : "");
   else
@@ -1857,9 +1859,14 @@ static void PrintSessionSummary(const Session& s, double hz) {
     CapacityEstimate ce;
     if (capMs > 0) ce = EstimateCapacity(msv, capMs);
     if (ce.valid) {
-      Log("  Capacidad estimada sin limite (%.0f %% de fotogramas en el limite, modelo de datos censurados):\n"
-          "    mediana ~%.0f fps | 1 %% mas lento ~%.0f fps\n",
-          100.0 * ce.censoredFraction, 1000.0 / ce.medianMs, 1000.0 / ce.p99Ms);
+      if (ce.medianReliable)
+        Log("  Capacidad estimada sin limite (%.0f %% de fotogramas en el limite, modelo de datos censurados):\n"
+            "    mediana ~%.0f fps | 1 %% mas lento ~%.0f fps\n",
+            100.0 * ce.censoredFraction, 1000.0 / ce.medianMs, 1000.0 / ce.p99Ms);
+      else
+        Log("  Capacidad estimada (%.0f %% de fotogramas en el limite, modelo de datos censurados):\n"
+            "    1 %% mas lento ~%.0f fps | la mediana queda por encima del limite (no se puede precisar)\n",
+            100.0 * ce.censoredFraction, 1000.0 / ce.p99Ms);
       stableFps = 1000.0 / (ce.p99Ms * 1.05);
     } else if (ce.censoredFraction > 0.98) {
       plenty = true;
@@ -1871,10 +1878,10 @@ static void PrintSessionSummary(const Session& s, double hz) {
       const double p99 = PercentileSorted(sorted, 99);
       if (p99 > 0) stableFps = 1000.0 / (p99 * 1.05);
     }
-    GameMemory mem = GameMemory::Parse(ReadKv(L"equipo.txt", "memoria|" + s.exe));
+    GameMemory mem = GameMemory::Parse(ReadKv(L"equipo.txt", "memoria2|" + s.exe));
     if (stableFps > 0 && s.gameSecs >= 60.0 && !s.exe.empty()) {
       mem.Add(stableFps, s.gameSecs / 60.0);
-      WriteKv(L"equipo.txt", "memoria|" + s.exe, mem.Serialize());
+      WriteKv(L"equipo.txt", "memoria2|" + s.exe, mem.Serialize());
     }
     if (mem.sessions > 0)
       Log("  Memoria del juego: %d partida%s; sostiene ~%.0f fps reales (con un 80 %% de probabilidad, al menos %.0f)\n",
@@ -1926,8 +1933,8 @@ static void TrackPhases(Session& ss, const std::vector<FrameSample>& fresh, doub
   if (sec.size() < 5 || ss.paused) return;
   PhaseTracker::Event ev = ss.phases.Push(now, MedianOf(sec));
   if (ev.confirmed)
-    Log("[%5.0f s] Fase nueva: ~%.0f fps (antes ~%.0f fps durante %.0f s)\n", ss.T(ev.at), 1000.0 / ev.afterMs,
-        1000.0 / ev.beforeMs, ev.beforeSec);
+    Log("[%5.0f s] Fase nueva desde los %.0f s: ~%.0f fps (antes ~%.0f fps durante %.0f s)\n", ss.T(now), ss.T(ev.at),
+        1000.0 / ev.afterMs, 1000.0 / ev.beforeMs, ev.beforeSec);
 }
 
 static void ProcessSession(Session& ss, std::vector<FrameSample>& fresh, double now, double hz) {
@@ -2042,6 +2049,11 @@ static void ProcessSession(Session& ss, std::vector<FrameSample>& fresh, double 
   WindowStats st = ComputeStats(ss.samples, windowStart, now);
   if (st.frames == 0) return;
   DetectCap(st, hz);
+  // Con G-SYNC/FreeSync actuando, cualquier limite dentro del rango encaja (no hace falta un divisor).
+  if (ss.vrrActive && st.capped && !st.capFits && st.capFps <= VrrCeiling(hz) + 3.0) {
+    st.capFits = true;
+    st.capDivisor = 0;
+  }
   ss.lastStats = st;
 
   // Generacion de fotogramas: aviso al activarse o desactivarse.
@@ -2184,9 +2196,14 @@ static void ProcessSession(Session& ss, std::vector<FrameSample>& fresh, double 
     ss.upCount = nxt > cur + minStep ? ss.upCount + 1 : 0;
     ss.downCount = nxt < cur - minStep ? ss.downCount + 1 : 0;
     if (ss.upCount >= cfg::kUpChecks || ss.downCount >= 10) {
-      Log("\n[%5.0f s] %s (prioridad: fluidez).\n", ss.T(now),
-          nxt > cur ? "SUBIR limite: el juego alcanza un ritmo mas alto la mayor parte del tiempo"
-                    : "BAJAR limite: el juego ya no alcanza este ritmo la mayor parte del tiempo");
+      if (g_priority == 1)
+        Log("\n[%5.0f s] %s (prioridad: fluidez).\n", ss.T(now),
+            nxt > cur ? "SUBIR limite: el juego alcanza un ritmo mas alto la mayor parte del tiempo"
+                      : "BAJAR limite: el juego ya no alcanza este ritmo la mayor parte del tiempo");
+      else
+        Log("\n[%5.0f s] %s (prioridad: estabilidad).\n", ss.T(now),
+            nxt > cur ? "SUBIR limite: el juego sostiene un ritmo mas alto incluso en sus peores momentos"
+                      : "BAJAR limite: en sus peores momentos el juego ya no sostiene este ritmo");
       ss.ChangeRec(fr, st, now);
       PrintRecommendation(ss.current, hz, st);
       ss.upCount = ss.downCount = 0;
@@ -2238,8 +2255,10 @@ static void ProcessSession(Session& ss, std::vector<FrameSample>& fresh, double 
       for (const auto& f : ss.samples)
         if (!f.generated && f.realMs > 0 && f.t >= now - cfg::kWindowSec) win.push_back(f.realMs);
       CapacityEstimate ce = EstimateCapacity(win, capMs);
-      if (ce.valid)
+      if (ce.valid && ce.medianReliable)
         extra += Fmt(" | sin limite ~%.0f fps (p99 ~%.0f)", 1000.0 / ce.medianMs, 1000.0 / ce.p99Ms);
+      else if (ce.valid)
+        extra += Fmt(" | capacidad: p99 ~%.0f fps, mediana por encima del limite", 1000.0 / ce.p99Ms);
       else if (ce.censoredFraction > 0.98)
         extra += " | sobrado (casi todo en el limite)";
     }

@@ -393,6 +393,53 @@ TEST(TobitSecondGameAtSixty) {
   CHECK_NEAR(e.medianMs, 13.3, 13.3 * 0.05);
 }
 
+// Como mide FlatPace con el limitador del driver: los tiempos quedan repartidos de forma simetrica
+// alrededor del limite (variacion jitterMs), y solo los fotogramas que el juego tarda de verdad mas
+// que el limite quedan por encima. Reproduce lo visto en partidas reales (0.37.1).
+static std::vector<double> DriverLimited(double trueMedianMs, double sigma, double capMs, double jitterMs, int n,
+                                         unsigned seed) {
+  std::mt19937 rng(seed);
+  std::lognormal_distribution<double> ln(std::log(trueMedianMs), sigma);
+  std::normal_distribution<double> jitter(0.0, jitterMs);
+  std::vector<double> v;
+  for (int i = 0; i < n; ++i) {
+    const double x = ln(rng);
+    v.push_back(x > capMs ? x + jitter(rng) * 0.3 : capMs + jitter(rng));
+  }
+  return v;
+}
+
+TEST(TobitNotFooledByLimiterJitter) {
+  // Caso Megabonk real: capaz de ~300 fps (3,35 ms) con un limite de 195 (5,13 ms) y el limitador
+  // variando +-0,16 ms. Antes (umbral fijo del 3 %) estimaba ~205 fps; ahora: va sobrado.
+  auto v = DriverLimited(3.35, 0.12, 1000.0 / 195.0, 0.16, 60000, 15);
+  CapacityEstimate e = EstimateCapacity(v, 1000.0 / 195.0);
+  CHECK(e.censoredFraction > 0.98);
+  CHECK(!(e.valid && e.medianReliable && 1000.0 / e.medianMs < 250.0));
+}
+
+TEST(TobitMedianWhenGameIsTight) {
+  // Juego justo en el limite: capaz de ~185 fps (5,40 ms) con limite de 195 (5,13 ms): censura
+  // moderada; la mediana es fiable.
+  auto v = DriverLimited(5.40, 0.08, 1000.0 / 195.0, 0.16, 30000, 16);
+  CapacityEstimate e = EstimateCapacity(v, 1000.0 / 195.0);
+  CHECK(e.valid);
+  CHECK(e.medianReliable);
+  CHECK_NEAR(e.medianMs, 5.40, 5.40 * 0.05);
+}
+
+TEST(TobitP99WithHeavyCensoring) {
+  // Caso Greylock real: capaz de mas que el limite casi siempre, pero con escenas pesadas mas
+  // lentas que el limite: la mediana no es fiable, el p99 si.
+  auto v = DriverLimited(7.4, 0.25, 1000.0 / 90.0, 0.38, 20000, 17);
+  CapacityEstimate e = EstimateCapacity(v, 1000.0 / 90.0);
+  std::vector<double> sorted = v;
+  std::sort(sorted.begin(), sorted.end());
+  CHECK(e.valid);
+  CHECK(!e.medianReliable);
+  CHECK_NEAR(e.p99Ms, 7.4 * std::exp(2.3263 * 0.25), 7.4 * std::exp(2.3263 * 0.25) * 0.08);
+}
+
 // ---------------------------------------------------------------------------
 // Deteccion de fases (BOCPD)
 // ---------------------------------------------------------------------------
@@ -562,6 +609,9 @@ int main() {
   RUN(TobitIgnoresStutters);
   RUN(TobitNotNeededWithoutCensoring);
   RUN(TobitSecondGameAtSixty);
+  RUN(TobitNotFooledByLimiterJitter);
+  RUN(TobitMedianWhenGameIsTight);
+  RUN(TobitP99WithHeavyCensoring);
   RUN(BocpdDetectsPhaseChanges);
   RUN(BocpdQuietWhenStable);
   RUN(BocpdIgnoresIsolatedSpikes);

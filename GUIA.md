@@ -1,4 +1,4 @@
-# Guía de uso de FlatPace 0.37
+# Guía de uso de FlatPace 0.37.1
 
 Esta guía describe la versión actual. Los cambios entre versiones están en el [historial](CHANGELOG.md).
 

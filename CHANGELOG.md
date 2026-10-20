@@ -2,6 +2,16 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). La versión más reciente va primero.
 
+## 0.37.1
+Primera validación de los modelos con partidas reales grabadas (Megabonk y Greylock, con y sin límite).
+- **Corregido (datos censurados):** con el limitador del driver, los tiempos quedan repartidos de forma simétrica alrededor del límite (±0,2 ms en Megabonk, ±0,4 ms en Greylock). El modelo trataba como "lento" todo lo que superaba el límite en un 3 % y confundía esa variación del limitador con falta de capacidad (Megabonk con 195 FPS: estimaba ~205 FPS de mediana con un juego capaz de ~300). Ahora mide la variación del limitador en cada partida y solo cuenta como lento lo que la supera en más de tres veces. Con más del 98 % de fotogramas en el límite, indica que el juego **va sobrado** (Megabonk); la mediana solo se muestra con un 90 % de censura o menos, porque por encima es pura extrapolación (error del 9-20 % en las partidas reales); el p99 sí es fiable (Greylock con 90: 74 FPS estimados frente a 76 medidos).
+- **Corregido (memoria por juego):** las memorias guardadas con la 0.37 se calcularon con el modelo anterior y se descartan (se empieza de nuevo con la clave `memoria2|`).
+- **Comprobado (fases):** con las grabaciones, el detector encuentra los cambios reales de Greylock (inicio de la partida y zona más pesada) y ninguno en Megabonk ni con el límite puesto. Limitación conocida: una bajada gradual (en Greylock, de ~218 a ~147 FPS en 50 s) cuenta como una sola fase.
+- **Corregido:** los mensajes de cambio de recomendación decían siempre "prioridad: fluidez"; ahora indican la prioridad real.
+- **Corregido:** con G-SYNC/FreeSync actuando, un límite dentro del rango (como 90 FPS) ya no se anuncia como "NO encaja con tu monitor".
+- **Mejorado:** las fases se anotan en el registro al confirmarse, indicando desde qué segundo empezaron.
+- **Añadido:** pruebas que reproducen el comportamiento real del limitador (101 comprobaciones).
+
 ## 0.37
 - **Añadido:** tres modelos estadísticos, en módulos de `src/core` con sus pruebas. Por ahora informan y sugieren; no cambian las decisiones hasta validarlos con grabaciones reales.
   - **Datos censurados (modelo Tobit log-normal):** con un límite puesto, estima la capacidad real del juego (mediana y p99) aunque la mayoría de los fotogramas esperen en el límite. Aparece en el registro cada 5 s (*"sin límite ~X fps"*) y en el resumen. En simulación, con el 85-96 % de fotogramas en el límite, recupera la mediana real con menos de un 1 % de error. Si casi todo está en el límite (> 98 %), indica que el juego va sobrado.
