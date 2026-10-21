@@ -2,6 +2,10 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). La versión más reciente va primero.
 
+## 0.48.2
+- **Corregido: la regla del 1 % bajo (0.48.1) solo baja límites con *Estabilidad*.** Aplicada también con *Fluidez*, convertía esa prioridad en *Estabilidad* partida a partida (en Greylock: 125 → 110 → 97), aunque *Fluidez* promete justo lo contrario: el ritmo que el juego alcanza la mayor parte del tiempo, aceptando caídas en los momentos más exigentes (a 125, la mediana se sostuvo el 100 % del tiempo). Con *Fluidez*, un límite falla solo si cae la mediana. En ambas prioridades, "va sobrado" sigue exigiendo que el 1 % bajo no se haya hundido.
+- **Nuevo: el último minuto antes de cerrar el juego no cuenta para la regla de fallos.** Ahí suelen estar los menús, la salida o, como en una partida de Greylock, un cuelgue en el que el juego siguió presentando imágenes a ~52 FPS durante 50 segundos: para FlatPace es indistinguible de una zona lenta. (En esa partida no cambió la decisión, pero en una más corta podría haberlo hecho.)
+
 ## 0.48.1
 Correcciones a partir de la primera subida automática real (Greylock, 111 → 125 FPS).
 - **Corregido: una subida que no se sostiene ya se detecta aunque la mediana se mantenga.** La regla de fallos solo vigilaba la mediana del ritmo, y en Greylock la mediana nunca cayó a 125 FPS, pero en las zonas pesadas el 1 % bajo causado por el juego se hundió más de un 13 % por debajo del límite un 34-48 % del tiempo (a 111, un 2,5 %). La subida venía de una partida que no pasó por esas zonas. Ahora, en los límites que la app ajusta sola (con G-SYNC/FreeSync y sin generación de fotogramas), el mismo criterio se aplica también al 1 % bajo causado por el juego: si se hunde de forma sostenida (tramos de al menos 5 s que sumen un minuto y el 10 % de la partida), la app vuelve al límite anterior, o baja un escalón si no lo hay, y anota el techo. "Va sobrado" exige además que el 1 % bajo no se haya hundido. Comprobado con las grabaciones: a 111 se sostiene; las dos partidas a 125 fallan.

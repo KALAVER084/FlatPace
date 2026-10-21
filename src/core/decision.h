@@ -41,6 +41,7 @@ static bool LimitVerified(const VerifyInput& v) {
 // debajo" si el ritmo queda mas de un 13 % (la diferencia perceptible) por debajo del limite; solo
 // cuentan los tramos de al menos 5 s seguidos (los primeros 5 s se suman al llegar al quinto).
 // El limite fallo si esos tramos suman al menos 60 s y al menos el 10 % del tiempo con el limite.
+constexpr size_t kCloseTrimSec = 60;  // segundos finales que no cuentan para la regla de fallos
 struct FailureTracker {
   double limPlaySecs = 0.0;  // tiempo de juego con el limite funcionando
   double failSecs = 0.0;     // tiempo en tramos por debajo
@@ -59,6 +60,14 @@ struct FailureTracker {
     }
   }
   bool Failed() const { return failSecs >= 60.0 && failSecs >= 0.10 * limPlaySecs; }
+  // Copia sin los ultimos n segundos: el cierre del juego (menus, pantallas de salida o un cuelgue que
+  // sigue presentando imagenes) no debe contar como un fallo del limite.
+  FailureTracker WithoutLast(size_t n, double expectedFps) const {
+    FailureTracker t;
+    const size_t m = secRates.size() > n ? secRates.size() - n : 0;
+    for (size_t i = 0; i < m; ++i) t.Add(secRates[i], expectedFps, 1.0);
+    return t;
+  }
   double Percent() const { return 100.0 * failSecs / std::max(1.0, limPlaySecs); }
 };
 

@@ -973,6 +973,22 @@ TEST(ClimbNoPingPongAcrossSessions) {
   CHECK(limit >= 100 && limit <= 105 * 1.13);
 }
 
+TEST(FailureRuleIgnoresClosingMinute) {
+  // 10 min a 110 fps y, al final, 70 s colgado presentando a ~52 fps (Greylock): sin quitar el cierre,
+  // seria un fallo; sin los ultimos 60 s, solo quedan 10 s por debajo y el limite se sostiene.
+  FailureTracker f;
+  for (int s = 0; s < 600; ++s) f.Add(110, 110, 1.0);
+  for (int s = 0; s < 70; ++s) f.Add(52, 110, 1.0);
+  CHECK(f.Failed());
+  const FailureTracker t = f.WithoutLast(kCloseTrimSec, 110);
+  CHECK(!t.Failed());
+  CHECK_NEAR(t.failSecs, 10, 1e-9);
+  // Un fallo de verdad, en mitad de la partida, se sigue detectando.
+  FailureTracker g;
+  for (int s = 0; s < 600; ++s) g.Add(s >= 200 && s < 300 ? 80 : 110, 110, 1.0);
+  CHECK(g.WithoutLast(kCloseTrimSec, 110).Failed());
+}
+
 int main() {
   std::printf("Pruebas de FlatPace (src/core)\n");
   RUN(Percentiles);
@@ -1016,6 +1032,7 @@ int main() {
   RUN(ScreenModeAveragesGeneratedImages);
   RUN(LeftEdgeValuesStayPut);
   RUN(RightEdgeNeverRedraws);
+  RUN(FailureRuleIgnoresClosingMinute);
   RUN(ClimbLadderToCeiling);
   RUN(ClimbRevertsAndRemembersCeiling);
   RUN(ClimbNoPingPongAcrossSessions);

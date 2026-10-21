@@ -127,7 +127,7 @@ static std::atomic<bool> g_quit{false};
 static std::atomic<int> g_lang{0};
 static const char* T(const char* es, const char* en) { return g_lang == 1 ? en : es; }
 
-static constexpr const char* kVersion = "0.48.1";
+static constexpr const char* kVersion = "0.48.2";
 
 // Carpeta donde esta este .exe.
 static std::wstring ExeDirectory() {
@@ -4205,19 +4205,26 @@ static void RunEngine(std::wstring presentMonPath) {
       }
     } else if (known->second.manual) {
       // Limite manual: no se cambia nunca; solo se informa si no se sostuvo.
-      if (session.fail.Failed())
+      const FailureTracker failT = session.fail.WithoutLast(kCloseTrimSec, session.expectedFps);
+      if (failT.Failed())
         Log("\n  Al cerrar: el juego no sostuvo su limite manual durante %.0f s (%.0f%% de la partida).\n"
             "  No lo cambio porque es manual; si quieres, ajustalo o deshazlo.\n",
-            session.fail.failSecs, session.fail.Percent());
+            failT.failSecs, failT.Percent());
       return;
     } else if (known->second.verified || session.accepted) {
       const AppliedChange& c = known->second;
+      // Sin el ultimo minuto: el cierre del juego (menus, salida o un cuelgue) no cuenta como fallo.
+      const FailureTracker failT = session.fail.WithoutLast(kCloseTrimSec, session.expectedFps);
+      const FailureTracker tailT = session.tailFail.WithoutLast(kCloseTrimSec, session.expectedFps);
       // Subida automatica (con G-SYNC/FreeSync y sin generacion de fotogramas): su estado por juego.
       // Ajustes de limites (incluida la subida automatica) en ambos modos; las sugerencias, segun el modo.
       const bool climbOk = !c.manual && c.vrr && c.fgFactor <= 1 && !FrameGenInvolved(session);
-      // En estos limites, tambien falla si el 1 % bajo causado por el juego se hunde de forma sostenida.
-      const bool tailFailed = climbOk && !session.fail.Failed() && session.tailFail.Failed();
-      const bool failed = session.fail.Failed() || tailFailed;
+      // Con Estabilidad, tambien falla si el 1 % bajo causado por el juego se hunde de forma sostenida:
+      // es lo que promete esa prioridad (sostener el limite incluso en los peores momentos). Con Fluidez
+      // solo cuenta la mediana: acepta caidas en los momentos mas exigentes (en Greylock a 125, la
+      // mediana se sostuvo el 100 % del tiempo y el 1 % bajo se hundio un 24-48 %).
+      const bool tailFailed = climbOk && g_priority == 0 && !failT.Failed() && tailT.Failed();
+      const bool failed = failT.Failed() || tailFailed;
       ClimbResult cr;
       const double limitBefore = session.expectedFps;
       if (climbOk) {
@@ -4247,14 +4254,14 @@ static void RunEngine(std::wstring presentMonPath) {
         // seria el propio limite: se baja un escalon (un 13 %).
         Recommendation lower = revert       ? VrrRec(cr.newLimit)
                                : tailFailed ? VrrRec(std::floor(limitBefore / (1.0 + cfg::kJnd)))
-                                            : LowerAfterFailure(session.fail.secRates, c.vrr, c.fgFactor, session.expectedFps, hz);
+                                            : LowerAfterFailure(failT.secRates, c.vrr, c.fgFactor, session.expectedFps, hz);
         if (tailFailed)
           Log("\n  Al cerrar: el 1 %% bajo del juego quedo mas de un 13 %% por debajo del limite durante %.0f s\n"
               "  (%.0f %% de la partida), aunque la mediana se mantuvo.\n",
-              session.tailFail.failSecs, session.tailFail.Percent());
+              tailT.failSecs, tailT.Percent());
         else
           Log("\n  Al cerrar: el limite no se sostuvo durante %.0f s (%.0f %% de la partida).\n",
-              session.fail.failSecs, session.fail.Percent());
+              failT.failSecs, failT.Percent());
         if (climbOk)
           Log("  No volvere a subir hasta %.0f fps durante 30 dias.\n", limitBefore);
         if (lower.valid) {
@@ -4269,14 +4276,14 @@ static void RunEngine(std::wstring presentMonPath) {
                       session.label.c_str(), limitBefore, cr.newLimit)
                 : Fmt(T("%s no sostuvo su límite durante el %.0f %% de la partida. En la próxima usaré: %s.",
                         "%s didn't hold its limit for %.0f %% of the session. Next time I'll use: %s."),
-                      session.label.c_str(), tailFailed ? session.tailFail.Percent() : session.fail.Percent(),
+                      session.label.c_str(), tailFailed ? tailT.Percent() : failT.Percent(),
                       DescribeChange(nc->second).c_str());
           }
         }
       } else {
-        if (session.fail.failSecs > 0)
+        if (failT.failSecs > 0)
           Log("\n  Al cerrar: bajadas aisladas del limite (%.0f s, %.0f %% de la partida): no cambio nada.\n",
-              session.fail.failSecs, session.fail.Percent());
+              failT.failSecs, failT.Percent());
         if (climbOk && cr.action == ClimbAction::Raise && !g_autoRaise) {
           // Modo "Solo sugerir": no se aplica; la subida queda pendiente del boton de Juegos.
           ClimbState kept = cr.state;
