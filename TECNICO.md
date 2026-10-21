@@ -1,4 +1,4 @@
-# Documentación técnica de FlatPace 0.50
+# Documentación técnica de FlatPace 0.50.1
 
 Este documento explica cómo funciona FlatPace por dentro: arquitectura, algoritmos, fórmulas, formatos de datos y las fuentes en que se basan sus decisiones.
 
@@ -110,7 +110,7 @@ Si el monitor ofrece otras frecuencias en la resolución actual y alguna permite
 
 ## 8. Ajustes avanzados
 
-Sin interfaz, en `%LOCALAPPDATA%\FlatPace\equipo.txt` (una línea `clave=valor`), con la app cerrada:
+Sin interfaz, en `%LOCALAPPDATA%\FlatPace\equipo.txt` (para abrir la carpeta: Windows + R, escribe `%LOCALAPPDATA%\FlatPace` e Intro), con la app cerrada. Cada ajuste es una línea `clave=valor`; la app escribe las suyas con una tabulación en lugar del `=`, y desde la 0.50.1 acepta ambas formas (antes, una línea con `=` se ignoraba). Si una clave no está, se usa su valor por defecto:
 
 | Clave | Efecto |
 |---|---|

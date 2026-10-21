@@ -127,7 +127,7 @@ static std::atomic<bool> g_quit{false};
 static std::atomic<int> g_lang{0};
 static const char* T(const char* es, const char* en) { return g_lang == 1 ? en : es; }
 
-static constexpr const char* kVersion = "0.50";
+static constexpr const char* kVersion = "0.50.1";
 
 // Carpeta donde esta este .exe.
 static std::wstring ExeDirectory() {
@@ -2555,6 +2555,22 @@ static void WriteCachedHz(const std::string& key, double hz) {
 // a la vez (leer todo, cambiar una clave, reescribir) podian perder la de uno de los dos.
 static std::recursive_mutex g_kvMutex;
 
+// Una linea de un archivo de ajustes: "clave<TAB>valor" (como los escribe la app) o "clave=valor" (como
+// los escribiria cualquiera a mano; hasta la 0.50 se ignoraban). Devuelve false si no es un ajuste.
+static bool ParseKvLine(std::string l, std::string& key, std::string& value) {
+  while (!l.empty() && (l.back() == '\n' || l.back() == '\r')) l.pop_back();
+  size_t sep = l.find('\t');
+  if (sep == std::string::npos) sep = l.find('=');
+  if (sep == std::string::npos || sep == 0) return false;
+  auto trim = [](std::string x) {
+    const size_t a = x.find_first_not_of(" \t"), b = x.find_last_not_of(" \t");
+    return a == std::string::npos ? std::string() : x.substr(a, b - a + 1);
+  };
+  key = trim(l.substr(0, sep));
+  value = trim(l.substr(sep + 1));
+  return !key.empty();
+}
+
 static std::string ReadKv(const std::wstring& file, const std::string& key) {
   std::lock_guard<std::recursive_mutex> kvLock(g_kvMutex);
   FILE* f = _wfopen((DataDirectory() + L"\\" + file).c_str(), L"r");
@@ -2562,13 +2578,41 @@ static std::string ReadKv(const std::wstring& file, const std::string& key) {
   char line[512];
   std::string value;
   while (std::fgets(line, sizeof(line), f)) {
-    std::string l = line;
-    while (!l.empty() && (l.back() == '\n' || l.back() == '\r')) l.pop_back();
-    size_t tab = l.find('\t');
-    if (tab != std::string::npos && l.substr(0, tab) == key) value = l.substr(tab + 1);
+    std::string k, v;
+    if (ParseKvLine(line, k, v) && k == key) value = v;
   }
   std::fclose(f);
   return value;
+}
+
+// Quita de equipo.txt las claves que ya no usa ninguna version (memorias y referencias antiguas,
+// marcas de migraciones pasadas). Devuelve cuantas quito.
+static int CleanObsoleteKv() {
+  std::lock_guard<std::recursive_mutex> kvLock(g_kvMutex);
+  const std::wstring path = DataDirectory() + L"\\equipo.txt";
+  FILE* f = _wfopen(path.c_str(), L"r");
+  if (!f) return 0;
+  static const char* kPrefixes[] = {"memoria|", "memoria2|", "ritmo-antes|"};
+  static const char* kExact[] = {"prioridad-v2", "aprendizaje-generacion", "vrr"};
+  std::map<std::string, std::string> keep;
+  int removed = 0;
+  char line[512];
+  while (std::fgets(line, sizeof(line), f)) {
+    std::string k, v;
+    if (!ParseKvLine(line, k, v)) continue;
+    bool obsolete = false;
+    for (const char* p : kPrefixes) obsolete = obsolete || k.rfind(p, 0) == 0;
+    for (const char* e : kExact) obsolete = obsolete || k == e;
+    if (obsolete) ++removed;
+    else keep[k] = v;
+  }
+  std::fclose(f);
+  if (removed > 0)
+    if (FILE* o = _wfopen(path.c_str(), L"w")) {
+      for (const auto& [k, v] : keep) std::fprintf(o, "%s\t%s\n", k.c_str(), v.c_str());
+      std::fclose(o);
+    }
+  return removed;
 }
 
 static void WriteKv(const std::wstring& file, const std::string& key, const std::string& value) {
@@ -2578,10 +2622,8 @@ static void WriteKv(const std::wstring& file, const std::string& key, const std:
   if (FILE* f = _wfopen(path.c_str(), L"r")) {
     char line[512];
     while (std::fgets(line, sizeof(line), f)) {
-      std::string l = line;
-      while (!l.empty() && (l.back() == '\n' || l.back() == '\r')) l.pop_back();
-      size_t tab = l.find('\t');
-      if (tab != std::string::npos) all[l.substr(0, tab)] = l.substr(tab + 1);
+      std::string k, v;
+      if (ParseKvLine(line, k, v)) all[k] = v;  // las lineas "clave=valor" se reescriben con tabulacion
     }
     std::fclose(f);
   }
@@ -3850,6 +3892,9 @@ static void RunEngine(std::wstring presentMonPath) {
   store.Load();
   if (int moved = store.Migrate(ExeDirectory() + L"\\cambios-aplicados.txt"))
     Log("Cambios de una version anterior movidos a la carpeta de datos: %d\n", moved);
+  if (const int cleaned = CleanObsoleteKv(); cleaned > 0)
+    Log("Ajustes: %d clave%s antigua%s eliminada%s de equipo.txt (de versiones anteriores, ya sin uso).\n", cleaned,
+        cleaned == 1 ? "" : "s", cleaned == 1 ? "" : "s", cleaned == 1 ? "" : "s");
   if (ReadKv(L"equipo.txt", "rendimiento-maximo") == "no") g_maxPerf = false;
   if (ReadKv(L"equipo.txt", "baja-latencia") == "no") g_lowLatency = false;
   if (ReadKv(L"equipo.txt", "subir-solo") == "no") g_autoRaise = false;

@@ -1,4 +1,4 @@
-# FlatPace 0.50 technical documentation
+# FlatPace 0.50.1 technical documentation
 
 This document explains how FlatPace works inside: architecture, algorithms, formulas, data formats and the sources behind its decisions. Some names (log lines, data files and keys) are in Spanish, as they appear in the program.
 
@@ -110,7 +110,7 @@ If the monitor offers other refresh rates at the current resolution and one of t
 
 ## 8. Advanced settings
 
-No interface; in `%LOCALAPPDATA%\FlatPace\equipo.txt` (one `key=value` line), with the app closed:
+No interface; in `%LOCALAPPDATA%\FlatPace\equipo.txt` (to open the folder: Windows + R, type `%LOCALAPPDATA%\FlatPace` and Enter), with the app closed. Each setting is one `key=value` line; the app writes its own with a tab instead of the `=`, and since 0.50.1 it accepts both forms (before, a line with `=` was ignored). If a key isn't there, its default value is used:
 
 | Key | Effect |
 |---|---|
