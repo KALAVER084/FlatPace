@@ -1,4 +1,4 @@
-# Documentación técnica de FlatPace 0.41.1
+# Documentación técnica de FlatPace 0.42
 
 Este documento explica cómo funciona FlatPace por dentro: arquitectura, algoritmos, fórmulas, formatos de datos y las fuentes en que se basan sus decisiones.
 
@@ -8,10 +8,10 @@ Este documento explica cómo funciona FlatPace por dentro: arquitectura, algorit
 |---|---|---|
 | Ventana (Dear ImGui 1.91.5 + Direct3D 11) | Principal | Interfaz, ~60 FPS en primer plano y ~10 en segundo plano o minimizada |
 
-**Prioridad:** desde la 0.41, el proceso de FlatPace tiene prioridad baja (`BELOW_NORMAL_PRIORITY_CLASS`) y modo de eficiencia de Windows 11 (EcoQoS), para no competir con el juego. Excepciones: el hilo lector de PresentMon (sin modo de eficiencia, prioridad equivalente a la normal) y el hilo de la ventana y el overlay (sin modo de eficiencia, prioridad baja). PresentMon se lanza con prioridad normal. El resumen de cada partida indica el coste de FlatPace (motor, proceso completo, PresentMon y overlay).
+**Prioridad:** desde la 0.41, el proceso de FlatPace tiene prioridad baja (`BELOW_NORMAL_PRIORITY_CLASS`) y modo de eficiencia de Windows 11 (EcoQoS), para no competir con el juego. Excepciones: el hilo lector de PresentMon (sin modo de eficiencia, prioridad baja; la tubería con PresentMon tiene 1 MB de búfer para que no se bloquee) y el hilo de la ventana y el overlay (sin modo de eficiencia, prioridad baja). PresentMon se lanza con prioridad normal. El resumen de cada partida indica el coste de FlatPace (motor, proceso completo, PresentMon y overlay).
 | Motor | Propio | Detección del juego, estadísticas, decisiones, driver; una vuelta por segundo |
 | Lector de PresentMon | Propio | Lanza PresentMon 2.6.0 como proceso hijo (`--output_stdout`) y analiza su CSV línea a línea |
-| Overlay | Principal | Ventana propia, transparente, siempre encima y que el ratón atraviesa (dibujo propio con suavizado + `UpdateLayeredWindow`), hasta 60 actualizaciones por segundo |
+| Overlay | Principal | Ventana propia, transparente, siempre encima y que el ratón atraviesa (dibujo propio con suavizado + `UpdateLayeredWindow`), hasta 60 actualizaciones por segundo; fondos fijos y textos guardados entre fotogramas, mezcla de píxeles con enteros |
 
 Los hilos se comunican con estructuras protegidas por mutex (estado de la ventana, datos del overlay, peticiones de deshacer). El motor nunca bloquea la interfaz.
 

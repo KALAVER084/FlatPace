@@ -2,6 +2,11 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). La versión más reciente va primero.
 
+## 0.42
+Con las mediciones de la 0.41.1 en Space Marine 2: el overlay era lo que más gastaba (3 ms por dibujo, ~13 % de un núcleo); PresentMon, solo un 1,2 %; el motor, ~2,5 % de CPU real.
+- **Mejorado (overlay, unas 5 veces más rápido sin cambiar lo que se ve):** los fondos fijos (tarjeta y área de la gráfica) se dibujan una sola vez y se copian en cada fotograma; los textos se dibujan con Windows solo la primera vez y después se reutilizan; la mezcla de píxeles usa enteros en lugar de coma flotante (diferencia de color de como mucho 2 niveles sobre 255); y las esquinas redondeadas solo calculan distancias en los bordes. En una réplica del dibujo, de 5,4 a 1,1 ms por fotograma, sin contar el ahorro de los textos.
+- **Mejorado (al llegar cada tanda de datos):** el búfer entre PresentMon y FlatPace pasa de 4 KB a 1 MB, así que el hilo lector ya no necesita prioridad elevada y el juego puede adelantarlo siempre. Con la 0.41.1, al principio de cada tanda seguía habiendo 1,7 veces más imágenes lentas que en el resto (frente a 2 veces en la 0.40).
+
 ## 0.41.1
 - **Añadido:** el resumen de cada partida mide también el coste de **PresentMon** (uso de CPU de su proceso) y el del **overlay** (tiempo por dibujo y dibujos por segundo), además del motor y del proceso de FlatPace. Sirve para saber dónde está realmente el coste antes de optimizar.
 

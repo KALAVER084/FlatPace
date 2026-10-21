@@ -124,7 +124,7 @@ static std::atomic<bool> g_quit{false};
 static std::atomic<int> g_lang{0};
 static const char* T(const char* es, const char* en) { return g_lang == 1 ? en : es; }
 
-static constexpr const char* kVersion = "0.41.1";
+static constexpr const char* kVersion = "0.42";
 
 // Carpeta donde esta este .exe.
 static std::wstring ExeDirectory() {
@@ -439,7 +439,8 @@ class PresentMonReader {
   bool Start(const std::wstring& exe, const std::wstring& processName) {
     SECURITY_ATTRIBUTES sa{sizeof(sa), nullptr, TRUE};
     HANDLE writeEnd = nullptr;
-    if (!CreatePipe(&read_, &writeEnd, &sa, 0)) return false;
+    // 1 MB de bufer: PresentMon no se bloquea aunque el lector (con prioridad baja) tarde un poco.
+    if (!CreatePipe(&read_, &writeEnd, &sa, 1 << 20)) return false;
     SetHandleInformation(read_, HANDLE_FLAG_INHERIT, 0);
 
     job_ = CreateJobObjectW(nullptr, nullptr);
@@ -475,7 +476,7 @@ class PresentMonReader {
     eco::presentMonProcess = pi.hProcess;
     running_ = true;
     thread_ = std::thread([this] {
-      eco::ExemptCurrentThread();
+      eco::ExemptCurrentThread(false);  // sin modo de eficiencia, pero sin adelantar al juego
       ReadLoop();
     });
     return true;
@@ -2790,6 +2791,8 @@ class Window {
     maskBmp_ = CreateDIBSection(maskDc_, &bi, DIB_RGB_COLORS, reinterpret_cast<void**>(&mask_), nullptr, 0);
     SelectObject(dc_, bmp_);
     SelectObject(maskDc_, maskBmp_);
+    textCache_.clear();  // fuentes nuevas: los textos guardados ya no sirven
+    base_.clear();
     big_ = CreateFontW(static_cast<int>(-22 * scale), 0, 0, 0, FW_SEMIBOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
                        ANTIALIASED_QUALITY, 0, L"Segoe UI");
     small_ = CreateFontW(static_cast<int>(-12 * scale), 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
@@ -2907,14 +2910,13 @@ class Window {
   void Blend(int x, int y, uint8_t r, uint8_t g, uint8_t b, float a) {
     if (x < 0 || y < 0 || x >= W_ || y >= H_ || a <= 0) return;
     if (a > 1.0f) a = 1.0f;
+    // Mezcla con enteros (antes, coma flotante): unas 5 veces mas rapido, con una diferencia de
+    // color de como mucho 2 niveles sobre 255.
     uint32_t& p = px_[y * W_ + x];
-    float ia = 1.0f - a;
-    uint8_t pb = p & 0xFF, pg = (p >> 8) & 0xFF, pr = (p >> 16) & 0xFF, pa = (p >> 24) & 0xFF;
-    uint8_t nb = static_cast<uint8_t>(b * a + pb * ia);
-    uint8_t ng = static_cast<uint8_t>(g * a + pg * ia);
-    uint8_t nr = static_cast<uint8_t>(r * a + pr * ia);
-    uint8_t na = static_cast<uint8_t>(255 * a + pa * ia);
-    p = nb | (ng << 8) | (nr << 16) | (static_cast<uint32_t>(na) << 24);
+    const uint32_t a8 = static_cast<uint32_t>(a * 256.0f + 0.5f), ia8 = 256 - a8;
+    const uint32_t pb = p & 0xFF, pg = (p >> 8) & 0xFF, pr = (p >> 16) & 0xFF, pa = p >> 24;
+    p = ((b * a8 + pb * ia8) >> 8) | (((g * a8 + pg * ia8) >> 8) << 8) | (((r * a8 + pr * ia8) >> 8) << 16) |
+        (((255 * a8 + pa * ia8) >> 8) << 24);
   }
 
   void Rect(int x0, int y0, int x1, int y1, uint8_t r, uint8_t g, uint8_t b, float a) {
@@ -2924,14 +2926,21 @@ class Window {
 
   // Rectangulo con esquinas redondeadas y bordes suavizados.
   void RoundRect(float x0, float y0, float x1, float y1, float rad, uint8_t r, uint8_t g, uint8_t b, float a) {
-    for (int y = static_cast<int>(y0); y < static_cast<int>(std::ceil(y1)); ++y)
+    for (int y = static_cast<int>(y0); y < static_cast<int>(std::ceil(y1)); ++y) {
+      const float py = y + 0.5f;
+      const bool midRow = py >= y0 + rad && py <= y1 - rad;
       for (int x = static_cast<int>(x0); x < static_cast<int>(std::ceil(x1)); ++x) {
-        float px = x + 0.5f, py = y + 0.5f;
+        float px = x + 0.5f;
+        if (midRow && px >= x0 + rad && px <= x1 - rad) {  // interior: cobertura completa, sin calculo
+          Blend(x, y, r, g, b, a * std::min(rad + 0.5f, 1.0f));
+          continue;
+        }
         float cx = std::clamp(px, x0 + rad, x1 - rad), cy = std::clamp(py, y0 + rad, y1 - rad);
-        float d = std::hypot(px - cx, py - cy);
+        float d = std::sqrt((px - cx) * (px - cx) + (py - cy) * (py - cy));
         float cov = std::clamp(rad - d + 0.5f, 0.0f, 1.0f);
         if (cov > 0) Blend(x, y, r, g, b, a * cov);
       }
+    }
   }
 
   // Linea con bordes suavizados (cobertura por distancia al segmento), recortada al area clip_.
@@ -2946,7 +2955,8 @@ class Window {
       for (int x = minX; x <= maxX; ++x) {
         float px = x + 0.5f - x0, py = y + 0.5f - y0;
         float t = len2 > 0 ? std::clamp((px * dx + py * dy) / len2, 0.0f, 1.0f) : 0.0f;
-        float d = std::hypot(px - t * dx, py - t * dy);
+        const float ex = px - t * dx, ey = py - t * dy;
+        float d = std::sqrt(ex * ex + ey * ey);
         float cov = std::clamp(hw + 0.5f - d, 0.0f, 1.0f);
         if (cov > 0) Blend(x, y, r, g, b, a * cov);
       }
@@ -2968,35 +2978,54 @@ class Window {
     }
   }
 
-  int TextWidth(const std::string& utf8, HFONT font) {
+  // Textos guardados: cada texto se dibuja con Windows (GDI) solo la primera vez; despues se reutiliza
+  // su mascara. Antes se median y dibujaban todos los textos en cada fotograma del overlay.
+  struct CachedText {
+    int w = 0, h = 0, width = 0;
+    std::vector<uint8_t> lum;  // cobertura (0-255) de un rectangulo (w x h) con 2 px de margen
+  };
+  std::map<std::pair<HFONT, std::string>, CachedText> textCache_;
+
+  const CachedText& GetText(const std::string& utf8, HFONT font) {
+    auto key = std::make_pair(font, utf8);
+    auto it = textCache_.find(key);
+    if (it != textCache_.end()) return it->second;
+    if (textCache_.size() > 96) textCache_.clear();  // los valores cambian (FPS): se renueva de vez en cuando
+    CachedText ct;
     SelectObject(maskDc_, font);
     std::wstring w = Widen(utf8);
     SIZE sz{};
     GetTextExtentPoint32W(maskDc_, w.c_str(), static_cast<int>(w.size()), &sz);
-    return sz.cx;
+    ct.width = sz.cx;
+    ct.w = std::min(W_, static_cast<int>(sz.cx) + 6);
+    ct.h = std::min(H_, static_cast<int>(sz.cy) + 6);
+    for (int yy = 0; yy < ct.h; ++yy) std::memset(mask_ + yy * W_, 0, static_cast<size_t>(ct.w) * 4);
+    SetBkMode(maskDc_, TRANSPARENT);
+    SetTextColor(maskDc_, RGB(255, 255, 255));
+    TextOutW(maskDc_, 2, 2, w.c_str(), static_cast<int>(w.size()));
+    GdiFlush();
+    ct.lum.resize(static_cast<size_t>(ct.w) * ct.h);
+    for (int yy = 0; yy < ct.h; ++yy)
+      for (int xx = 0; xx < ct.w; ++xx) {
+        uint32_t m = mask_[yy * W_ + xx];
+        ct.lum[static_cast<size_t>(yy) * ct.w + xx] = std::max({static_cast<uint8_t>(m & 0xFF), static_cast<uint8_t>((m >> 8) & 0xFF),
+                                                               static_cast<uint8_t>((m >> 16) & 0xFF)});
+      }
+    return textCache_.emplace(key, std::move(ct)).first->second;
   }
+
+  int TextWidth(const std::string& utf8, HFONT font) { return GetText(utf8, font).width; }
+
+
 
   // Texto: se dibuja en blanco sobre negro en la mascara (solo en su rectangulo) y se mezcla
   // con su luminancia.
   void Text(const std::string& utf8, int x, int y, HFONT font, uint8_t r, uint8_t g, uint8_t b) {
-    SelectObject(maskDc_, font);
-    std::wstring w = Widen(utf8);
-    SIZE sz{};
-    GetTextExtentPoint32W(maskDc_, w.c_str(), static_cast<int>(w.size()), &sz);
-    int rx0 = std::max(0, x - 2), ry0 = std::max(0, y - 2);
-    int rx1 = std::min(W_, x + static_cast<int>(sz.cx) + 4), ry1 = std::min(H_, y + static_cast<int>(sz.cy) + 4);
-    if (rx1 <= rx0 || ry1 <= ry0) return;
-    for (int yy = ry0; yy < ry1; ++yy) std::memset(mask_ + yy * W_ + rx0, 0, static_cast<size_t>(rx1 - rx0) * 4);
-    SetBkMode(maskDc_, TRANSPARENT);
-    SetTextColor(maskDc_, RGB(255, 255, 255));
-    TextOutW(maskDc_, x, y, w.c_str(), static_cast<int>(w.size()));
-    GdiFlush();
-    for (int yy = ry0; yy < ry1; ++yy)
-      for (int xx = rx0; xx < rx1; ++xx) {
-        uint32_t m = mask_[yy * W_ + xx];
-        uint8_t lum = std::max({static_cast<uint8_t>(m & 0xFF), static_cast<uint8_t>((m >> 8) & 0xFF),
-                                static_cast<uint8_t>((m >> 16) & 0xFF)});
-        if (lum) Blend(xx, yy, r, g, b, lum / 255.0f);
+    const CachedText& ct = GetText(utf8, font);
+    for (int yy = 0; yy < ct.h; ++yy)
+      for (int xx = 0; xx < ct.w; ++xx) {
+        const uint8_t lum = ct.lum[static_cast<size_t>(yy) * ct.w + xx];
+        if (lum) Blend(x - 2 + xx, y - 2 + yy, r, g, b, lum / 255.0f);
       }
   }
 
@@ -3004,17 +3033,26 @@ class Window {
             LimitState limitState, double refMs, bool isTarget, const std::vector<std::pair<double, double>>& real,
             double swing, double baseSwing) {
     const unsigned generation = generation_;
-    std::memset(px_, 0, static_cast<size_t>(W_) * H_ * 4);
     clipX0_ = 0; clipY0_ = 0; clipX1_ = W_; clipY1_ = H_;
     const float s = scale_;
+    // Fondos fijos (tarjeta y area de la grafica): se dibujan una vez y se copian en cada fotograma.
+    if (baseW_ != W_ || baseH_ != H_ || baseScale_ != s || base_.empty()) {
+      std::memset(px_, 0, static_cast<size_t>(W_) * H_ * 4);
+      RoundRect(0, 0, static_cast<float>(W_), static_cast<float>(H_), 10 * s, 14, 16, 21, 0.86f);
+      RoundRect(10 * s, 34 * s, W_ - 10 * s, H_ - 10 * s, 6 * s, 26, 30, 38, 0.92f);
+      base_.assign(px_, px_ + static_cast<size_t>(W_) * H_);
+      baseW_ = W_;
+      baseH_ = H_;
+      baseScale_ = s;
+    } else {
+      std::memcpy(px_, base_.data(), base_.size() * 4);
+    }
     const double span = kPaceSpanSec;
     // Color de estado: azul con el limite confirmado; rojo sin limite o sin confirmar.
     const bool locked = limitState == LimitState::Locked;
     const uint8_t sr = locked ? 47 : 255, sg = locked ? 168 : 107, sb = locked ? 255 : 107;
 
-    RoundRect(0, 0, static_cast<float>(W_), static_cast<float>(H_), 10 * s, 14, 16, 21, 0.86f);
-
-    // Fila superior: punto de estado, FPS, 1 % bajo y etiqueta del limite
+    // Fila superior: punto de estado, FPS, 1 % bajo y etiqueta del limite (el fondo esta en base_)
     RoundRect(12 * s, 13 * s, 20 * s, 21 * s, 4 * s, sr, sg, sb, 1.0f);
     std::string fpsText = Fmt("%.0f", fps);
     Text(fpsText, static_cast<int>(26 * s), static_cast<int>(3 * s), big_, 240, 242, 245);
@@ -3033,8 +3071,7 @@ class Window {
     Text(pill, static_cast<int>(px0 + 8 * s), static_cast<int>(9 * s), small_, sr, sg, sb);
 
     // Grafica
-    const float gx0 = 10 * s, gx1 = W_ - 10 * s, gy0 = 34 * s, gy1 = H_ - 10 * s;
-    RoundRect(gx0, gy0, gx1, gy1, 6 * s, 26, 30, 38, 0.92f);
+    const float gx0 = 10 * s, gx1 = W_ - 10 * s, gy0 = 34 * s, gy1 = H_ - 10 * s;  // fondo: en base_
     clipX0_ = static_cast<int>(gx0); clipX1_ = static_cast<int>(gx1);
     clipY0_ = static_cast<int>(gy0); clipY1_ = static_cast<int>(gy1);
     const float iy0 = gy0 + 6 * s, iy1 = gy1 - 4 * s;  // margen interior
@@ -3102,6 +3139,9 @@ class Window {
   HBITMAP bmp_ = nullptr, maskBmp_ = nullptr;
   uint32_t* px_ = nullptr;
   uint32_t* mask_ = nullptr;
+  std::vector<uint32_t> base_;  // fondos fijos ya dibujados
+  int baseW_ = 0, baseH_ = 0;
+  float baseScale_ = 0.0f;
   HFONT big_ = nullptr, small_ = nullptr;
   int W_ = 0, H_ = 0;
   int clipX0_ = 0, clipY0_ = 0, clipX1_ = 0, clipY1_ = 0;
