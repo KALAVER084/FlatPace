@@ -4,14 +4,14 @@
 
 **FlatPace mide tus juegos y aplica el límite de FPS que hace que vayan lo más estables posible.** Hace en Windows lo que la Steam Deck hace en su sistema: un ritmo constante se siente más fluido que unos FPS más altos pero irregulares.
 
-Versión actual: **0.44** · Windows 10 (1803 o posterior) y Windows 11 · [Guía de uso](GUIA.md) · [Documentación técnica](TECNICO.md) · [Historial de cambios](CHANGELOG.md) · [Licencia](LICENSE) · [English](README.en.md)
+Versión actual: **0.45** · Windows 10 (1803 o posterior) y Windows 11 · [Guía de uso](GUIA.md) · [Documentación técnica](TECNICO.md) · [Historial de cambios](CHANGELOG.md) · [Licencia](LICENSE) · [English](README.en.md)
 
 ## Qué hace
 
 - **Mide cada juego** mientras juegas, fotograma a fotograma (con PresentMon de Intel), separando los fotogramas reales de los generados por DLSS Frame Generation.
 - **Decide el límite con toda la partida** al cerrar el juego, según tu prioridad (fluidez o estabilidad), tu pantalla y si hay G-SYNC/FreeSync.
 - **Lo aplica en el driver de NVIDIA** (perfil del juego, sin tocar el juego), **comprueba que funciona** en la siguiente partida y lo mantiene. Junto al límite activa **"GPU al máximo"**, que evita que la GPU baje frecuencias con el límite puesto y mejora mucho el 1 % bajo.
-- **Lo vigila:** si un día el juego deja de sostenerlo de forma continuada, lo baja; los tropiezos aislados no cuentan.
+- **Lo ajusta solo:** si un día el juego deja de sostenerlo de forma continuada, lo baja (los tropiezos aislados no cuentan); si va sobrado, lo sube poco a poco hasta lo que el juego sostiene de verdad.
 - **Todo es reversible:** cada juego se puede deshacer por separado, y vuelve exactamente a como estaba.
 - **Diagnóstico:** tirones, cuello de botella (CPU o GPU), generación de fotogramas, modo de presentación, VRR activo, overlay en el juego con la gráfica de ritmo y grabación opcional de cada fotograma para analizar partidas.
 - **Ligero:** funciona con prioridad baja y en el modo de eficiencia de Windows 11, para no competir con el juego.

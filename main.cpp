@@ -36,6 +36,7 @@
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
+#include <ctime>
 #include <deque>
 #include <limits>
 #include <map>
@@ -125,7 +126,7 @@ static std::atomic<bool> g_quit{false};
 static std::atomic<int> g_lang{0};
 static const char* T(const char* es, const char* en) { return g_lang == 1 ? en : es; }
 
-static constexpr const char* kVersion = "0.44";
+static constexpr const char* kVersion = "0.45";
 
 // Carpeta donde esta este .exe.
 static std::wstring ExeDirectory() {
@@ -739,6 +740,8 @@ static std::atomic<bool> g_maxPerf{true};
 // (DirectComposition): overlay=clasico en equipo.txt. La app tambien vuelve a el sola si el de la
 // GPU no se puede iniciar o falla durante la partida.
 static std::atomic<bool> g_overlayClassic{false};
+// Subida automatica de los limites cuando el juego va sobrado (subir-solo=no en equipo.txt la desactiva).
+static std::atomic<bool> g_autoRaise{true};
 // Rango de VRR del monitor segun su EDID (0 = desconocido): el rango FreeSync si lo declara, si no
 // el rango de frecuencias. Por encima del maximo el VRR deja de actuar; por debajo del minimo, el
 // monitor solo sigue el ritmo si puede duplicar fotogramas (LFC, cuando maximo >= 2 x minimo).
@@ -1635,6 +1638,7 @@ struct Session {
   double start = -1.0, phaseStart = 0.0, lastStatus = 0.0, lastFrameArrival = 0.0;
   bool haveRec = false, fgActive = false, fgEverSeen = false, paused = false;
   int fgToggles = 0;  // cambios de estado de la generacion en esta partida
+  bool climbHandled = false;  // la subida automatica se ocupo de este limite al cerrar (sin sugerencia)
   // Coste de FlatPace durante la partida
   double engMsSum = 0.0, engMsMax = 0.0, cpuAtStart = -1.0, pmCpuAtStart = -1.0;
   double ovMsAtStart = 0.0;
@@ -1957,7 +1961,7 @@ static void PrintSessionSummary(const Session& s, double hz) {
       Log("  Memoria del juego: %d partida%s; sostiene ~%.0f fps reales (con un 80 %% de probabilidad, al menos %.0f)\n",
           mem.sessions, mem.sessions == 1 ? "" : "s", mem.MeanFps(), mem.LowerFps());
     // Sugerencia: el limite confirmado podria subir al siguiente escalon.
-    if (s.verified && s.expectedFps > 0 && !s.exe.empty()) {
+    if (s.verified && s.expectedFps > 0 && !s.exe.empty() && !s.climbHandled) {
       if (SuggestRaise(stableFps, plenty, mem, s.expectedFps, s.expectFg, s.expectVrr, hz) > 0) {
         std::string tip = plenty ? Fmt(T("Va sobrado con su límite: podría sostener bastante más de %.0f FPS reales. "
                                          "Pulsa «Deshacer» para recalcularlo.",
@@ -1997,6 +2001,24 @@ static void PrintSessionSummary(const Session& s, double hz) {
 }
 
 // Un segundo de analisis para el juego de la sesion.
+// Va sobrado con su limite en TODA la partida (para subirlo solo): al menos 3 min con el limite
+// funcionando, ningun tramo por debajo (regla de fallos), como mucho un 1 % de segundos sueltos
+// claramente por debajo, y al menos el 98 % de los fotogramas de la partida esperando al limitador
+// (modelo de datos censurados). Solo sin generacion de fotogramas.
+static bool PlentyWholeSession(const Session& s) {
+  if (FrameGenInvolved(s) || !s.verified || s.expectedFps <= 0) return false;
+  if (s.fail.limPlaySecs < 180.0 || s.fail.failSecs > 0) return false;
+  size_t below = 0;
+  for (float r : s.fail.secRates)
+    if (r < s.expectedFps * (1.0 - cfg::kJnd)) ++below;
+  if (below > 0.01 * s.fail.secRates.size()) return false;
+  auto it = s.sessionReal.find(1);
+  if (it == s.sessionReal.end() || it->second.size() < 1000) return false;
+  std::vector<double> ms(it->second.begin(), it->second.end());
+  const CapacityEstimate ce = EstimateCapacity(ms, 1000.0 / s.expectedFps);
+  return !ce.valid && ce.censoredFraction > 0.98;
+}
+
 // 1 % bajo (fps) causado por el juego en los ultimos 20 s, con un limite activo (0 si no hay limite).
 static double GameLowFps(const Session& ss) {
   if (FrameGenInvolved(ss)) return 0.0;
@@ -2468,7 +2490,8 @@ static void WriteKv(const std::wstring& file, const std::string& key, const std:
     }
     std::fclose(f);
   }
-  all[key] = value;
+  if (value.empty()) all.erase(key);  // un valor vacio borra la clave
+  else all[key] = value;
   if (FILE* f = _wfopen(path.c_str(), L"w")) {
     for (const auto& [k, v] : all) std::fprintf(f, "%s\t%s\n", k.c_str(), v.c_str());
     std::fclose(f);
@@ -3691,6 +3714,7 @@ static void RunEngine(std::wstring presentMonPath) {
   if (int moved = store.Migrate(ExeDirectory() + L"\\cambios-aplicados.txt"))
     Log("Cambios de una version anterior movidos a la carpeta de datos: %d\n", moved);
   if (ReadKv(L"equipo.txt", "rendimiento-maximo") == "no") g_maxPerf = false;
+  if (ReadKv(L"equipo.txt", "subir-solo") == "no") g_autoRaise = false;
   if (nvOk && g_maxPerf) {
     int added = 0;
     for (auto& [exe, c] : store.items) {
@@ -4099,25 +4123,70 @@ static void RunEngine(std::wstring presentMonPath) {
       return;
     } else if (known->second.verified || session.accepted) {
       const AppliedChange& c = known->second;
-      if (session.fail.Failed()) {
-        Recommendation lower = LowerAfterFailure(session.fail.secRates, c.vrr, c.fgFactor, session.expectedFps, hz);
+      const bool failed = session.fail.Failed();
+      // Subida automatica (con G-SYNC/FreeSync y sin generacion de fotogramas): su estado por juego.
+      const bool climbOk = g_autoRaise && !c.manual && c.vrr && c.fgFactor <= 1 && !FrameGenInvolved(session);
+      ClimbResult cr;
+      const double limitBefore = session.expectedFps;
+      if (climbOk) {
+        const bool plenty = !failed && PlentyWholeSession(session);
+        const long long today = static_cast<long long>(std::time(nullptr) / 86400);
+        cr = DecideClimb(ClimbState::Parse(ReadKv(L"equipo.txt", "escalada|" + session.exe)), failed, plenty,
+                         limitBefore, 1, true, hz, g_priority == 1, today);
+        WriteKv(L"equipo.txt", "escalada|" + session.exe, cr.state.Serialize());
+        session.climbHandled = true;
+      }
+      auto VrrRec = [&](double realFps) {
+        Recommendation r;
+        r.valid = r.vrr = r.vrrValid = true;
+        r.fgFactor = 1;
+        r.realFps = r.capFps = r.vrrCapFps = std::floor(realFps + 1e-9);
+        return r;
+      };
+      if (failed) {
+        const bool revert = climbOk && cr.action == ClimbAction::RevertToPrev;
+        Recommendation lower = revert ? VrrRec(cr.newLimit)
+                                      : LowerAfterFailure(session.fail.secRates, c.vrr, c.fgFactor, session.expectedFps, hz);
         Log("\n  Al cerrar: el limite no se sostuvo durante %.0f s (%.0f %% de la partida).\n",
             session.fail.failSecs, session.fail.Percent());
+        if (climbOk)
+          Log("  No volvere a subir hasta %.0f fps durante 30 dias.\n", limitBefore);
         if (lower.valid) {
           session.current = lower;
-          session.lowerPending = true;
+          session.lowerPending = true;  // permite cambiar un limite ya comprobado
           session.accepted = false;
-          if (TryApply(now, st, true, "la regla de fallos al cerrar el juego")) {
+          if (TryApply(now, st, true, revert ? "la vuelta al limite anterior (la subida no se sostuvo)"
+                                             : "la regla de fallos al cerrar el juego")) {
             auto nc = store.items.find(session.exe);
-            result = Fmt(T("%s no sostuvo su límite durante el %.0f %% de la partida. En la próxima usaré: %s.",
-                           "%s didn't hold its limit for %.0f %% of the session. Next time I'll use: %s."),
-                         session.label.c_str(), session.fail.Percent(),
-                         DescribeChange(nc->second).c_str());
+            result = revert
+                ? Fmt(T("%s no sostuvo %.0f FPS: vuelvo a %.0f, que sí sostenía.", "%s didn't hold %.0f FPS: back to %.0f, which it did hold."),
+                      session.label.c_str(), limitBefore, cr.newLimit)
+                : Fmt(T("%s no sostuvo su límite durante el %.0f %% de la partida. En la próxima usaré: %s.",
+                        "%s didn't hold its limit for %.0f %% of the session. Next time I'll use: %s."),
+                      session.label.c_str(), session.fail.Percent(), DescribeChange(nc->second).c_str());
           }
         }
-      } else if (session.fail.failSecs > 0) {
-        Log("\n  Al cerrar: bajadas aisladas del limite (%.0f s, %.0f %% de la partida): no cambio nada.\n",
-            session.fail.failSecs, session.fail.Percent());
+      } else {
+        if (session.fail.failSecs > 0)
+          Log("\n  Al cerrar: bajadas aisladas del limite (%.0f s, %.0f %% de la partida): no cambio nada.\n",
+              session.fail.failSecs, session.fail.Percent());
+        if (climbOk && cr.action == ClimbAction::Raise) {
+          Log("\n  Al cerrar: el juego fue sobrado toda la partida con %.0f fps: lo subo a %.0f.\n", limitBefore, cr.newLimit);
+          session.current = VrrRec(cr.newLimit);
+          session.lowerPending = true;  // permite cambiar un limite ya comprobado
+          session.accepted = false;
+          if (TryApply(now, st, true, "la subida automatica (el juego iba sobrado)"))
+            result = Fmt(T("%s iba sobrado: subo su límite de %.0f a %.0f FPS para la próxima partida. Si no lo sostiene, volveré a %.0f.",
+                           "%s had headroom: raising its limit from %.0f to %.0f FPS for the next session. If it can't hold it, I'll go back to %.0f."),
+                         session.label.c_str(), limitBefore, cr.newLimit, limitBefore);
+        } else if (climbOk && cr.action == ClimbAction::BlockedByCeiling) {
+          Log("\n  Al cerrar: va sobrado, pero no subo: %.0f fps no se sostuvo hace menos de 30 dias.\n", cr.state.failedCeil);
+        } else if (climbOk && cr.action == ClimbAction::AtTop) {
+          Log("\n  Al cerrar: va sobrado y ya esta en el maximo para tu pantalla.\n");
+        } else if (climbOk && cr.state.plentyStreak > 0) {
+          Log("\n  Al cerrar: va sobrado (%d de 2 partidas seguidas, con prioridad Estabilidad, para subirlo).\n",
+              cr.state.plentyStreak);
+        }
       }
     }
     if (!result.empty()) {
@@ -4259,6 +4328,7 @@ static void RunEngine(std::wstring presentMonPath) {
         if (nvOk && nvd.Revert(it->second)) {
           store.items.erase(it);
           store.Save();
+          WriteKv(L"equipo.txt", "escalada|" + exe, "");  // empezar de cero: sin techo ni subidas pendientes
           result = Fmt(T("Deshecho: %s vuelve a como estaba. Si estaba abierto, reinícialo.",
                          "Undone: %s is back to how it was. If it was open, restart it."), name.c_str());
           Log("\n[%5.0f s] Deshecho %s (pedido desde la ventana).\n", session.T(now), exe.c_str());
@@ -4284,6 +4354,7 @@ static void RunEngine(std::wstring presentMonPath) {
       g_applyMode = false;
       applyMode = lastApplyMode = false;
       Log("\n[%5.0f s] Deshacer todos los cambios (pedido desde la ventana):\n", session.T(now));
+      for (const auto& [exe, ch] : store.items) WriteKv(L"equipo.txt", "escalada|" + exe, "");
       std::string result = UndoAll(nvd, store, nvOk);
       RestoreDisplay();
       Log("  %s\n  Modo cambiado a solo medir.\n", result.c_str());

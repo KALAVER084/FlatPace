@@ -1,4 +1,4 @@
-# FlatPace 0.44 user guide
+# FlatPace 0.45 user guide
 
 This guide describes the current version. Changes between versions are listed in the [changelog](CHANGELOG.md) (in Spanish). The app has an English interface: switch it with **ES | EN** at the bottom of the sidebar.
 
@@ -36,11 +36,13 @@ At the bottom of the sidebar: **Apply limits** (when off, the app only measures)
 |---|---|---|
 | **First** | Measures the whole session. When you close the game, it decides and saves the limit: *"Limit for the next session of …"* | Play normally |
 | **Second** | Checks that the game runs at the limit's pace: **"Limit working"**. The limit becomes **accepted** | Nothing |
-| **Later** | Only measures and keeps watch. When you close the game, if it didn't hold the limit for a sustained period, it lowers it for next time | Nothing |
+| **Later** | Measures and keeps watch. When you close the game, if it didn't hold the limit for a sustained period, it lowers it; if it had **headroom** the whole session, it **raises** it by 13 % (without going over your display's maximum) | Nothing |
 
 **Want it sooner?** On *Now*, the **Apply now** button saves the current recommendation. Restart the game so the driver applies it. When you close the game, the app refines it with the whole session.
 
-**When is an accepted limit lowered?** Only if the game ran more than 13 % below the limit, in stretches of at least 5 seconds, for at least 10 % of the session and one minute in total. Shorter dips are treated as isolated events. The app **never raises a limit on its own**: to recalculate it, use *Undo*.
+**When is an accepted limit lowered?** Only if the game ran more than 13 % below the limit, in stretches of at least 5 seconds, for at least 10 % of the session and one minute in total. Shorter dips are treated as isolated events.
+
+**When is it raised?** With G-SYNC/FreeSync and without frame generation, if the game had **headroom** the whole session: at least 3 minutes with the limit, no stretch below it and almost all frames waiting on the limiter. With *Smoothness* one such session is enough; with *Stability* it takes two in a row. The rules pick the limit cautiously, and many games perform better with a limit than without one, so the app climbs step by step to what the game really holds. If a raise doesn't hold, it goes back to the previous limit and won't try again for 30 days. To turn it off, add `subir-solo=no` to `equipo.txt`.
 
 ## 5. Priority: Stability or Smoothness
 
@@ -98,7 +100,7 @@ It's a separate, transparent window: it doesn't touch the game. Since 0.44 the G
 
 ## 10. Warnings and undo
 
-- **Amber warnings** (on *Games* and *Now*): the game isn't holding its limit, it runs clearly better than when the limit was decided (for example after lowering settings), frame generation is the opposite of when the limit was applied, or **it could hold a higher limit**: with the limit in place, the app estimates the game's real capacity and, if it reaches the next step, suggests it (*"It could hold ~X real FPS"*). It never raises it on its own: to apply it, click *Undo* and the app will recalculate it.
+- **Amber warnings** (on *Games* and *Now*): the game isn't holding its limit, it runs clearly better than when the limit was decided (for example after lowering settings), frame generation is the opposite of when the limit was applied, or, with a **manual** limit, **it could hold a higher one** (*"It has plenty of headroom…"*): the app doesn't change manual limits, so it only suggests it. Automatic limits rise on their own (section 4).
 - **The log** also shows the estimated capacity with the limit in place (*"sin límite ~X fps"*), the session's **phases** (changes of area or settings) and, in the summary, the **game's memory**: what it holds according to all your sessions.
 - **Undo one game:** the *Undo* button in its row. It goes back exactly to how it was; if "Apply limits" is on, it's recalculated next session.
 - **Undo everything:** *Undo all changes* (the app switches to measuring only) or double-click `Deshacer cambios.bat`.

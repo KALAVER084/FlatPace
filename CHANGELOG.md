@@ -2,6 +2,12 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). La versión más reciente va primero.
 
+## 0.45
+- **Nuevo: los límites suben solos cuando el juego va sobrado.** Las reglas eligen el límite con una partida sin límite, y eso exagera lo que el juego necesita: muchos juegos rinden más con un límite puesto (Megabonk sostenía 225 FPS cuando las reglas daban 189-215). Ahora, con G-SYNC/FreeSync y sin generación de fotogramas, si el juego fue sobrado **toda la partida** (al menos 3 minutos con el límite, ni un tramo por debajo y más del 98 % de los fotogramas esperando al limitador), el límite sube al siguiente escalón: un 13 % más, sin pasar del máximo de la pantalla. Con *Fluidez* basta una partida así; con *Estabilidad*, dos seguidas. El usuario no tiene que hacer nada.
+- **Protecciones contra el ping-pong:** si una subida no se sostiene, la app vuelve al límite anterior (que sí se sostenía) y guarda el que falló como techo durante 30 días, sin volver a subir hasta él. *Deshacer* borra ese estado; `subir-solo=no` en `equipo.txt` desactiva las subidas. Con límites manuales, o fuera de su alcance, se mantiene la sugerencia.
+- **Validado con las grabaciones:** Megabonk a 195 FPS (sobrado: sube a 220) y Greylock a 83, 90 y 100 (sin subida: el juego va justo en sus zonas pesadas). Simulación de dos meses alternando zonas ligeras y pesadas: como mucho una partida fallida por cada caducidad del techo, sin bucle de subir y bajar.
+- 182 pruebas automáticas, incluidas las de las protecciones (se comprobó que detectan cuatro errores introducidos a propósito).
+
 ## 0.44
 - **Nuevo: overlay dibujado con la GPU (DirectComposition).** El overlay clásico se dibujaba con el procesador, píxel a píxel, y se entregaba con `UpdateLayeredWindow`, que obliga a Windows a copiar todos los píxeles en cada actualización (en Space Marine 2, 1,28 ms por dibujo, ~5 % de un núcleo). Ahora lo dibuja la GPU con Dear ImGui (un contexto propio, en el mismo dispositivo que la ventana principal) en una ventana sin superficie propia (`WS_EX_NOREDIRECTIONBITMAP`), cuya imagen, con transparencia premultiplicada, compone Windows directamente. Mismo diseño, colores, posiciones y comportamiento; sigue sin recibir clics.
 - **Respaldo automático:** si el overlay de la GPU no se puede iniciar, o falla durante la partida (por ejemplo, al reiniciarse el driver), la app vuelve sola al overlay clásico y lo anota en el registro. Con `overlay=clasico` en `equipo.txt` se usa siempre el clásico.

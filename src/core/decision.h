@@ -1,6 +1,7 @@
 // FlatPace - ciclo de decision: verificar, vigilar, bajar tras un fallo y decidir al cerrar
 // Logica pura, sin dependencias de Windows: se incluye desde main.cpp y desde las pruebas
-// automaticas (tests/). Requiere las cabeceras estandar, config.h, stats_basic.h y analysis.h.
+// automaticas (tests/). Requiere las cabeceras estandar, config.h, stats_basic.h, analysis.h y
+// suggest.h (NextLimitStep).
 #pragma once
 
 // ---------------------------------------------------------------------------
@@ -124,5 +125,87 @@ static Recommendation DecideFromSession(const SessionDecisionInput& in) {
   }
   Recommendation r = in.fluid ? RecommendFluid(d, in.hz, k) : Recommendation{};
   if (!r.valid) r = Recommend(in.hz, p99, cfg::kMarginInitial, k);
+  return r;
+}
+
+// ---------------------------------------------------------------------------
+// Subida automatica: si el juego va sobrado con su limite, subirlo al siguiente escalon
+// ---------------------------------------------------------------------------
+// Las reglas eligen el limite con una partida sin limite, y medir sin limite exagera lo que el juego
+// necesita: con un limite puesto, muchos juegos trabajan menos (Megabonk sostenia 225 fps cuando las
+// reglas daban 189-215). Asi que, si el juego va sobrado con su limite, este sube solo al siguiente
+// escalon (un 13 % mas, sin pasar del techo de la pantalla), y se comprueba y vigila como cualquier otro.
+// Protecciones contra el "ping-pong" (subir, fallar, bajar, volver a subir...):
+// - si un limite subido asi falla, se vuelve al anterior (que si se sostenia), no al ritmo superado
+//   el 90 % del tiempo, que podria quedar por debajo;
+// - el limite que fallo se recuerda como techo durante 30 dias: no se vuelve a subir hasta el;
+// - con prioridad Estabilidad hacen falta dos partidas seguidas yendo sobrado; con Fluidez, una.
+struct ClimbState {
+  double failedCeil = 0.0;  // limite (fps reales) que fallo
+  long long failedDay = 0;  // dia en que fallo (dias desde 1970)
+  double prevGood = 0.0;    // limite anterior a una subida aun no confirmada (0 = no hay)
+  int plentyStreak = 0;     // partidas seguidas yendo sobrado
+
+  static ClimbState Parse(const std::string& s) {
+    ClimbState c;
+    if (!s.empty()) std::sscanf(s.c_str(), "%lf;%lld;%lf;%d", &c.failedCeil, &c.failedDay, &c.prevGood, &c.plentyStreak);
+    return c;
+  }
+  std::string Serialize() const {
+    char buf[96];
+    std::snprintf(buf, sizeof(buf), "%.3f;%lld;%.3f;%d", failedCeil, failedDay, prevGood, plentyStreak);
+    return buf;
+  }
+};
+
+enum class ClimbAction { None, Raise, RevertToPrev, BlockedByCeiling, AtTop };
+struct ClimbResult {
+  ClimbAction action = ClimbAction::None;
+  double newLimit = 0.0;  // fps reales (Raise y RevertToPrev)
+  ClimbState state;
+};
+
+constexpr int kCeilingDays = 30;
+
+// failed: la regla de fallos detecto que no se sostuvo; plenty: fue sobrado toda la partida.
+static ClimbResult DecideClimb(ClimbState st, bool failed, bool plenty, double limitReal, int fgFactor, bool vrr,
+                               double hz, bool fluid, long long today) {
+  ClimbResult r;
+  if (st.failedCeil > 0 && today - st.failedDay > kCeilingDays) st.failedCeil = 0.0;  // techo caducado
+  if (failed) {
+    st.failedCeil = limitReal;
+    st.failedDay = today;
+    st.plentyStreak = 0;
+    if (st.prevGood > 0) {
+      r.action = ClimbAction::RevertToPrev;
+      r.newLimit = st.prevGood;
+    }
+    st.prevGood = 0.0;
+    r.state = st;
+    return r;
+  }
+  if (!plenty) {
+    st.plentyStreak = 0;
+    st.prevGood = 0.0;  // la subida se sostuvo una partida entera: queda confirmada
+    r.state = st;
+    return r;
+  }
+  st.prevGood = 0.0;
+  st.plentyStreak = std::min(st.plentyStreak + 1, 9);
+  const int need = fluid ? 1 : 2;
+  if (st.plentyStreak >= need) {
+    const double next = std::floor(NextLimitStep(limitReal, fgFactor, vrr, hz) + 1e-9);
+    if (next <= limitReal) {
+      r.action = ClimbAction::AtTop;
+    } else if (st.failedCeil > 0 && next >= st.failedCeil - 0.5) {
+      r.action = ClimbAction::BlockedByCeiling;
+    } else {
+      r.action = ClimbAction::Raise;
+      r.newLimit = next;
+      st.prevGood = limitReal;
+      st.plentyStreak = 0;
+    }
+  }
+  r.state = st;
   return r;
 }

@@ -1,4 +1,4 @@
-# Guía de uso de FlatPace 0.44
+# Guía de uso de FlatPace 0.45
 
 Esta guía describe la versión actual. Los cambios entre versiones están en el [historial](CHANGELOG.md).
 
@@ -36,11 +36,13 @@ Al pie de la barra: **Aplicar límites** (si está apagado, la app solo mide), *
 |---|---|---|
 | **Primera** | Mide toda la partida. Al cerrar el juego, decide y guarda el límite: *"Límite para la próxima partida de …"* | Jugar con normalidad |
 | **Segunda** | Comprueba que el juego va al ritmo del límite: **"Límite funcionando"**. El límite queda **aceptado** | Nada |
-| **Siguientes** | Solo mide y vigila. Al cerrar, si el juego no sostuvo el límite de forma continuada, lo baja para la próxima vez | Nada |
+| **Siguientes** | Mide y vigila. Al cerrar, si el juego no sostuvo el límite de forma continuada, lo baja; si fue **sobrado** toda la partida, lo **sube** un 13 % (sin pasar del máximo de tu pantalla) | Nada |
 
 **¿Lo quieres antes?** En *Ahora*, el botón **Aplicar ya** guarda la recomendación del momento. Reinicia el juego para que el driver lo aplique. Al cerrar, la app lo afina con toda la partida.
 
-**¿Cuándo se baja un límite aceptado?** Solo si el juego fue más de un 13 % por debajo del límite, en tramos de al menos 5 segundos, durante al menos el 10 % de la partida y un minuto en total. Las bajadas más cortas se tratan como eventos aislados. La app **nunca sube un límite sola**: para recalcularlo, usa *Deshacer*.
+**¿Cuándo se baja un límite aceptado?** Solo si el juego fue más de un 13 % por debajo del límite, en tramos de al menos 5 segundos, durante al menos el 10 % de la partida y un minuto en total. Las bajadas más cortas se tratan como eventos aislados.
+
+**¿Cuándo se sube?** Con G-SYNC/FreeSync y sin generación de fotogramas, si el juego fue **sobrado** toda la partida: al menos 3 minutos con el límite, ni un tramo por debajo y casi todos los fotogramas esperando al limitador. Con *Fluidez* basta una partida así; con *Estabilidad* hacen falta dos seguidas. Las reglas eligen el límite con prudencia, y muchos juegos rinden más con un límite puesto que sin él, así que la app va subiendo poco a poco hasta lo que el juego sostiene de verdad. Si una subida no se sostiene, vuelve al límite anterior y no lo vuelve a intentar durante 30 días. Para desactivarlo, añade `subir-solo=no` a `equipo.txt`.
 
 ## 5. Prioridad: Estabilidad o Fluidez
 
@@ -98,7 +100,7 @@ Es una ventana propia y transparente: no toca el juego. Desde la 0.44 la dibuja 
 
 ## 10. Avisos y deshacer
 
-- **Avisos en ámbar** (en *Juegos* y en *Ahora*): el juego no sostiene su límite, va claramente mejor que cuando se decidió (por ejemplo, tras bajar ajustes), la generación de fotogramas está al revés que cuando se aplicó, o **podría sostener un límite más alto**: con el límite puesto, la app estima la capacidad real del juego y, si llega al siguiente escalón, te lo sugiere (*"Podría sostener ~X FPS reales"*). Nunca lo sube sola: para aplicarlo, pulsa *Deshacer* y la app lo recalculará.
+- **Avisos en ámbar** (en *Juegos* y en *Ahora*): el juego no sostiene su límite, va claramente mejor que cuando se decidió (por ejemplo, tras bajar ajustes), la generación de fotogramas está al revés que cuando se aplicó, o, con un límite **manual**, **podría sostener uno más alto** (*"Va sobrado con su límite…"*): la app no cambia los límites manuales, así que solo te lo sugiere. Los límites automáticos suben solos (sección 4).
 - **En el registro** verás además la capacidad estimada con el límite puesto (*"sin límite ~X fps"*), las **fases** de la partida (cambios de zona o de ajustes) y, en el resumen, la **memoria del juego**: lo que sostiene según todas tus partidas.
 - **Deshacer un juego:** botón *Deshacer* en su fila. Vuelve exactamente a como estaba; si "Aplicar límites" está activado, se recalcula en la próxima partida.
 - **Deshacer todo:** *Deshacer todos los cambios* (la app pasa a solo medir) o doble clic en `Deshacer cambios.bat`.

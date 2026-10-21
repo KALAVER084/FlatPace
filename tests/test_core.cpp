@@ -905,6 +905,74 @@ TEST(RightEdgeNeverRedraws) {
   }
 }
 
+TEST(ClimbLadderToCeiling) {
+  // Megabonk: empieza en 189 (Estabilidad) y va sobrado; con Fluidez sube cada partida hasta el
+  // techo de la pantalla (225 a 240 Hz) y ahi se detiene.
+  ClimbState st;
+  double limit = 189;
+  std::vector<double> path{limit};
+  for (int session = 0; session < 6; ++session) {
+    ClimbResult r = DecideClimb(st, false, true, limit, 1, true, 240.0, true, 1000 + session);
+    st = r.state;
+    if (r.action == ClimbAction::Raise) limit = r.newLimit;
+    path.push_back(limit);
+  }
+  CHECK_NEAR(path[1], 213, 1e-9);  // 189 x 1,13
+  CHECK_NEAR(limit, 225, 1e-9);    // techo de la pantalla
+  // Con Estabilidad hacen falta dos partidas seguidas yendo sobrado.
+  ClimbState s2;
+  ClimbResult a = DecideClimb(s2, false, true, 189, 1, true, 240.0, false, 1000);
+  CHECK(a.action == ClimbAction::None);
+  ClimbResult b = DecideClimb(a.state, false, true, 189, 1, true, 240.0, false, 1001);
+  CHECK(b.action == ClimbAction::Raise);
+}
+
+TEST(ClimbRevertsAndRemembersCeiling) {
+  // Greylock: 100 va sobrado en la zona ligera; sube a 113; en la zona pesada falla: vuelve a 100
+  // (no al ritmo superado el 90 % del tiempo) y no vuelve a intentarlo durante 30 dias.
+  ClimbState st;
+  ClimbResult r = DecideClimb(st, false, true, 100, 1, true, 240.0, true, 2000);
+  CHECK(r.action == ClimbAction::Raise);
+  CHECK_NEAR(r.newLimit, 113, 1e-9);
+  r = DecideClimb(r.state, true, false, 113, 1, true, 240.0, true, 2001);
+  CHECK(r.action == ClimbAction::RevertToPrev);
+  CHECK_NEAR(r.newLimit, 100, 1e-9);
+  r = DecideClimb(r.state, false, true, 100, 1, true, 240.0, true, 2002);
+  CHECK(r.action == ClimbAction::BlockedByCeiling);
+  // Pasados 30 dias, el techo caduca y se puede volver a intentar.
+  r = DecideClimb(r.state, false, true, 100, 1, true, 240.0, true, 2040);
+  CHECK(r.action == ClimbAction::Raise);
+  // Un fallo sin subida previa no vuelve a nada (lo resuelve la regla de fallos), pero anota el techo.
+  ClimbState s3;
+  ClimbResult f = DecideClimb(s3, true, false, 150, 1, true, 240.0, true, 3000);
+  CHECK(f.action == ClimbAction::None);
+  CHECK_NEAR(f.state.failedCeil, 150, 1e-9);
+  // El estado se guarda y se recupera igual.
+  ClimbState back = ClimbState::Parse(r.state.Serialize());
+  CHECK(back.prevGood == r.state.prevGood && back.failedDay == r.state.failedDay);
+}
+
+TEST(ClimbNoPingPongAcrossSessions) {
+  // Un juego que sostiene 105 fps en sus zonas pesadas, jugado alternando zonas ligeras (va sobrado) y
+  // pesadas: como mucho una partida fallida en 60 partidas (dos meses), sin bucle subir-bajar.
+  ClimbState st;
+  double limit = 100;
+  int failures = 0, raises = 0;
+  for (int session = 0; session < 60; ++session) {
+    const bool heavy = session % 2 == 1;
+    const bool failed = heavy && limit > 105 * 1.13;  // en la zona pesada no llega
+    const bool plenty = !heavy && !failed;
+    ClimbResult r = DecideClimb(st, failed, plenty, limit, 1, true, 240.0, true, 5000 + session);
+    st = r.state;
+    if (failed) ++failures;
+    if (r.action == ClimbAction::Raise) { limit = r.newLimit; ++raises; }
+    if (r.action == ClimbAction::RevertToPrev) limit = r.newLimit;
+  }
+  CHECK(failures <= 2);           // una por cada caducidad del techo (30 dias)
+  CHECK(raises <= 4);
+  CHECK(limit >= 100 && limit <= 105 * 1.13);
+}
+
 int main() {
   std::printf("Pruebas de FlatPace (src/core)\n");
   RUN(Percentiles);
@@ -948,6 +1016,9 @@ int main() {
   RUN(ScreenModeAveragesGeneratedImages);
   RUN(LeftEdgeValuesStayPut);
   RUN(RightEdgeNeverRedraws);
+  RUN(ClimbLadderToCeiling);
+  RUN(ClimbRevertsAndRemembersCeiling);
+  RUN(ClimbNoPingPongAcrossSessions);
   RUN(VerifyDirectMatch);
   RUN(VerifyWithFrameGeneration);
   RUN(VerifyByDetectedCap);
