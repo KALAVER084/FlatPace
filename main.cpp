@@ -129,7 +129,7 @@ static std::atomic<bool> g_quit{false};
 static std::atomic<int> g_lang{0};
 static const char* T(const char* es, const char* en) { return g_lang == 1 ? en : es; }
 
-static constexpr const char* kVersion = "0.51";
+static constexpr const char* kVersion = "0.51.1";
 
 // Carpeta donde esta este .exe.
 static std::wstring ExeDirectory() {
@@ -650,6 +650,21 @@ class PresentMonReader {
                 "  separar fotogramas reales y generados.");
     }
     bool simTrusted = simCount >= kSimTrustFrames;
+    // Si los marcadores desaparecen, dejar de confiar en ellos: con generacion de fotogramas nunca hay
+    // mas de 3 generados seguidos (modo x4), asi que una racha mas larga significa que el juego dejo de
+    // emitirlos (Space Marine 2 lo hace al desactivar la generacion). Hasta la 0.51 la confianza era
+    // permanente y, a partir de ahi, todos los fotogramas se contaban como generados.
+    int& simMiss = simMiss_[s.pid];
+    if (simValid) {
+      simMiss = 0;
+    } else if (simTrusted && ++simMiss > kMaxGeneratedRun) {
+      simCount = 0;
+      simTrusted = false;
+      accum_[s.swapchain] = 0.0;  // lo acumulado de la racha era de fotogramas reales mal contados
+      accumGpu_[s.swapchain] = 0.0;
+      Message("Marcadores de simulacion (Reflex) desaparecidos (el juego dejo de emitirlos, por ejemplo al\n"
+              "  desactivar la generacion de fotogramas): cuento los fotogramas como reales hasta que vuelvan.");
+    }
     if (simTrusted && !simValid) s.generated = true;
 
     // El intervalo real suma todas las presentaciones desde el ultimo fotograma real.
@@ -694,7 +709,8 @@ class PresentMonReader {
   int colPcLat_ = -1, colGpuLat_ = -1;
   int colApp_ = -1, colPid_ = -1, colSim_ = -1, colMode_ = -1;
   static constexpr int kSimTrustFrames = 60;
-  std::map<DWORD, int> simSeen_;
+  static constexpr int kMaxGeneratedRun = 4;  // mas generados seguidos que esto: los marcadores se fueron
+  std::map<DWORD, int> simSeen_, simMiss_;
   std::map<std::string, double> accum_;
   std::map<std::string, double> accumGpu_;
   std::set<std::string> seenTypes_;
