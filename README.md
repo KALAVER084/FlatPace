@@ -4,7 +4,7 @@
 
 **FlatPace mide tus juegos y aplica el límite de FPS que hace que vayan lo más estables posible.** Hace en Windows lo que la Steam Deck hace en su sistema: un ritmo constante se siente más fluido que unos FPS más altos pero irregulares.
 
-Versión actual: **0.45** · Windows 10 (1803 o posterior) y Windows 11 · [Guía de uso](GUIA.md) · [Documentación técnica](TECNICO.md) · [Historial de cambios](CHANGELOG.md) · [Licencia](LICENSE) · [English](README.en.md)
+Versión actual: **0.46** · Windows 10 (1803 o posterior) y Windows 11 · [Guía de uso](GUIA.md) · [Documentación técnica](TECNICO.md) · [Historial de cambios](CHANGELOG.md) · [Licencia](LICENSE) · [English](README.en.md)
 
 ## Qué hace
 

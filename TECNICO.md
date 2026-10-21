@@ -1,4 +1,4 @@
-# Documentación técnica de FlatPace 0.45
+# Documentación técnica de FlatPace 0.46
 
 Este documento explica cómo funciona FlatPace por dentro: arquitectura, algoritmos, fórmulas, formatos de datos y las fuentes en que se basan sus decisiones.
 
@@ -71,7 +71,7 @@ Si el monitor ofrece otras frecuencias en la resolución actual y alguna permite
 3. **Aceptación:** un límite verificado queda aceptado (se guarda) y ya no se recalcula.
 4. **Límites manuales** (puestos por el usuario): se aplican igual (con VRR, límite + VSync del driver) y se verifican, pero no pasan por la decisión al cerrar ni por la regla de fallos; solo se informa si el juego no los sostuvo.
 5. **Regla de fallos** (al cerrar cada partida con límite aceptado): se baja solo si el juego fue más de un 13 % por debajo, en tramos de al menos 5 s, durante al menos el 10 % del tiempo y 60 s en total. Con VRR, al ritmo superado el 90 % del tiempo (percentil 10 de los ritmos por segundo); sin VRR, al siguiente divisor. Nunca se sube automáticamente.
-6. **Subida automática** (`DecideClimb` en `src/core/decision.h`; desde la 0.45, con VRR y sin generación de fotogramas, límites no manuales): al cerrar, si el juego fue sobrado **toda la partida** (≥ 3 min con el límite funcionando, sin tramos por debajo, ≤ 1 % de segundos sueltos más de un 13 % por debajo, y > 98 % de los fotogramas de la partida en el límite según el modelo de datos censurados), el límite sube al siguiente escalón: mín(límite × 1,13, techo VRR). Con *Fluidez* basta una partida; con *Estabilidad*, dos seguidas. Protecciones contra el ping-pong: si una subida falla (regla de fallos), se vuelve al límite anterior en lugar de al ritmo superado el 90 % del tiempo; el límite que falló se guarda como techo 30 días y no se sube hasta él. Estado por juego en `equipo.txt` (`escalada|juego.exe`: techo;día;anterior;racha); *Deshacer* lo borra; `subir-solo=no` lo desactiva. Validado con las grabaciones: Megabonk a 195 (sobrado, sube a 220) y Greylock a 83, 90 y 100 (sin subida: 97-98 % en el límite).
+6. **Subida automática** (`DecideClimb` en `src/core/decision.h`; desde la 0.45, con VRR y sin generación de fotogramas, límites no manuales): al cerrar, si el juego fue sobrado **toda la partida** (≥ 3 min con el límite funcionando, sin tramos por debajo, ≤ 1 % de segundos sueltos más de un 13 % por debajo, y > 98 % de los fotogramas de la partida en el límite según el modelo de datos censurados), el límite sube al siguiente escalón: mín(límite × 1,13, techo VRR). Con *Fluidez* basta una partida; con *Estabilidad*, dos seguidas. Protecciones contra el ping-pong: si una subida falla (regla de fallos), se vuelve al límite anterior en lugar de al ritmo superado el 90 % del tiempo; el límite que falló se guarda como techo 30 días y no se sube hasta él. Estado por juego en `equipo.txt` (`escalada|juego.exe`: techo;día;anterior;racha); *Deshacer* lo borra. En modo *Solo sugerir* (`subir-solo=no`, elegible en *Juegos*), la subida se guarda como `sugerencia|juego.exe` y se aplica con el botón *Aplicar sugerencia*, por el mismo camino que *Fijar…* pero como límite automático y con el límite anterior guardado para volver a él si falla. Las bajadas son automáticas en ambos modos. Validado con las grabaciones: Megabonk a 195 (sobrado, sube a 220) y Greylock a 83, 90 y 100 (sin subida: 97-98 % en el límite).
 
 ## 5. Aplicación en el driver de NVIDIA (NVAPI)
 
@@ -113,7 +113,7 @@ Sin interfaz, en `%LOCALAPPDATA%\FlatPace\equipo.txt` (una línea `clave=valor`)
 | Clave | Efecto |
 |---|---|
 | `rendimiento-maximo=no` | No acompañar los límites de *Preferir rendimiento máximo* (los cambios ya aplicados lo pierden al reaplicarse o al deshacerlos). |
-| `subir-solo=no` | No subir los límites automáticamente cuando el juego va sobrado. |
+| `subir-solo=no` | Modo *Solo sugerir* (se elige también en *Juegos* → *Ajuste de límites*): las subidas se sugieren con un botón en lugar de aplicarse solas. |
 | `overlay=clasico` | Usar siempre el overlay clásico (dibujado con el procesador) en lugar del de la GPU. |
 | `divisores-siempre=si` | Usa siempre divisores de los Hz, aunque G-SYNC/FreeSync actúe. Para pantallas que parpadean con VRR (algunas OLED y VA). La sección *Equipo* lo indica en la fila *VRR*. |
 

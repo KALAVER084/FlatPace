@@ -2,6 +2,12 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). La versión más reciente va primero.
 
+## 0.46
+- **Nuevo: interruptor "Ajuste de límites"** en *Juegos*, debajo de la prioridad: **Automático** (por defecto: los límites suben solos cuando el juego va sobrado) o **Solo sugerir** (la app lo avisa y la fila del juego muestra el botón **Aplicar sugerencia**). Antes, la única forma de elegir era editar `equipo.txt`.
+- **Aplicar sugerencia** sube el límite aunque el juego no esté abierto (por el mismo camino que *Fijar…*), pero lo deja como límite automático y con las mismas protecciones que las subidas automáticas: si no se sostiene, vuelve al límite anterior y guarda el techo. La sugerencia se conserva al reiniciar la app y se descarta si el límite actual falla o se deshace.
+- **En ambos modos, las bajadas son automáticas:** un límite que el juego no sostiene siempre empeora el ritmo. Para control total sobre un juego sigue estando *Fijar…*.
+- **Corregido:** el texto de la sección de prioridad decía que los límites aplicados "no cambian solos", algo que ya no era cierto; ahora dice que cambiar la prioridad no los recalcula.
+
 ## 0.45
 - **Nuevo: los límites suben solos cuando el juego va sobrado.** Las reglas eligen el límite con una partida sin límite, y eso exagera lo que el juego necesita: muchos juegos rinden más con un límite puesto (Megabonk sostenía 225 FPS cuando las reglas daban 189-215). Ahora, con G-SYNC/FreeSync y sin generación de fotogramas, si el juego fue sobrado **toda la partida** (al menos 3 minutos con el límite, ni un tramo por debajo y más del 98 % de los fotogramas esperando al limitador), el límite sube al siguiente escalón: un 13 % más, sin pasar del máximo de la pantalla. Con *Fluidez* basta una partida así; con *Estabilidad*, dos seguidas. El usuario no tiene que hacer nada.
 - **Protecciones contra el ping-pong:** si una subida no se sostiene, la app vuelve al límite anterior (que sí se sostenía) y guarda el que falló como techo durante 30 días, sin volver a subir hasta él. *Deshacer* borra ese estado; `subir-solo=no` en `equipo.txt` desactiva las subidas. Con límites manuales, o fuera de su alcance, se mantiene la sugerencia.

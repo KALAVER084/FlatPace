@@ -1,4 +1,4 @@
-# Guía de uso de FlatPace 0.45
+# Guía de uso de FlatPace 0.46
 
 Esta guía describe la versión actual. Los cambios entre versiones están en el [historial](CHANGELOG.md).
 
@@ -42,7 +42,7 @@ Al pie de la barra: **Aplicar límites** (si está apagado, la app solo mide), *
 
 **¿Cuándo se baja un límite aceptado?** Solo si el juego fue más de un 13 % por debajo del límite, en tramos de al menos 5 segundos, durante al menos el 10 % de la partida y un minuto en total. Las bajadas más cortas se tratan como eventos aislados.
 
-**¿Cuándo se sube?** Con G-SYNC/FreeSync y sin generación de fotogramas, si el juego fue **sobrado** toda la partida: al menos 3 minutos con el límite, ni un tramo por debajo y casi todos los fotogramas esperando al limitador. Con *Fluidez* basta una partida así; con *Estabilidad* hacen falta dos seguidas. Las reglas eligen el límite con prudencia, y muchos juegos rinden más con un límite puesto que sin él, así que la app va subiendo poco a poco hasta lo que el juego sostiene de verdad. Si una subida no se sostiene, vuelve al límite anterior y no lo vuelve a intentar durante 30 días. Para desactivarlo, añade `subir-solo=no` a `equipo.txt`.
+**¿Cuándo se sube?** Con G-SYNC/FreeSync y sin generación de fotogramas, si el juego fue **sobrado** toda la partida: al menos 3 minutos con el límite, ni un tramo por debajo y casi todos los fotogramas esperando al limitador. Con *Fluidez* basta una partida así; con *Estabilidad* hacen falta dos seguidas. Las reglas eligen el límite con prudencia, y muchos juegos rinden más con un límite puesto que sin él, así que la app va subiendo poco a poco hasta lo que el juego sostiene de verdad. Si una subida no se sostiene, vuelve al límite anterior y no lo vuelve a intentar durante 30 días. Si prefieres decidir tú, elige **Solo sugerir** en *Juegos* → *Ajuste de límites*: la app te avisará de que el juego va sobrado y mostrará el botón **Aplicar sugerencia**, con las mismas protecciones. Las bajadas son automáticas en ambos modos, porque un límite que el juego no sostiene siempre empeora el ritmo; si quieres control total sobre un juego, usa *Fijar…*.
 
 ## 5. Prioridad: Estabilidad o Fluidez
 

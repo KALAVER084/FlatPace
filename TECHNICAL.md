@@ -1,4 +1,4 @@
-# FlatPace 0.45 technical documentation
+# FlatPace 0.46 technical documentation
 
 This document explains how FlatPace works inside: architecture, algorithms, formulas, data formats and the sources behind its decisions. Some names (log lines, data files and keys) are in Spanish, as they appear in the program.
 
@@ -71,7 +71,7 @@ If the monitor offers other refresh rates at the current resolution and one of t
 3. **Acceptance:** a verified limit becomes accepted (it's saved) and is no longer recalculated.
 4. **Manual limits** (set by the user): applied the same way (with VRR, limit + driver VSync) and verified, but they skip the decision on close and the failure rule; the app only reports if the game didn't hold them.
 5. **Failure rule** (when each session with an accepted limit closes): the limit is lowered only if the game ran more than 13 % below it, in stretches of at least 5 s, for at least 10 % of the time and 60 s in total. With VRR, down to the pace exceeded 90 % of the time (10th percentile of per-second rates); without VRR, to the next divisor. It's never raised automatically.
-6. **Automatic raise** (`DecideClimb` in `src/core/decision.h`; since 0.45, with VRR and without frame generation, non-manual limits): on close, if the game had headroom **the whole session** (≥ 3 min with the limit working, no stretches below, ≤ 1 % of isolated seconds more than 13 % below, and > 98 % of the session's frames at the limit according to the censored-data model), the limit rises to the next step: min(limit × 1.13, VRR ceiling). With *Smoothness* one session is enough; with *Stability*, two in a row. Ping-pong protections: if a raise fails (failure rule), it goes back to the previous limit instead of the pace exceeded 90 % of the time; the limit that failed is kept as a ceiling for 30 days and it won't rise up to it. Per-game state in `equipo.txt` (`escalada|game.exe`: ceiling;day;previous;streak); *Undo* clears it; `subir-solo=no` turns it off. Validated with the recordings: Megabonk at 195 (headroom, rises to 220) and Greylock at 83, 90 and 100 (no raise: 97-98 % at the limit).
+6. **Automatic raise** (`DecideClimb` in `src/core/decision.h`; since 0.45, with VRR and without frame generation, non-manual limits): on close, if the game had headroom **the whole session** (≥ 3 min with the limit working, no stretches below, ≤ 1 % of isolated seconds more than 13 % below, and > 98 % of the session's frames at the limit according to the censored-data model), the limit rises to the next step: min(limit × 1.13, VRR ceiling). With *Smoothness* one session is enough; with *Stability*, two in a row. Ping-pong protections: if a raise fails (failure rule), it goes back to the previous limit instead of the pace exceeded 90 % of the time; the limit that failed is kept as a ceiling for 30 days and it won't rise up to it. Per-game state in `equipo.txt` (`escalada|game.exe`: ceiling;day;previous;streak); *Undo* clears it. In *Suggest only* mode (`subir-solo=no`, selectable in *Games*), the raise is saved as `sugerencia|game.exe` and applied with the *Apply suggestion* button, through the same path as *Set…* but as an automatic limit, keeping the previous limit to go back to if it fails. Lowering is automatic in both modes. Validated with the recordings: Megabonk at 195 (headroom, rises to 220) and Greylock at 83, 90 and 100 (no raise: 97-98 % at the limit).
 
 ## 5. Applying limits in the NVIDIA driver (NVAPI)
 
@@ -113,7 +113,7 @@ No interface; in `%LOCALAPPDATA%\FlatPace\equipo.txt` (one `key=value` line), wi
 | Key | Effect |
 |---|---|
 | `rendimiento-maximo=no` | Don't pair limits with *Prefer maximum performance* (changes already applied lose it when reapplied or undone). |
-| `subir-solo=no` | Don't raise limits automatically when the game has headroom. |
+| `subir-solo=no` | *Suggest only* mode (also chosen in *Games* → *Limit adjustment*): raises are suggested with a button instead of applied automatically. |
 | `overlay=clasico` | Always use the classic overlay (drawn by the CPU) instead of the GPU one. |
 | `divisores-siempre=si` | Always use divisors of the refresh rate, even when G-SYNC/FreeSync is active. For displays that flicker with VRR (some OLED and VA panels). The *System* section shows it in the *VRR* row. |
 

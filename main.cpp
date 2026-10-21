@@ -44,6 +44,7 @@
 #include <set>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 #ifdef _MSC_VER
@@ -126,7 +127,7 @@ static std::atomic<bool> g_quit{false};
 static std::atomic<int> g_lang{0};
 static const char* T(const char* es, const char* en) { return g_lang == 1 ? en : es; }
 
-static constexpr const char* kVersion = "0.45";
+static constexpr const char* kVersion = "0.46";
 
 // Carpeta donde esta este .exe.
 static std::wstring ExeDirectory() {
@@ -703,6 +704,7 @@ struct UiChange {
   int value = 0;    // fps en pantalla
   int fg = 1;       // factor de generacion de fotogramas
   bool manual = false;
+  double suggestFps = 0;  // modo "Solo sugerir": limite sugerido (fps reales), 0 si no hay
 };
 
 struct UiState {
@@ -718,6 +720,7 @@ struct UiState {
   std::string capText, bottleneck, recText, appliedText, notice, presentText;
   std::vector<UiChange> changes;
   std::map<std::string, std::string> warnings;  // .exe -> motivo para revisar su limite
+  std::map<std::string, double> suggestions;    // .exe -> subida sugerida (fps reales), modo "Solo sugerir"
   std::string vrrRange;     // rango de frecuencias declarado por el monitor
   bool vrrPossible = false, vrrNvKnown = false;
   int vrrState = 0;         // 0 sin datos, 1 no actua, 2 actua, 3 actua pero desactivado por el usuario
@@ -740,7 +743,9 @@ static std::atomic<bool> g_maxPerf{true};
 // (DirectComposition): overlay=clasico en equipo.txt. La app tambien vuelve a el sola si el de la
 // GPU no se puede iniciar o falla durante la partida.
 static std::atomic<bool> g_overlayClassic{false};
-// Subida automatica de los limites cuando el juego va sobrado (subir-solo=no en equipo.txt la desactiva).
+// Ajuste de limites: automatico (sube solo cuando el juego va sobrado) o "Solo sugerir" (muestra la
+// sugerencia con un boton para aplicarla). Se elige en Juegos (subir-solo en equipo.txt). Las bajadas
+// por la regla de fallos son automaticas en ambos modos.
 static std::atomic<bool> g_autoRaise{true};
 // Rango de VRR del monitor segun su EDID (0 = desconocido): el rango FreeSync si lo declara, si no
 // el rango de frecuencias. Por encima del maximo el VRR deja de actuar; por debajo del minimo, el
@@ -753,6 +758,7 @@ static std::atomic<bool> g_applyNowRequest{false};
 // Limites manuales pedidos desde la ventana: (.exe, fps en pantalla).
 static std::mutex g_manualLimitMutex;
 static std::vector<std::pair<std::string, int>> g_manualLimitReq;
+static std::vector<std::string> g_applySuggestionReq;  // "Aplicar sugerencia" (con g_manualLimitMutex)
 static std::mutex g_undoOneMutex;
 static std::vector<std::string> g_undoOne;  // .exe cuyos cambios hay que deshacer
 static std::mutex g_manualMutex;
@@ -3551,6 +3557,8 @@ static void PublishChanges(const ChangeStore& store) {
     u.value = static_cast<int>(c.newValue);
     u.fg = std::max(1, c.fgFactor);
     u.manual = c.manual;
+    auto sg = g_ui.suggestions.find(exe);
+    if (sg != g_ui.suggestions.end() && !c.manual) u.suggestFps = sg->second;
     auto w = g_ui.warnings.find(exe);
     if (w != g_ui.warnings.end()) u.warning = w->second;
     g_ui.changes.push_back(u);
@@ -3715,6 +3723,13 @@ static void RunEngine(std::wstring presentMonPath) {
     Log("Cambios de una version anterior movidos a la carpeta de datos: %d\n", moved);
   if (ReadKv(L"equipo.txt", "rendimiento-maximo") == "no") g_maxPerf = false;
   if (ReadKv(L"equipo.txt", "subir-solo") == "no") g_autoRaise = false;
+  {
+    std::lock_guard<std::mutex> lock(g_ui.m);
+    for (const auto& [exe, c] : store.items) {
+      const std::string sv = ReadKv(L"equipo.txt", "sugerencia|" + exe);
+      if (!sv.empty() && !c.manual) g_ui.suggestions[exe] = std::atof(sv.c_str());
+    }
+  }
   if (nvOk && g_maxPerf) {
     int added = 0;
     for (auto& [exe, c] : store.items) {
@@ -4144,6 +4159,12 @@ static void RunEngine(std::wstring presentMonPath) {
         return r;
       };
       if (failed) {
+        // Una sugerencia pendiente deja de tener sentido si el limite actual ya no se sostiene.
+        WriteKv(L"equipo.txt", "sugerencia|" + session.exe, "");
+        {
+          std::lock_guard<std::mutex> lock(g_ui.m);
+          g_ui.suggestions.erase(session.exe);
+        }
         const bool revert = climbOk && cr.action == ClimbAction::RevertToPrev;
         Recommendation lower = revert ? VrrRec(cr.newLimit)
                                       : LowerAfterFailure(session.fail.secRates, c.vrr, c.fgFactor, session.expectedFps, hz);
@@ -4170,7 +4191,23 @@ static void RunEngine(std::wstring presentMonPath) {
         if (session.fail.failSecs > 0)
           Log("\n  Al cerrar: bajadas aisladas del limite (%.0f s, %.0f %% de la partida): no cambio nada.\n",
               session.fail.failSecs, session.fail.Percent());
-        if (climbOk && cr.action == ClimbAction::Raise) {
+        if (climbOk && cr.action == ClimbAction::Raise && !g_autoRaise) {
+          // Modo "Solo sugerir": no se aplica; la subida queda pendiente del boton de Juegos.
+          ClimbState kept = cr.state;
+          kept.prevGood = 0.0;
+          kept.plentyStreak = 0;
+          WriteKv(L"equipo.txt", "escalada|" + session.exe, kept.Serialize());
+          WriteKv(L"equipo.txt", "sugerencia|" + session.exe, Fmt("%.0f", cr.newLimit));
+          Log("\n  Al cerrar: el juego fue sobrado toda la partida con %.0f fps: sugiero subirlo a %.0f\n"
+              "  (modo Solo sugerir: se aplica con el boton de Juegos).\n", limitBefore, cr.newLimit);
+          {
+            std::lock_guard<std::mutex> lock(g_ui.m);
+            g_ui.suggestions[session.exe] = cr.newLimit;
+            g_ui.warnings[session.exe] = Fmt(T("Va sobrado: podría subir de %.0f a %.0f FPS.", "It has headroom: it could go from %.0f to %.0f FPS."),
+                                             limitBefore, cr.newLimit);
+          }
+          PublishChanges(store);
+        } else if (climbOk && cr.action == ClimbAction::Raise) {
           Log("\n  Al cerrar: el juego fue sobrado toda la partida con %.0f fps: lo subo a %.0f.\n", limitBefore, cr.newLimit);
           session.current = VrrRec(cr.newLimit);
           session.lowerPending = true;  // permite cambiar un limite ya comprobado
@@ -4237,12 +4274,21 @@ static void RunEngine(std::wstring presentMonPath) {
 
     // Limites manuales pedidos desde la ventana.
     {
-      std::vector<std::pair<std::string, int>> reqs;
+      // Limites manuales (Fijar...) y sugerencias aplicadas (con las protecciones de la subida automatica).
+      std::vector<std::tuple<std::string, int, bool>> reqs;  // exe, fps en pantalla, manual
       {
         std::lock_guard<std::mutex> lock(g_manualLimitMutex);
-        reqs.swap(g_manualLimitReq);
+        for (const auto& [e, f] : g_manualLimitReq) reqs.emplace_back(e, f, true);
+        g_manualLimitReq.clear();
+        std::vector<std::string> sug;
+        sug.swap(g_applySuggestionReq);
+        std::lock_guard<std::mutex> lock2(g_ui.m);
+        for (const auto& e : sug) {
+          auto it = g_ui.suggestions.find(e);
+          if (it != g_ui.suggestions.end()) reqs.emplace_back(e, static_cast<int>(it->second), false);
+        }
       }
-      for (const auto& [exe, fps] : reqs) {
+      for (const auto& [exe, fps, isManual] : reqs) {
         std::string name = g_gameLabels.count(exe) ? g_gameLabels[exe] : exe;
         std::string result;
         auto known = store.items.find(exe);
@@ -4257,6 +4303,7 @@ static void RunEngine(std::wstring presentMonPath) {
         if (vrrNow) desired.push_back({nv::VSYNCMODE_ID, nv::VSYNC_FORCEON});
         if (g_maxPerf) desired.push_back({nv::PREFERRED_PSTATE_ID, nv::PSTATE_PREFER_MAX});
         bool ok = nvOk;
+        const double previousReal = known != store.items.end() && known->second.fgFactor <= 1 ? known->second.newValue : 0.0;
         // Se parte de cero: se deshace lo anterior (puede incluir otros ajustes, como el VSync por intervalos).
         if (ok && known != store.items.end()) {
           ok = nvd.Revert(known->second);
@@ -4274,17 +4321,37 @@ static void RunEngine(std::wstring presentMonPath) {
           change.displayHz = 0;
           change.verified = false;
           change.vrr = vrrNow;
-          change.manual = true;
+          change.manual = isManual;
           store.items[exe] = change;
           store.Save();
           const bool running = session.exe == exe && session.pid != 0;
-          Log("\n[%5.0f s] LIMITE MANUAL para %s: %s.\n", session.T(now), name.c_str(), DescribeChange(change).c_str());
-          Log("          La app no lo cambiara; se comprueba al abrir el juego%s.\n", running ? " (reinicialo)" : "");
-          result = Fmt(running ? T("Límite manual para %s: %s. Reinicia el juego para aplicarlo.",
-                                   "Manual limit for %s: %s. Restart the game to apply it.")
-                               : T("Límite manual para %s: %s. Se aplicará al abrir el juego.",
-                                   "Manual limit for %s: %s. It will apply when you open the game."),
-                       name.c_str(), DescribeChange(change).c_str());
+          {
+            std::lock_guard<std::mutex> lock(g_ui.m);
+            g_ui.suggestions.erase(exe);
+          }
+          WriteKv(L"equipo.txt", "sugerencia|" + exe, "");
+          if (isManual) {
+            Log("\n[%5.0f s] LIMITE MANUAL para %s: %s.\n", session.T(now), name.c_str(), DescribeChange(change).c_str());
+            Log("          La app no lo cambiara; se comprueba al abrir el juego%s.\n", running ? " (reinicialo)" : "");
+            result = Fmt(running ? T("Límite manual para %s: %s. Reinicia el juego para aplicarlo.",
+                                     "Manual limit for %s: %s. Restart the game to apply it.")
+                                 : T("Límite manual para %s: %s. Se aplicará al abrir el juego.",
+                                     "Manual limit for %s: %s. It will apply when you open the game."),
+                         name.c_str(), DescribeChange(change).c_str());
+          } else {
+            // Sugerencia aplicada: si no se sostiene, se vuelve al limite anterior (como una subida automatica).
+            ClimbState cs = ClimbState::Parse(ReadKv(L"equipo.txt", "escalada|" + exe));
+            cs.prevGood = previousReal;
+            cs.plentyStreak = 0;
+            WriteKv(L"equipo.txt", "escalada|" + exe, cs.Serialize());
+            Log("\n[%5.0f s] SUGERENCIA APLICADA para %s: %s (antes %.0f). Si no la sostiene, vuelvo a %.0f.\n",
+                session.T(now), name.c_str(), DescribeChange(change).c_str(), previousReal, previousReal);
+            result = Fmt(running ? T("%s: límite subido a %s. Reinicia el juego para aplicarlo.",
+                                     "%s: limit raised to %s. Restart the game to apply it.")
+                                 : T("%s: límite subido a %s. Se aplicará al abrir el juego.",
+                                     "%s: limit raised to %s. It will apply when you open the game."),
+                         name.c_str(), DescribeChange(change).c_str());
+          }
           if (session.exe == exe) {
             session.expectMethod = Method::FpsLimit;
             session.expectedFps = static_cast<double>(screen) / k;
@@ -4300,7 +4367,7 @@ static void RunEngine(std::wstring presentMonPath) {
             session.verifyDeadline = now + cfg::kVerifySec;
           }
         } else {
-          result = Fmt(T("No pude poner el límite manual a %s: %s", "Couldn't set the manual limit for %s: %s"),
+          result = Fmt(T("No pude cambiar el límite de %s: %s", "Couldn't change the limit for %s: %s"),
                        name.c_str(), nvOk ? nvd.error.c_str() : T("driver de NVIDIA no disponible", "NVIDIA driver not available"));
           Log("\n[%5.0f s] %s\n", session.T(now), result.c_str());
         }
@@ -4329,6 +4396,11 @@ static void RunEngine(std::wstring presentMonPath) {
           store.items.erase(it);
           store.Save();
           WriteKv(L"equipo.txt", "escalada|" + exe, "");  // empezar de cero: sin techo ni subidas pendientes
+          WriteKv(L"equipo.txt", "sugerencia|" + exe, "");
+          {
+            std::lock_guard<std::mutex> lock(g_ui.m);
+            g_ui.suggestions.erase(exe);
+          }
           result = Fmt(T("Deshecho: %s vuelve a como estaba. Si estaba abierto, reinícialo.",
                          "Undone: %s is back to how it was. If it was open, restart it."), name.c_str());
           Log("\n[%5.0f s] Deshecho %s (pedido desde la ventana).\n", session.T(now), exe.c_str());
@@ -4354,7 +4426,14 @@ static void RunEngine(std::wstring presentMonPath) {
       g_applyMode = false;
       applyMode = lastApplyMode = false;
       Log("\n[%5.0f s] Deshacer todos los cambios (pedido desde la ventana):\n", session.T(now));
-      for (const auto& [exe, ch] : store.items) WriteKv(L"equipo.txt", "escalada|" + exe, "");
+      for (const auto& [exe, ch] : store.items) {
+        WriteKv(L"equipo.txt", "escalada|" + exe, "");
+        WriteKv(L"equipo.txt", "sugerencia|" + exe, "");
+      }
+      {
+        std::lock_guard<std::mutex> lock(g_ui.m);
+        g_ui.suggestions.clear();
+      }
       std::string result = UndoAll(nvd, store, nvOk);
       RestoreDisplay();
       Log("  %s\n  Modo cambiado a solo medir.\n", result.c_str());
@@ -5721,10 +5800,37 @@ static void PageGames(const View& v) {
     ImGui::PopTextWrapPos();
     ImGui::Dummy(ImVec2(0, 4 * scale));
     ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x * 0.85f);
-    ImGui::TextColored(kDim, "%s", T("Los límites ya aplicados no cambian solos: para recalcular un juego con el "
-                                     "nuevo criterio, usa su botón «Deshacer».",
-                                     "Limits already applied don't change on their own: to recalculate a game "
-                                     "with the new criterion, use its “Undo” button."));
+    ImGui::TextColored(kDim, "%s", T("Al cambiar la prioridad, los límites ya aplicados no se recalculan: para "
+                                     "hacerlo con el nuevo criterio, usa el botón «Deshacer» del juego.",
+                                     "Changing the priority doesn't recalculate limits already applied: to do it "
+                                     "with the new criterion, use the game's “Undo” button."));
+    ImGui::PopTextWrapPos();
+  }
+  ImGui::Dummy(ImVec2(0, 14 * scale));
+  Section(T("Ajuste de límites", "Limit adjustment"));
+  {
+    const bool autoNow = g_autoRaise;
+    const char* names[2] = {T("Automático", "Automatic"), T("Solo sugerir", "Suggest only")};
+    for (int i = 0; i <= 1; ++i) {
+      if (i == 1) ImGui::SameLine(0, 4 * scale);
+      const bool sel = (i == 0) == autoNow;
+      PrimaryButtonStyle(sel);
+      if (ImGui::Button(names[i], ImVec2(140 * scale, 0)) && !sel) {
+        g_autoRaise = i == 0;
+        WriteKv(L"equipo.txt", "subir-solo", i == 0 ? "" : "no");
+      }
+      PrimaryButtonEnd(sel);
+    }
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x * 0.85f);
+    ImGui::TextColored(kDim, "%s", autoNow
+        ? T("Automático (recomendado): si el juego va sobrado con su límite, la app lo sube sola un escalón; si no "
+            "lo sostiene, lo baja. Si una subida falla, vuelve al límite anterior.",
+            "Automatic (recommended): if the game has headroom with its limit, the app raises it one step on its own; "
+            "if it can't hold it, it lowers it. If a raise fails, it goes back to the previous limit.")
+        : T("Solo sugerir: si el juego va sobrado, la app te lo sugiere con un botón «Aplicar sugerencia». Si no "
+            "sostiene su límite, lo sigue bajando sola.",
+            "Suggest only: if the game has headroom, the app suggests it with an “Apply suggestion” button. If it "
+            "can't hold its limit, it still lowers it on its own."));
     ImGui::PopTextWrapPos();
   }
   ImGui::Dummy(ImVec2(0, 14 * scale));
@@ -5739,7 +5845,7 @@ static void PageGames(const View& v) {
       ImVec2 p = ImGui::GetCursorScreenPos();
       float w = ImGui::GetContentRegionAvail().x;
       float line = ImGui::GetTextLineHeightWithSpacing();
-      float wrapW = w - 160 * scale;
+      float wrapW = w - (c.suggestFps > 0 ? 360 : 160) * scale;
       float warnH = c.warning.empty() ? 0.0f
                     : ImGui::CalcTextSize(c.warning.c_str(), nullptr, false, wrapW).y + 6 * scale;
       float h = line * 2 + warnH + 22 * scale;
@@ -5761,6 +5867,22 @@ static void PageGames(const View& v) {
       ImGui::EndGroup();
       float bw = ImGui::CalcTextSize(T("Deshacer", "Undo")).x + ImGui::GetStyle().FramePadding.x * 2;
       float mw = ImGui::CalcTextSize(T("Fijar…", "Set…")).x + ImGui::GetStyle().FramePadding.x * 2;
+      if (c.suggestFps > 0) {
+        const std::string sl = Fmt(T("Aplicar sugerencia (%.0f)", "Apply suggestion (%.0f)"), c.suggestFps);
+        const float sw = ImGui::CalcTextSize(sl.c_str()).x + ImGui::GetStyle().FramePadding.x * 2;
+        ImGui::SetCursorScreenPos(ImVec2(p.x + w - bw - mw - sw - 30 * scale, p.y + (h - ImGui::GetFrameHeight()) * 0.5f));
+        PrimaryButtonStyle(true);
+        if (ImGui::Button(sl.c_str())) {
+          std::lock_guard<std::mutex> lock(g_manualLimitMutex);
+          g_applySuggestionReq.push_back(c.exe);
+        }
+        PrimaryButtonEnd(true);
+        if (ImGui::IsItemHovered())
+          ImGui::SetTooltip("%s", T("Sube el límite al valor sugerido. Si el juego no lo sostiene,\n"
+                                    "la app volverá sola al límite actual.",
+                                    "Raises the limit to the suggested value. If the game can't hold it,\n"
+                                    "the app will go back to the current limit on its own."));
+      }
       ImGui::SetCursorScreenPos(ImVec2(p.x + w - bw - mw - 22 * scale, p.y + (h - ImGui::GetFrameHeight()) * 0.5f));
       if (ImGui::Button(T("Fijar…", "Set…"))) RequestManual(c.exe, c.label, c.value, c.fg);
       if (ImGui::IsItemHovered())
