@@ -2,6 +2,9 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). La versión más reciente va primero.
 
+## 0.51.2
+- **Nuevo, solo en el registro:** en las partidas con generación de fotogramas, si el movimiento con ritmo plano está descompasado en un 10 % o más, el resumen explica la causa: la generación de fotogramas, no el límite (en Space Marine 2, en la misma partida, un 37 % con ella y un 0,5 % sin ella), y sugiere probar el juego sin ella si el movimiento se nota irregular. No cambia ningún ajuste ni ninguna decisión.
+
 ## 0.51.1
 - **Corregido: al desactivar la generación de fotogramas en mitad de una partida, todos los fotogramas se contaban como generados.** FlatPace distingue los fotogramas reales por los marcadores de Reflex que emiten juegos como Space Marine 2, y una vez que confiaba en ellos lo hacía para siempre; al desactivar la generación, el juego dejó de emitirlos y la app perdió todos los fotogramas reales. Ahora, tras más de 4 fotogramas seguidos sin marcador (con generación nunca hay más de 3 generados seguidos), deja de confiar en ellos y vuelve a hacerlo cuando reaparecen. Arregla también los tramos de menús, cargas y escenas de las partidas con generación, donde el juego tampoco los emite.
 - **Medido: el movimiento descompasado de Space Marine 2 lo causa la generación de fotogramas.** En una misma partida, alternando: con generación, el 37,3 % de los fotogramas de ritmo plano tienen el movimiento descompasado (con 56 reales, por el límite de 112 en pantalla); sin ella, el 0,5 % (con 77 reales).

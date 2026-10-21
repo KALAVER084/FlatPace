@@ -129,7 +129,7 @@ static std::atomic<bool> g_quit{false};
 static std::atomic<int> g_lang{0};
 static const char* T(const char* es, const char* en) { return g_lang == 1 ? en : es; }
 
-static constexpr const char* kVersion = "0.51.1";
+static constexpr const char* kVersion = "0.51.2";
 
 // Carpeta donde esta este .exe.
 static std::wstring ExeDirectory() {
@@ -2061,10 +2061,17 @@ static void PrintSessionSummary(const Session& s, double hz) {
     // Movimiento descompasado aunque el ritmo sea plano (la grafica no lo muestra): error de animacion
     // mayor que el 13 % del fotograma. En las grabaciones: Greylock a 130 y Megabonk a 225, ~2 %;
     // Greylock sin limite, 16 %; Space Marine 2 y Control Resonant con generacion de fotogramas, 17-18 %.
-    if (s.flatN > 1000)
+    if (s.flatN > 1000) {
+      const double flatPct = 100.0 * s.flatOverRel / s.flatN;
       Log("\n  Movimiento con ritmo plano: %.1f %% de fotogramas descompasados de forma perceptible"
           " (error de animacion mayor que el 13 %% del fotograma)",
-          100.0 * s.flatOverRel / s.flatN);
+          flatPct);
+      // Con generacion de fotogramas, el descompas lo causa la propia generacion (Space Marine 2, en la
+      // misma partida: 37 % con ella, 0,5 % sin ella); el limite no lo arregla ni lo empeora.
+      if (FrameGenInvolved(s) && flatPct >= 10.0)
+        Log("\n    -> Lo causa la generacion de fotogramas, no el limite: la grafica se ve plana, pero el\n"
+            "       movimiento no. Si lo notas irregular, prueba el juego sin generacion de fotogramas.");
+    }
   } else {
     Log("\n  Error de animacion: no disponible para este juego");
   }
