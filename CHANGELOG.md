@@ -2,6 +2,12 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). La versión más reciente va primero.
 
+## 0.48.1
+Correcciones a partir de la primera subida automática real (Greylock, 111 → 125 FPS).
+- **Corregido: una subida que no se sostiene ya se detecta aunque la mediana se mantenga.** La regla de fallos solo vigilaba la mediana del ritmo, y en Greylock la mediana nunca cayó a 125 FPS, pero en las zonas pesadas el 1 % bajo causado por el juego se hundió más de un 13 % por debajo del límite un 34-48 % del tiempo (a 111, un 2,5 %). La subida venía de una partida que no pasó por esas zonas. Ahora, en los límites que la app ajusta sola (con G-SYNC/FreeSync y sin generación de fotogramas), el mismo criterio se aplica también al 1 % bajo causado por el juego: si se hunde de forma sostenida (tramos de al menos 5 s que sumen un minuto y el 10 % de la partida), la app vuelve al límite anterior, o baja un escalón si no lo hay, y anota el techo. "Va sobrado" exige además que el 1 % bajo no se haya hundido. Comprobado con las grabaciones: a 111 se sostiene; las dos partidas a 125 fallan.
+- **Corregido: el modo *Solo sugerir* no llegaba a mostrar el botón *Aplicar sugerencia*** (0.46): la lógica de las subidas solo se activaba en modo *Automático*. Ahora funciona en ambos modos, y solo la subida en sí depende del modo.
+- **Corregido: la referencia "antes" de la variación se guardaba también en partidas con un límite ya aceptado** de una sesión anterior (en Greylock, ±0,07 ms con el límite de 111). Ahora solo se guarda sin ningún límite, y las referencias guardadas hasta ahora se descartan (se vuelven a tomar en la próxima partida sin límite).
+
 ## 0.48
 - **Nuevo: la latencia del PC en el overlay,** en la fila de cifras, junto al 1 % bajo: *"latencia 24 ms"*. Con un límite fijado y sin generación de fotogramas, se compara con la latencia del juego sin límite, con el mismo estilo que la variación: *"latencia 18 ms (antes 22)"*. La referencia "antes" se guarda de las partidas sin límite y sin generación (`latencia-antes|juego.exe`). Solo en juegos con marcadores de Reflex/PC Latency; en los demás no aparece.
 - **Cambiado:** la cifra *"pantalla X"* solo se muestra cuando aporta: sin límite fijado, o si el ritmo en pantalla se aleja más de un 13 % del límite; si no, repetía lo que ya dice la etiqueta del límite.

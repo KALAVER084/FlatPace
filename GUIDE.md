@@ -1,4 +1,4 @@
-# FlatPace 0.48 user guide
+# FlatPace 0.48.1 user guide
 
 This guide describes the current version. Changes between versions are listed in the [changelog](CHANGELOG.md) (in Spanish). The app has an English interface: switch it with **ES | EN** at the bottom of the sidebar.
 
@@ -42,7 +42,7 @@ At the bottom of the sidebar: **Apply limits** (when off, the app only measures)
 
 **When is an accepted limit lowered?** Only if the game ran more than 13 % below the limit, in stretches of at least 5 seconds, for at least 10 % of the session and one minute in total. Shorter dips are treated as isolated events.
 
-**When is it raised?** With G-SYNC/FreeSync and without frame generation, if the game had **headroom** the whole session: at least 3 minutes with the limit, no stretch below it and almost all frames waiting on the limiter. With *Smoothness* one such session is enough; with *Stability* it takes two in a row. The rules pick the limit cautiously, and many games perform better with a limit than without one, so the app climbs step by step to what the game really holds. If a raise doesn't hold, it goes back to the previous limit and won't try again for 30 days. If you'd rather decide yourself, choose **Suggest only** in *Games* → *Limit adjustment*: the app will tell you the game has headroom and show an **Apply suggestion** button, with the same protections. Lowering is automatic in both modes, because a limit the game can't hold always worsens the pace; for full control over a game, use *Set…*.
+**When is it raised?** With G-SYNC/FreeSync and without frame generation, if the game had **headroom** the whole session: at least 3 minutes with the limit, no stretch below it (neither the median nor the 1 % low) and almost all frames waiting on the limiter. With *Smoothness* one such session is enough; with *Stability* it takes two in a row. The rules pick the limit cautiously, and many games perform better with a limit than without one, so the app climbs step by step to what the game really holds. If a raise doesn't hold, even if only in the heavy areas, it goes back to the previous limit and won't try again for 30 days. If you'd rather decide yourself, choose **Suggest only** in *Games* → *Limit adjustment*: the app will tell you the game has headroom and show an **Apply suggestion** button, with the same protections. Lowering is automatic in both modes, because a limit the game can't hold always worsens the pace; for full control over a game, use *Set…*.
 
 ## 5. Priority: Stability or Smoothness
 

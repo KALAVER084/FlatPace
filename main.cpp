@@ -127,7 +127,7 @@ static std::atomic<bool> g_quit{false};
 static std::atomic<int> g_lang{0};
 static const char* T(const char* es, const char* en) { return g_lang == 1 ? en : es; }
 
-static constexpr const char* kVersion = "0.48";
+static constexpr const char* kVersion = "0.48.1";
 
 // Carpeta donde esta este .exe.
 static std::wstring ExeDirectory() {
@@ -1738,6 +1738,10 @@ struct Session {
   // Regla de fallos de un limite aceptado: mas de un 13 % por debajo, en tramos de al
   // menos 5 s, durante al menos el 10 % de la partida y 1 minuto en total.
   FailureTracker fail;  // regla de fallos (tramos claramente por debajo del limite)
+  // El mismo criterio con el 1 % bajo causado por el juego (ventana de 20 s): en Greylock, a 125 fps
+  // la mediana nunca cayo pero el 1 % bajo se hundio un 34-48 % del tiempo en las zonas pesadas
+  // (a 111, un 2,5 %). Decide si una subida automatica se sostiene y si el juego va sobrado.
+  FailureTracker tailFail;
   int vrrOnCount = 0, vrrOffCount = 0;
   bool expectVrr = false;
 
@@ -1868,9 +1872,10 @@ static void PrintSessionSummary(const Session& s, double hz) {
     double swing = PaceSwingMs(msv);
     if (swing >= 0) {
       Log("\n  Variacion del ritmo percibido (ultimos minutos): +-%.2f ms", swing);
-      if (!s.appliedAtStart && !s.exe.empty() && s.gameSecs >= 60.0) {
-        // Partida sin limite de la app: es la referencia "antes" de este juego.
-        WriteKv(L"equipo.txt", "ritmo-antes|" + s.exe, Fmt("%.2f", swing));
+      if (!s.appliedAtStart && s.expectedFps <= 0 && !s.exe.empty() && s.gameSecs >= 60.0) {
+        // Partida sin ningun limite de la app: es la referencia "antes" de este juego. (Hasta la 0.48
+        // tambien se guardaba con un limite ya aceptado de una sesion anterior; por eso la clave es nueva.)
+        WriteKv(L"equipo.txt", "ritmo-antes2|" + s.exe, Fmt("%.2f", swing));
         Log(" (guardada como referencia sin limite)");
       } else if (s.baseSwing > 0) {
         Log(" | antes, sin limite: +-%.2f ms", s.baseSwing);
@@ -2039,7 +2044,7 @@ static void PrintSessionSummary(const Session& s, double hz) {
 // (modelo de datos censurados). Solo sin generacion de fotogramas.
 static bool PlentyWholeSession(const Session& s) {
   if (FrameGenInvolved(s) || !s.verified || s.expectedFps <= 0) return false;
-  if (s.fail.limPlaySecs < 180.0 || s.fail.failSecs > 0) return false;
+  if (s.fail.limPlaySecs < 180.0 || s.fail.failSecs > 0 || s.tailFail.failSecs > 0) return false;
   size_t below = 0;
   for (float r : s.fail.secRates)
     if (r < s.expectedFps * (1.0 - cfg::kJnd)) ++below;
@@ -4207,9 +4212,12 @@ static void RunEngine(std::wstring presentMonPath) {
       return;
     } else if (known->second.verified || session.accepted) {
       const AppliedChange& c = known->second;
-      const bool failed = session.fail.Failed();
       // Subida automatica (con G-SYNC/FreeSync y sin generacion de fotogramas): su estado por juego.
-      const bool climbOk = g_autoRaise && !c.manual && c.vrr && c.fgFactor <= 1 && !FrameGenInvolved(session);
+      // Ajustes de limites (incluida la subida automatica) en ambos modos; las sugerencias, segun el modo.
+      const bool climbOk = !c.manual && c.vrr && c.fgFactor <= 1 && !FrameGenInvolved(session);
+      // En estos limites, tambien falla si el 1 % bajo causado por el juego se hunde de forma sostenida.
+      const bool tailFailed = climbOk && !session.fail.Failed() && session.tailFail.Failed();
+      const bool failed = session.fail.Failed() || tailFailed;
       ClimbResult cr;
       const double limitBefore = session.expectedFps;
       if (climbOk) {
@@ -4235,10 +4243,18 @@ static void RunEngine(std::wstring presentMonPath) {
           g_ui.suggestions.erase(session.exe);
         }
         const bool revert = climbOk && cr.action == ClimbAction::RevertToPrev;
-        Recommendation lower = revert ? VrrRec(cr.newLimit)
-                                      : LowerAfterFailure(session.fail.secRates, c.vrr, c.fgFactor, session.expectedFps, hz);
-        Log("\n  Al cerrar: el limite no se sostuvo durante %.0f s (%.0f %% de la partida).\n",
-            session.fail.failSecs, session.fail.Percent());
+        // Si solo se hundio el 1 % bajo (la mediana se mantuvo), el ritmo superado el 90 % del tiempo
+        // seria el propio limite: se baja un escalon (un 13 %).
+        Recommendation lower = revert       ? VrrRec(cr.newLimit)
+                               : tailFailed ? VrrRec(std::floor(limitBefore / (1.0 + cfg::kJnd)))
+                                            : LowerAfterFailure(session.fail.secRates, c.vrr, c.fgFactor, session.expectedFps, hz);
+        if (tailFailed)
+          Log("\n  Al cerrar: el 1 %% bajo del juego quedo mas de un 13 %% por debajo del limite durante %.0f s\n"
+              "  (%.0f %% de la partida), aunque la mediana se mantuvo.\n",
+              session.tailFail.failSecs, session.tailFail.Percent());
+        else
+          Log("\n  Al cerrar: el limite no se sostuvo durante %.0f s (%.0f %% de la partida).\n",
+              session.fail.failSecs, session.fail.Percent());
         if (climbOk)
           Log("  No volvere a subir hasta %.0f fps durante 30 dias.\n", limitBefore);
         if (lower.valid) {
@@ -4253,7 +4269,8 @@ static void RunEngine(std::wstring presentMonPath) {
                       session.label.c_str(), limitBefore, cr.newLimit)
                 : Fmt(T("%s no sostuvo su límite durante el %.0f %% de la partida. En la próxima usaré: %s.",
                         "%s didn't hold its limit for %.0f %% of the session. Next time I'll use: %s."),
-                      session.label.c_str(), session.fail.Percent(), DescribeChange(nc->second).c_str());
+                      session.label.c_str(), tailFailed ? session.tailFail.Percent() : session.fail.Percent(),
+                      DescribeChange(nc->second).c_str());
           }
         }
       } else {
@@ -4276,7 +4293,7 @@ static void RunEngine(std::wstring presentMonPath) {
                                              limitBefore, cr.newLimit);
           }
           PublishChanges(store);
-        } else if (climbOk && cr.action == ClimbAction::Raise) {
+        } else if (climbOk && cr.action == ClimbAction::Raise && g_autoRaise) {
           Log("\n  Al cerrar: el juego fue sobrado toda la partida con %.0f fps: lo subo a %.0f.\n", limitBefore, cr.newLimit);
           session.current = VrrRec(cr.newLimit);
           session.lowerPending = true;  // permite cambiar un limite ya comprobado
@@ -4609,7 +4626,7 @@ static void RunEngine(std::wstring presentMonPath) {
         session.pid = found;
         session.exe = foundExe;
         {
-          std::string b = ReadKv(L"equipo.txt", "ritmo-antes|" + foundExe);
+          std::string b = ReadKv(L"equipo.txt", "ritmo-antes2|" + foundExe);
           if (!b.empty()) session.baseSwing = std::atof(b.c_str());
           std::string bl = ReadKv(L"equipo.txt", "latencia-antes|" + foundExe);
           if (!bl.empty()) session.baseLat = std::atof(bl.c_str());
@@ -4902,6 +4919,7 @@ static void RunEngine(std::wstring presentMonPath) {
         bool fgSame = kc != store.items.end() && ((kc->second.fgFactor > 1) == (st.FgFactor() > 1));
         if (session.expectedFps > 0 && (session.verified || session.accepted) && fgSame && st.medianMs > 0) {
           session.fail.Add(1000.0 / st.medianMs, session.expectedFps, dt);
+          if (const double gl = GameLowFps(session); gl > 0) session.tailFail.Add(gl, session.expectedFps, dt);
         }
       }
     }
