@@ -2,6 +2,10 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). La versión más reciente va primero.
 
+## 0.49
+- **Nuevo: prioridad por juego.** La prioridad global es el punto de partida de cada juego; con *Fluidez*, si un juego resulta inestable con su límite (el 1 % bajo causado por el juego se hunde de forma sostenida en dos partidas seguidas, con la regla de fallos aplicada al 1 % bajo), la app lo pasa a *Estabilidad*, lo anota en el registro y lo muestra en su fila de *Juegos* (*"· Estabilidad (elegida por la app)"*). Desde ese cierre actúa la regla de *Estabilidad*, que baja el límite partida a partida hasta uno que el juego sostenga también en sus zonas pesadas. Solo en esa dirección: con un límite que ya se sostiene, el juego parece estable precisamente porque el límite es el correcto, y volver a *Fluidez* lo subiría otra vez; con *Estabilidad*, un juego que va sobrado ya sube solo. La inestabilidad se mide con el límite puesto, porque sin límite se exagera (Megabonk varía mucho sin límite y es el juego más estable con él). Comprobado con las grabaciones: Greylock falla en sus tres partidas con *Fluidez* (16-33 % del tiempo), y Megabonk nunca. *Deshacer* lo olvida; `prioridad-auto=no` en `equipo.txt` lo desactiva. 193 pruebas automáticas.
+- **Cambiado:** un cambio de la prioridad global se aplica desde la siguiente partida de cada juego (antes, también a la recomendación en directo de la partida en curso).
+
 ## 0.48.3
 - **Cambiado: *Fluidez* es la prioridad por defecto y la recomendada** (antes, *Estabilidad*). Con las reglas validadas con partidas reales, *Fluidez* da límites más altos con caídas perceptibles alrededor del 1 % del tiempo, y con las subidas automáticas llega antes a lo que el juego sostiene. Solo afecta a instalaciones nuevas: una prioridad ya guardada se respeta. En la ventana, *Fluidez* aparece primero.
 

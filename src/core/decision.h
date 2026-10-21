@@ -218,3 +218,47 @@ static ClimbResult DecideClimb(ClimbState st, bool failed, bool plenty, double l
   r.state = st;
   return r;
 }
+
+// ---------------------------------------------------------------------------
+// Prioridad por juego: de Fluidez a Estabilidad si el juego es inestable con su limite
+// ---------------------------------------------------------------------------
+// La prioridad global es el punto de partida de cada juego. Con Fluidez, si el 1 % bajo causado por
+// el juego se hunde de forma sostenida (la regla de fallos aplicada al 1 % bajo) en dos partidas
+// seguidas, el juego pasa a Estabilidad. Solo en esa direccion: con un limite que ya se sostiene, el
+// juego parece estable precisamente porque el limite es el correcto, y volver a Fluidez lo subiria
+// otra vez (un ping-pong entre prioridades); con Estabilidad, un juego que va sobrado ya sube solo.
+// La medida se toma con el limite puesto: sin limite, la inestabilidad se exagera (Megabonk varia
+// mucho sin limite y es el juego mas estable con el).
+struct AutoPriority {
+  bool stability = false;  // la app eligio Estabilidad para este juego
+  int unstableStreak = 0;  // partidas seguidas con el 1 % bajo hundido (con Fluidez)
+
+  static AutoPriority Parse(const std::string& s) {
+    AutoPriority a;
+    int st = 0;
+    if (!s.empty()) std::sscanf(s.c_str(), "%d;%d", &st, &a.unstableStreak);
+    a.stability = st == 1;
+    return a;
+  }
+  std::string Serialize() const {
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%d;%d", stability ? 1 : 0, unstableStreak);
+    return buf;
+  }
+};
+
+constexpr int kUnstableSessions = 2;
+
+// tail: el 1 % bajo de la partida (sin el ultimo minuto). Una partida corta (< 3 min) no cuenta.
+static AutoPriority UpdateAutoPriority(AutoPriority a, bool fluidNow, const FailureTracker& tail) {
+  if (!fluidNow || a.stability) return a;
+  if (tail.Failed()) {
+    if (++a.unstableStreak >= kUnstableSessions) {
+      a.stability = true;
+      a.unstableStreak = 0;
+    }
+  } else if (tail.limPlaySecs >= 180.0) {
+    a.unstableStreak = 0;  // una partida larga y limpia corta la racha
+  }
+  return a;
+}

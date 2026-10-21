@@ -127,7 +127,7 @@ static std::atomic<bool> g_quit{false};
 static std::atomic<int> g_lang{0};
 static const char* T(const char* es, const char* en) { return g_lang == 1 ? en : es; }
 
-static constexpr const char* kVersion = "0.48.3";
+static constexpr const char* kVersion = "0.49";
 
 // Carpeta donde esta este .exe.
 static std::wstring ExeDirectory() {
@@ -735,6 +735,9 @@ struct UiState {
 static UiState g_ui;
 static std::atomic<bool> g_applyMode{true};
 static std::atomic<int> g_priority{1};  // 0 = estabilidad, 1 = fluidez (por defecto desde la 0.48.3)
+// Prioridad por juego: con Fluidez, un juego inestable con su limite pasa a Estabilidad
+// (prioridad-auto=no en equipo.txt lo desactiva). La prioridad global es el punto de partida.
+static std::atomic<bool> g_autoPriority{true};
 // Usar G-SYNC / FreeSync cuando actuen (automatico). Ajuste avanzado, sin interfaz:
 // "divisores-siempre=si" en equipo.txt fuerza los divisores de los Hz aunque haya VRR, para
 // pantallas que parpadean con VRR (algunas OLED y VA).
@@ -1651,6 +1654,7 @@ struct Session {
   std::vector<float> pcLatLimited, pcLatOther;
   double baseLat = -1.0;  // latencia del PC de este juego sin limite (guardada)
   bool climbHandled = false;  // la subida automatica se ocupo de este limite al cerrar (sin sugerencia)
+  bool fluid = true;          // prioridad de este juego: la global, o Estabilidad si la app la eligio
   // Coste de FlatPace durante la partida
   double engMsSum = 0.0, engMsMax = 0.0, cpuAtStart = -1.0, pmCpuAtStart = -1.0;
   double ovMsAtStart = 0.0;
@@ -2337,10 +2341,10 @@ static void ProcessSession(Session& ss, std::vector<FrameSample>& fresh, double 
     }
     ss.current = RecommendFor(st, hz, cfg::kMarginInitial);
     if (ss.vrrActive) {
-      Recommendation vr = RecommendVrr(Long(), st.WorkP99(), hz, st.FgFactor(), g_priority == 1,
+      Recommendation vr = RecommendVrr(Long(), st.WorkP99(), hz, st.FgFactor(), ss.fluid,
                                        HeldRate(st), capReal);
       if (vr.valid) ss.current = vr;
-    } else if (g_priority == 1) {
+    } else if (ss.fluid) {
       Recommendation fr = RecommendFluid(Long(), hz, st.FgFactor());
       if (fr.valid) ss.current = fr;
     }
@@ -2376,16 +2380,16 @@ static void ProcessSession(Session& ss, std::vector<FrameSample>& fresh, double 
     // (unos pocos tirones no se arreglan bajando el limite). Y nunca en cascada: tras
     // proponer un limite mas bajo, se espera a que se aplique y se compruebe.
     double period = 1000.0 / ss.current.realFps;
-    bool failing = g_priority == 1 ? !FluidHolds(Long(), period * 1.02)
+    bool failing = ss.fluid ? !FluidHolds(Long(), period * 1.02)
                                    : st.FractionRealOver(period * kHoldLateFactor) > kHoldFailLate;
     // Con el limite aceptado no se cambia nada: el contador solo alimenta el aviso
     // "el juego no esta sosteniendo este limite" (la decision es del usuario).
     ss.downCount = failing ? std::min(ss.downCount + 1, 1000) : 0;
-  } else if (g_priority == 1 || ss.vrrActive) {
+  } else if (ss.fluid || ss.vrrActive) {
     // Fluidez (o G-SYNC): decide con los ultimos minutos de juego; sube tras 30 s y baja
     // tras 10 s. Con G-SYNC solo cuenta un cambio de al menos un 5 %.
     Recommendation fr = ss.vrrActive
-                            ? RecommendVrr(Long(), st.WorkP99(), hz, st.FgFactor(), g_priority == 1,
+                            ? RecommendVrr(Long(), st.WorkP99(), hz, st.FgFactor(), ss.fluid,
                                            HeldRate(st), capReal)
                             : RecommendFluid(Long(), hz, st.FgFactor());
     if (!fr.valid) fr = RecommendFor(st, hz, cfg::kMarginInitial);
@@ -2395,7 +2399,7 @@ static void ProcessSession(Session& ss, std::vector<FrameSample>& fresh, double 
     ss.upCount = nxt > cur + minStep ? ss.upCount + 1 : 0;
     ss.downCount = nxt < cur - minStep ? ss.downCount + 1 : 0;
     if (ss.upCount >= cfg::kUpChecks || ss.downCount >= 10) {
-      if (g_priority == 1)
+      if (ss.fluid)
         Log("\n[%5.0f s] %s (prioridad: fluidez).\n", ss.T(now),
             nxt > cur ? "SUBIR limite: el juego alcanza un ritmo mas alto la mayor parte del tiempo"
                       : "BAJAR limite: el juego ya no alcanza este ritmo la mayor parte del tiempo");
@@ -3597,7 +3601,7 @@ static Recommendation SessionRec(const Session& ss, double hz) {
   in.vrrSecs = ss.vrrSecs;
   in.ownCapSecs = ss.ownCapSecs;
   in.ownCapRateSum = ss.ownCapRateSum;
-  in.fluid = g_priority == 1;
+  in.fluid = ss.fluid;
   in.hz = hz;
   in.capReal = ss.expectedFps > 0 && (ss.verified || ss.appliedAtStart) ? ss.expectedFps : 0.0;
   return DecideFromSession(in);
@@ -3628,6 +3632,8 @@ static void PublishChanges(const ChangeStore& store) {
     }
     u.label = lb->second;
     u.desc = DescribeChange(c);
+    if (g_autoPriority && g_priority == 1 && AutoPriority::Parse(ReadKv(L"equipo.txt", "prioridad|" + exe)).stability)
+      u.desc += T(" · Estabilidad (elegida por la app)", " · Stability (chosen by the app)");
     u.value = static_cast<int>(c.newValue);
     u.fg = std::max(1, c.fgFactor);
     u.manual = c.manual;
@@ -3797,6 +3803,7 @@ static void RunEngine(std::wstring presentMonPath) {
     Log("Cambios de una version anterior movidos a la carpeta de datos: %d\n", moved);
   if (ReadKv(L"equipo.txt", "rendimiento-maximo") == "no") g_maxPerf = false;
   if (ReadKv(L"equipo.txt", "subir-solo") == "no") g_autoRaise = false;
+  if (ReadKv(L"equipo.txt", "prioridad-auto") == "no") g_autoPriority = false;
   {
     std::lock_guard<std::mutex> lock(g_ui.m);
     for (const auto& [exe, c] : store.items) {
@@ -4223,7 +4230,26 @@ static void RunEngine(std::wstring presentMonPath) {
       // es lo que promete esa prioridad (sostener el limite incluso en los peores momentos). Con Fluidez
       // solo cuenta la mediana: acepta caidas en los momentos mas exigentes (en Greylock a 125, la
       // mediana se sostuvo el 100 % del tiempo y el 1 % bajo se hundio un 24-48 %).
-      const bool tailFailed = climbOk && g_priority == 0 && !failT.Failed() && tailT.Failed();
+      // Prioridad por juego: con Fluidez, el 1 % bajo hundido en dos partidas seguidas -> Estabilidad.
+      if (climbOk && g_autoPriority && session.fluid) {
+        const AutoPriority before = AutoPriority::Parse(ReadKv(L"equipo.txt", "prioridad|" + session.exe));
+        const AutoPriority after = UpdateAutoPriority(before, true, tailT);
+        WriteKv(L"equipo.txt", "prioridad|" + session.exe, after.Serialize());
+        if (after.stability) {
+          session.fluid = false;
+          Log("\n  Al cerrar: el 1 %% bajo se hundio en %d partidas seguidas (en esta, %.0f %% del tiempo): %s es\n"
+              "  inestable con su limite. En adelante uso Estabilidad para este juego.\n",
+              kUnstableSessions, tailT.Percent(), session.label.c_str());
+          std::lock_guard<std::mutex> lock(g_ui.m);
+          g_ui.notice = Fmt(T("%s es inestable con su límite: desde ahora uso Estabilidad para este juego.",
+                              "%s is unstable with its limit: from now on I'll use Stability for this game."),
+                            session.label.c_str());
+        } else if (after.unstableStreak > 0) {
+          Log("\n  Al cerrar: el 1 %% bajo se hundio el %.0f %% del tiempo (%d de %d partidas seguidas para pasar\n"
+              "  este juego a Estabilidad).\n", tailT.Percent(), after.unstableStreak, kUnstableSessions);
+        }
+      }
+      const bool tailFailed = climbOk && !session.fluid && !failT.Failed() && tailT.Failed();
       const bool failed = failT.Failed() || tailFailed;
       ClimbResult cr;
       const double limitBefore = session.expectedFps;
@@ -4231,7 +4257,7 @@ static void RunEngine(std::wstring presentMonPath) {
         const bool plenty = !failed && PlentyWholeSession(session);
         const long long today = static_cast<long long>(std::time(nullptr) / 86400);
         cr = DecideClimb(ClimbState::Parse(ReadKv(L"equipo.txt", "escalada|" + session.exe)), failed, plenty,
-                         limitBefore, 1, true, hz, g_priority == 1, today);
+                         limitBefore, 1, true, hz, session.fluid, today);
         WriteKv(L"equipo.txt", "escalada|" + session.exe, cr.state.Serialize());
         session.climbHandled = true;
       }
@@ -4489,6 +4515,7 @@ static void RunEngine(std::wstring presentMonPath) {
           store.items.erase(it);
           store.Save();
           WriteKv(L"equipo.txt", "escalada|" + exe, "");  // empezar de cero: sin techo ni subidas pendientes
+          WriteKv(L"equipo.txt", "prioridad|" + exe, "");
           WriteKv(L"equipo.txt", "sugerencia|" + exe, "");
           {
             std::lock_guard<std::mutex> lock(g_ui.m);
@@ -4522,6 +4549,7 @@ static void RunEngine(std::wstring presentMonPath) {
       for (const auto& [exe, ch] : store.items) {
         WriteKv(L"equipo.txt", "escalada|" + exe, "");
         WriteKv(L"equipo.txt", "sugerencia|" + exe, "");
+        WriteKv(L"equipo.txt", "prioridad|" + exe, "");
       }
       {
         std::lock_guard<std::mutex> lock(g_ui.m);
@@ -4637,6 +4665,8 @@ static void RunEngine(std::wstring presentMonPath) {
           if (!b.empty()) session.baseSwing = std::atof(b.c_str());
           std::string bl = ReadKv(L"equipo.txt", "latencia-antes|" + foundExe);
           if (!bl.empty()) session.baseLat = std::atof(bl.c_str());
+          session.fluid = g_priority == 1 &&
+                          !(g_autoPriority && AutoPriority::Parse(ReadKv(L"equipo.txt", "prioridad|" + foundExe)).stability);
         }
         session.label = label;
         g_gameLabels[foundExe] = label;
@@ -4802,7 +4832,7 @@ static void RunEngine(std::wstring presentMonPath) {
           "juego: " + session.label + " (" + session.exe + ")",
           Fmt("pantalla: %.3f Hz reales; rango VRR del monitor: %d-%d Hz (0 = desconocido)", hz, g_vrrMinHz.load(),
               g_vrrMaxHz.load()),
-          std::string("prioridad: ") + (g_priority == 0 ? "estabilidad" : "fluidez"),
+          std::string("prioridad: ") + (session.fluid ? "fluidez" : "estabilidad"),
       };
       auto known = store.items.find(session.exe);
       h.push_back("limite al empezar: " + (known != store.items.end() && session.appliedAtStart
@@ -5896,10 +5926,14 @@ static void PageGames(const View& v) {
     ImGui::PopTextWrapPos();
     ImGui::Dummy(ImVec2(0, 4 * scale));
     ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x * 0.85f);
-    ImGui::TextColored(kDim, "%s", T("Al cambiar la prioridad, los límites ya aplicados no se recalculan: para "
-                                     "hacerlo con el nuevo criterio, usa el botón «Deshacer» del juego.",
-                                     "Changing the priority doesn't recalculate limits already applied: to do it "
-                                     "with the new criterion, use the game's “Undo” button."));
+    ImGui::TextColored(kDim, "%s", T("Es el punto de partida de cada juego: con Fluidez, si un juego resulta inestable "
+                                     "con su límite (sus fotogramas más lentos se hunden en dos partidas seguidas), la "
+                                     "app lo pasa a Estabilidad y lo indica en su fila. Al cambiar la prioridad, los "
+                                     "límites ya aplicados no se recalculan: usa el botón «Deshacer» del juego.",
+                                     "It's each game's starting point: with Smoothness, if a game turns out to be "
+                                     "unstable with its limit (its slowest frames sink in two sessions in a row), the "
+                                     "app moves it to Stability and shows it on its row. Changing the priority doesn't "
+                                     "recalculate limits already applied: use the game's “Undo” button."));
     ImGui::PopTextWrapPos();
   }
   ImGui::Dummy(ImVec2(0, 14 * scale));

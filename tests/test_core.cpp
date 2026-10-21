@@ -989,6 +989,36 @@ TEST(FailureRuleIgnoresClosingMinute) {
   CHECK(g.WithoutLast(kCloseTrimSec, 110).Failed());
 }
 
+TEST(AutoPriorityMovesUnstableGamesToStability) {
+  auto Session = [](int secs, int sunkSecs) {
+    FailureTracker t;
+    for (int s = 0; s < secs; ++s) t.Add(s < sunkSecs ? 90 : 130, 130, 1.0);
+    return t;
+  };
+  // Greylock con Fluidez: el 1 % bajo hundido en dos partidas seguidas -> Estabilidad.
+  AutoPriority a;
+  a = UpdateAutoPriority(a, true, Session(600, 200));
+  CHECK(!a.stability && a.unstableStreak == 1);
+  a = UpdateAutoPriority(a, true, Session(600, 200));
+  CHECK(a.stability);
+  // Una partida larga y limpia entre medias corta la racha; una corta (< 3 min) no cuenta.
+  AutoPriority b;
+  b = UpdateAutoPriority(b, true, Session(600, 200));
+  b = UpdateAutoPriority(b, true, Session(120, 0));
+  CHECK(b.unstableStreak == 1);
+  b = UpdateAutoPriority(b, true, Session(600, 0));
+  CHECK(b.unstableStreak == 0 && !b.stability);
+  // Con Estabilidad (global) no hay nada que decidir, y una vez elegida no vuelve atras sola.
+  AutoPriority c;
+  c = UpdateAutoPriority(c, false, Session(600, 200));
+  CHECK(!c.stability && c.unstableStreak == 0);
+  AutoPriority d;
+  d.stability = true;
+  d = UpdateAutoPriority(d, true, Session(600, 0));
+  CHECK(d.stability);
+  CHECK(AutoPriority::Parse(a.Serialize()).stability);
+}
+
 int main() {
   std::printf("Pruebas de FlatPace (src/core)\n");
   RUN(Percentiles);
@@ -1033,6 +1063,7 @@ int main() {
   RUN(LeftEdgeValuesStayPut);
   RUN(RightEdgeNeverRedraws);
   RUN(FailureRuleIgnoresClosingMinute);
+  RUN(AutoPriorityMovesUnstableGamesToStability);
   RUN(ClimbLadderToCeiling);
   RUN(ClimbRevertsAndRemembersCeiling);
   RUN(ClimbNoPingPongAcrossSessions);
