@@ -2,6 +2,10 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). La versión más reciente va primero.
 
+## 0.51.3
+- **Nuevo: vigilancia de PresentMon a mitad de partida.** El PresentMon 2.6.0 que distribuye FlatPace tiene fallos conocidos con las opciones que usa (`--track_frame_type`, `--track_pc_latency`): entre otros, puede dejar de entregar datos al desactivar la generación de fotogramas en un juego que emite eventos de tipo de fotograma (issue 695 de PresentMon; CapFrameX distribuye una versión propia corregida, y Intel aún no ha publicado una oficial). Hasta ahora, FlatPace solo reiniciaba PresentMon si no entregaba datos al arrancar, y si se bloqueaba a mitad de partida se quedaba en pausa indefinidamente. Ahora, con el juego en primer plano y sin ningún dato durante más de 6 segundos, lo reinicia (como mucho una vez por minuto) y lo anota en el registro.
+- **Investigado: por qué la latencia del PC no aparece en Space Marine 2.** PresentMon calcula la latencia del PC con los eventos *PC Latency Stats* del SDK de Reflex, que incluyen el tramo desde la entrada hasta el inicio del fotograma. Space Marine 2 emite los marcadores de inicio de simulación (los que FlatPace usa para separar fotogramas reales), pero en las grabaciones la latencia llega siempre vacía. Pendiente de comprobar si falta el tramo de la entrada.
+
 ## 0.51.2
 - **Nuevo, solo en el registro:** en las partidas con generación de fotogramas, si el movimiento con ritmo plano está descompasado en un 10 % o más, el resumen explica la causa: la generación de fotogramas, no el límite (en Space Marine 2, en la misma partida, un 37 % con ella y un 0,5 % sin ella), y sugiere probar el juego sin ella si el movimiento se nota irregular. No cambia ningún ajuste ni ninguna decisión.
 

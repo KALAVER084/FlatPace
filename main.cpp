@@ -129,7 +129,7 @@ static std::atomic<bool> g_quit{false};
 static std::atomic<int> g_lang{0};
 static const char* T(const char* es, const char* en) { return g_lang == 1 ? en : es; }
 
-static constexpr const char* kVersion = "0.51.2";
+static constexpr const char* kVersion = "0.51.3";
 
 // Carpeta donde esta este .exe.
 static std::wstring ExeDirectory() {
@@ -4293,6 +4293,11 @@ static void RunEngine(std::wstring presentMonPath) {
   StopEtwSession(kEtwSession);  // por si quedo abierta de una ejecucion anterior
   const double pmStartedAt = NowSec();
   bool pmRestarted = false;
+  // Vigilancia de PresentMon a mitad de partida: PresentMon 2.6.0 puede dejar de entregar datos (por
+  // ejemplo, al desactivar la generacion de fotogramas en un juego que emite eventos de tipo de
+  // fotograma; issue 695 de PresentMon). Con el juego en primer plano y sin ningun dato durante mas de
+  // 6 s, se reinicia (como mucho una vez por minuto, por si el juego esta de verdad en pausa).
+  double lastAnySampleAt = NowSec(), lastPmRestartAt = -1e9;
   if (!pm.Start(presentMonPath, std::wstring())) {
     SetStatus(UiStatus::Error, T("No pude iniciar PresentMon", "Couldn't start PresentMon"), Narrow(presentMonPath));
     return;
@@ -4697,6 +4702,16 @@ static void RunEngine(std::wstring presentMonPath) {
     }
     std::vector<FrameSample> fresh = pm.DrainSamples();
     double now = NowSec();
+    if (!fresh.empty()) {
+      lastAnySampleAt = now;
+    } else if (pm.HeaderSeen() && !session.exe.empty() && session.seenForeground && !session.background &&
+               now - lastAnySampleAt > 6.0 && now - lastPmRestartAt > 60.0) {
+      Log("[%5.0f s] PresentMon dejo de entregar datos con el juego en primer plano: lo reinicio.\n", session.T(now));
+      pm.Stop();
+      if (!pm.Start(presentMonPath, std::wstring())) Log("  No pude reiniciar PresentMon.\n");
+      lastPmRestartAt = now;
+      lastAnySampleAt = now;
+    }
     bool applyMode = g_applyMode;
     const bool displayRestoreNeeded = switchedRate != 0;
     std::string manualExe;
