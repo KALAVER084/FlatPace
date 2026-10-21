@@ -1,4 +1,4 @@
-# FlatPace 0.50.3 technical documentation
+# FlatPace 0.51 technical documentation
 
 This document explains how FlatPace works inside: architecture, algorithms, formulas, data formats and the sources behind its decisions. Some names (log lines, data files and keys) are in Spanish, as they appear in the program.
 
@@ -106,7 +106,7 @@ If the monitor offers other refresh rates at the current resolution and one of t
 **`cambios-aplicados.txt` format (v2), tab-separated:**
 `v2  exe  created(0/1)  method(0 limit / 1 VSync)  divisor  fps  n  [id_hex  had(0/1)  original_hex]×n` followed by optional fields: `fg k frl`, `hz rate`, `ok 1` (accepted), `base real_fps`, `vrr 1`, `manual 1` (set by the user: the app doesn't change it).
 
-**Recording format (CSV):** header lines starting with `#` (version, game, real refresh rate, VRR range, priority and limit at start) and one row per game frame with: `t_llegada_s` (when the data arrived, in batches), `t_acumulado_s` (sum of presents), `presentacion_ms`, `real_ms` (with Reflex markers, the simulation interval), `real_presentacion_ms`, `generado` (0/1), `cpu_ms`, `gpu_ms`, `pantalla_ms`, `error_animacion_ms`, `vrr` and `limite_confirmado` (state at that moment) and, since 0.47, `latencia_pc_ms` and, since 0.50, `espera_gpu_ms` (`MsGPULatency`: from when the game hands over the frame until the GPU starts it; it grows if the render queue fills up, and the summary gives its median and worst 1 % with the limit). `latencia_pc_ms` is PC latency according to PresentMon (`MsPCLatency`, from when the game reads input until the image is sent to the display), only in games with Reflex/PC Latency markers. Each session summary gives its median and worst 1 %, separately with the limit working and without it, to compare the limit's effect on latency (the mouse and the monitor add the same in both cases). Unavailable values are left empty.
+**Recording format (CSV):** header lines starting with `#` (version, game, real refresh rate, VRR range, priority and limit at start) and one row per game frame with: `t_llegada_s` (when the data arrived, in batches), `t_acumulado_s` (sum of presents), `presentacion_ms`, `real_ms` (with Reflex markers, the simulation interval), `real_presentacion_ms`, `generado` (0/1), `cpu_ms`, `gpu_ms`, `pantalla_ms`, `error_animacion_ms`, `vrr` and `limite_confirmado` (state at that moment) and, since 0.47, `latencia_pc_ms`, `cpu_rendimiento_pct` (since 0.51: CPU performance relative to its nominal frequency, from the Windows *% Processor Performance* counter, read once per second) and, since 0.50, `espera_gpu_ms` (`MsGPULatency`: from when the game hands over the frame until the GPU starts it; it grows if the render queue fills up, and the summary gives its median and worst 1 % with the limit). `latencia_pc_ms` is PC latency according to PresentMon (`MsPCLatency`, from when the game reads input until the image is sent to the display), only in games with Reflex/PC Latency markers. Each session summary gives its median and worst 1 %, separately with the limit working and without it, to compare the limit's effect on latency (the mouse and the monitor add the same in both cases). Unavailable values are left empty.
 
 ## 8. Advanced settings
 
@@ -157,7 +157,7 @@ x86_64-w64-mingw32-windres app.rc -O coff -o app.res
 x86_64-w64-mingw32-g++-posix -std=c++20 -municode -mwindows -O2 -DNDEBUG -Ithird_party/imgui \
   -Ithird_party/imgui/backends main.cpp imgui*.o app.res -o FlatPace.exe \
   -ld3d11 -ldxgi -ld3dcompiler_47 -ldwmapi -ldcomp -lgdi32 -lshell32 -luser32 -ladvapi32 -lversion \
-  -limm32 -lwinmm -static -s
+  -limm32 -lwinmm -lpdh -static -s
 ```
 Windows: `cmake -B build && cmake --build build --config Release`. Dear ImGui (with the Win32 and DX11 backends) goes in `third_party/imgui`, and the NVAPI declarations FlatPace uses (from NVIDIA, MIT License) in `third_party/nvapi/nvapi_min.h`: all third-party code lives in `third_party/`.
 

@@ -1,4 +1,4 @@
-# Documentación técnica de FlatPace 0.50.3
+# Documentación técnica de FlatPace 0.51
 
 Este documento explica cómo funciona FlatPace por dentro: arquitectura, algoritmos, fórmulas, formatos de datos y las fuentes en que se basan sus decisiones.
 
@@ -106,7 +106,7 @@ Si el monitor ofrece otras frecuencias en la resolución actual y alguna permite
 **Formato de `cambios-aplicados.txt` (v2), separado por tabuladores:**
 `v2  exe  creado(0/1)  método(0 límite / 1 VSync)  divisor  fps  n  [id_hex  tenía(0/1)  original_hex]×n` seguido de campos opcionales: `fg k frl`, `hz frecuencia`, `ok 1` (aceptado), `base fps_reales`, `vrr 1`, `manual 1` (puesto por el usuario: la app no lo cambia).
 
-**Formato de las grabaciones (CSV):** líneas de cabecera que empiezan por `#` (versión, juego, frecuencia real, rango VRR, prioridad y límite al empezar) y una fila por fotograma del juego con: `t_llegada_s` (cuándo llegó el dato, por tandas), `t_acumulado_s` (suma de presentaciones), `presentacion_ms`, `real_ms` (con marcadores de Reflex, intervalo de simulación), `real_presentacion_ms`, `generado` (0/1), `cpu_ms`, `gpu_ms`, `pantalla_ms`, `error_animacion_ms`, `vrr` y `limite_confirmado` (estado en ese momento) y, desde la 0.47, `latencia_pc_ms` y, desde la 0.50, `espera_gpu_ms` (`MsGPULatency`: desde que el juego entrega el fotograma hasta que la GPU lo empieza; crece si la cola de render se llena, y el resumen da su mediana y su 1 % peor con el límite). `latencia_pc_ms` es la latencia del PC según PresentMon (`MsPCLatency`, desde que el juego lee la entrada hasta que la imagen sale hacia la pantalla), solo en juegos con marcadores de Reflex/PC Latency. El resumen de cada partida da su mediana y su 1 % peor, por separado con el límite funcionando y sin él, para comparar el efecto del límite sobre la latencia (el ratón y el monitor añaden lo mismo en ambos casos). Los valores no disponibles quedan vacíos.
+**Formato de las grabaciones (CSV):** líneas de cabecera que empiezan por `#` (versión, juego, frecuencia real, rango VRR, prioridad y límite al empezar) y una fila por fotograma del juego con: `t_llegada_s` (cuándo llegó el dato, por tandas), `t_acumulado_s` (suma de presentaciones), `presentacion_ms`, `real_ms` (con marcadores de Reflex, intervalo de simulación), `real_presentacion_ms`, `generado` (0/1), `cpu_ms`, `gpu_ms`, `pantalla_ms`, `error_animacion_ms`, `vrr` y `limite_confirmado` (estado en ese momento) y, desde la 0.47, `latencia_pc_ms`, `cpu_rendimiento_pct` (desde la 0.51: el rendimiento de la CPU respecto a su frecuencia nominal, del contador de Windows *% Processor Performance*, leído una vez por segundo) y, desde la 0.50, `espera_gpu_ms` (`MsGPULatency`: desde que el juego entrega el fotograma hasta que la GPU lo empieza; crece si la cola de render se llena, y el resumen da su mediana y su 1 % peor con el límite). `latencia_pc_ms` es la latencia del PC según PresentMon (`MsPCLatency`, desde que el juego lee la entrada hasta que la imagen sale hacia la pantalla), solo en juegos con marcadores de Reflex/PC Latency. El resumen de cada partida da su mediana y su 1 % peor, por separado con el límite funcionando y sin él, para comparar el efecto del límite sobre la latencia (el ratón y el monitor añaden lo mismo en ambos casos). Los valores no disponibles quedan vacíos.
 
 ## 8. Ajustes avanzados
 
@@ -157,7 +157,7 @@ x86_64-w64-mingw32-windres app.rc -O coff -o app.res
 x86_64-w64-mingw32-g++-posix -std=c++20 -municode -mwindows -O2 -DNDEBUG -Ithird_party/imgui \
   -Ithird_party/imgui/backends main.cpp imgui*.o app.res -o FlatPace.exe \
   -ld3d11 -ldxgi -ld3dcompiler_47 -ldwmapi -ldcomp -lgdi32 -lshell32 -luser32 -ladvapi32 -lversion \
-  -limm32 -lwinmm -static -s
+  -limm32 -lwinmm -lpdh -static -s
 ```
 Windows: `cmake -B build && cmake --build build --config Release`. Dear ImGui (con los backends Win32 y DX11) va en `third_party/imgui`, y las declaraciones de NVAPI que usa FlatPace (de NVIDIA, licencia MIT) en `third_party/nvapi/nvapi_min.h`: todo el código de terceros está en `third_party/`.
 

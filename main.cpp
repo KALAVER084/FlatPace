@@ -41,6 +41,7 @@
 #include <limits>
 #include <map>
 #include <mutex>
+#include <pdh.h>
 #include <set>
 #include <string>
 #include <thread>
@@ -49,6 +50,7 @@
 
 #ifdef _MSC_VER
 #pragma comment(lib, "version.lib")
+#pragma comment(lib, "pdh.lib")
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "d3dcompiler.lib")
 #pragma comment(lib, "dwmapi.lib")
@@ -127,7 +129,7 @@ static std::atomic<bool> g_quit{false};
 static std::atomic<int> g_lang{0};
 static const char* T(const char* es, const char* en) { return g_lang == 1 ? en : es; }
 
-static constexpr const char* kVersion = "0.50.3";
+static constexpr const char* kVersion = "0.51";
 
 // Carpeta donde esta este .exe.
 static std::wstring ExeDirectory() {
@@ -756,6 +758,8 @@ static std::atomic<bool> g_maxPerf{true};
 // el limite sostenido no cambia nada). En los juegos con Reflex, Reflex tiene prioridad.
 // Avanzado: baja-latencia=no en equipo.txt lo desactiva.
 static std::atomic<bool> g_lowLatency{true};
+// Ultimo rendimiento de la CPU medido (% de su frecuencia nominal; -1 si no hay), para la grabacion.
+static std::atomic<double> g_cpuPerfPct{-1.0};
 // Overlay clasico (dibujado con el procesador y UpdateLayeredWindow) en lugar del de la GPU
 // (DirectComposition): overlay=clasico en equipo.txt. La app tambien vuelve a el sola si el de la
 // GPU no se puede iniciar o falla durante la partida.
@@ -1695,6 +1699,10 @@ struct Session {
   // +-0,3 ms): movimiento descompasado que la grafica no muestra. Para investigarlo por juego.
   double aePrevReal = -1.0;
   long flatN = 0, flatOverRel = 0;
+  // Trabajo de CPU y GPU de cada fotograma real (para saber que limita los momentos lentos) y
+  // rendimiento de la CPU por segundo (para ver si baja de frecuencia en ellos).
+  std::vector<float> wkT, wkReal, wkCpu, wkGpu;
+  std::vector<std::pair<float, float>> cpuPerf;  // (segundo de la partida, % de la frecuencia nominal)
   double baseMotion = -1.0;  // % de fotogramas con mas de 1 ms de error, sin limite (guardado)
   bool climbHandled = false;  // la subida automatica se ocupo de este limite al cerrar (sin sugerencia)
   bool fluid = true;          // prioridad de este juego: la global, o Estabilidad si la app la eligio
@@ -1868,7 +1876,7 @@ struct FrameRecorder {
     for (const auto& h : header) std::fprintf(f, "# %s\n", h.c_str());
     std::fprintf(f, "t_llegada_s,t_acumulado_s,presentacion_ms,real_ms,real_presentacion_ms,generado,"
                     "cpu_ms,gpu_ms,pantalla_ms,error_animacion_ms,vrr,limite_confirmado,latencia_pc_ms,"
-                    "espera_gpu_ms\n");
+                    "espera_gpu_ms,cpu_rendimiento_pct\n");
     rows = 0;
     tSum = 0.0;
     return true;
@@ -1878,13 +1886,14 @@ struct FrameRecorder {
     if (!f) return;
     if (s.presentMs > 0) tSum += s.presentMs / 1000.0;
     auto num = [](double v, const char* fmt) { return std::isnan(v) || v < -1e8 ? std::string() : Fmt(fmt, v); };
-    std::fprintf(f, "%.4f,%.4f,%.3f,%s,%s,%d,%s,%s,%s,%s,%d,%d,%s,%s\n", s.t - sessionStart, tSum, s.presentMs,
+    std::fprintf(f, "%.4f,%.4f,%.3f,%s,%s,%d,%s,%s,%s,%s,%d,%d,%s,%s,%s\n", s.t - sessionStart, tSum, s.presentMs,
                  num(s.realMs > 0 ? s.realMs : NAN, "%.3f").c_str(),
                  num(s.presentRealMs > 0 ? s.presentRealMs : NAN, "%.3f").c_str(), s.generated ? 1 : 0,
                  num(s.cpuBusyMs >= 0 ? s.cpuBusyMs : NAN, "%.3f").c_str(),
                  num(s.gpuBusyMs >= 0 ? s.gpuBusyMs : NAN, "%.3f").c_str(),
                  num(s.displayMs > 0 ? s.displayMs : NAN, "%.3f").c_str(), num(s.animErrMs, "%.3f").c_str(),
-                 vrr ? 1 : 0, verified ? 1 : 0, num(s.pcLatencyMs, "%.3f").c_str(), num(s.gpuQueueMs, "%.3f").c_str());
+                 vrr ? 1 : 0, verified ? 1 : 0, num(s.pcLatencyMs, "%.3f").c_str(), num(s.gpuQueueMs, "%.3f").c_str(),
+                 num(g_cpuPerfPct.load() > 0 ? g_cpuPerfPct.load() : NAN, "%.0f").c_str());
     ++rows;
   }
 
@@ -1958,6 +1967,68 @@ static void PrintSessionSummary(const Session& s, double hz) {
     std::vector<double> d(s.pcLatOther.begin(), s.pcLatOther.end());
     std::sort(d.begin(), d.end());
     WriteKv(L"equipo.txt", "latencia-antes|" + s.exe, Fmt("%.1f", PercentileSorted(d, 50)));
+  }
+  // Que limita los momentos lentos, CPU o GPU, y si la CPU bajo de frecuencia en ellos. Momentos lentos:
+  // con el limite, los fotogramas mas de un 13 % por encima de su tiempo; sin el, el 10 % mas lento.
+  if (s.wkReal.size() >= 3000) {
+    double slowMs = 0.0;
+    if (s.expectedFps > 0 && (s.verified || s.accepted)) {
+      slowMs = 1000.0 / s.expectedFps * (1.0 + cfg::kJnd);
+    } else {
+      std::vector<float> r = s.wkReal;
+      std::nth_element(r.begin(), r.begin() + r.size() * 9 / 10, r.end());
+      slowMs = r[r.size() * 9 / 10];
+    }
+    std::vector<double> sc, sg;
+    size_t cpuLim = 0, gpuLim = 0;
+    for (size_t i = 0; i < s.wkReal.size(); ++i) {
+      if (s.wkReal[i] < slowMs) continue;
+      sc.push_back(s.wkCpu[i]);
+      sg.push_back(s.wkGpu[i]);
+      if (s.wkCpu[i] > s.wkGpu[i] * 1.1f) ++cpuLim;
+      else if (s.wkGpu[i] > s.wkCpu[i] * 1.1f) ++gpuLim;
+    }
+    if (sc.size() >= 300) {
+      std::sort(sc.begin(), sc.end());
+      std::sort(sg.begin(), sg.end());
+      const double pc = 100.0 * cpuLim / sc.size(), pg = 100.0 * gpuLim / sc.size();
+      Log("\n  Momentos lentos (%zu fotogramas de mas de %.1f ms): los limita la CPU en el %.0f %% y la GPU en el %.0f %%"
+          " (trabajo mediano: CPU %.1f ms, GPU %.1f ms)",
+          sc.size(), slowMs, pc, pg, PercentileSorted(sc, 50), PercentileSorted(sg, 50));
+      if (pc >= 70.0)
+        Log("\n    -> Bajar los ajustes graficos no los acelerara; los que cargan la CPU si (poblacion, fisica,\n"
+            "       distancia de vision, cantidad de enemigos o efectos).");
+      else if (pg >= 70.0)
+        Log("\n    -> Bajar la resolucion o los ajustes graficos los acelerara.");
+      // Frecuencia de la CPU en los segundos lentos frente al resto.
+      if (s.cpuPerf.size() >= 60) {
+        std::vector<double> slowP, restP, allP;
+        size_t j = 0;
+        for (const auto& [t, perf] : s.cpuPerf) {
+          std::vector<float> sec;
+          while (j < s.wkT.size() && s.wkT[j] <= t) {
+            if (s.wkT[j] > t - 1.0f) sec.push_back(s.wkReal[j]);
+            ++j;
+          }
+          allP.push_back(perf);
+          if (sec.size() < 10) continue;
+          std::nth_element(sec.begin(), sec.begin() + sec.size() / 2, sec.end());
+          (sec[sec.size() / 2] >= slowMs ? slowP : restP).push_back(perf);
+        }
+        std::sort(allP.begin(), allP.end());
+        Log("\n  Rendimiento de la CPU: mediana %.0f %% de su frecuencia nominal (minimo %.0f %%)", PercentileSorted(allP, 50),
+            allP.front());
+        if (slowP.size() >= 10 && restP.size() >= 10) {
+          std::sort(slowP.begin(), slowP.end());
+          std::sort(restP.begin(), restP.end());
+          const double ps = PercentileSorted(slowP, 50), pr = PercentileSorted(restP, 50);
+          Log(" | en los segundos lentos %.0f %%, en el resto %.0f %%", ps, pr);
+          if (pc >= 50.0 && ps < pr * 0.90)
+            Log("\n    -> La CPU baja de frecuencia justo en los momentos lentos: posible calor o limite de energia\n"
+                "       (comprueba la ventilacion, que el portatil este enchufado y el modo de energia de Windows).");
+        }
+      }
+    }
   }
   if (s.aeN > 100) {
     const double over = 100.0 * s.aeOver1 / s.aeN;
@@ -2279,6 +2350,13 @@ static void ProcessSession(Session& ss, std::vector<FrameSample>& fresh, double 
       if (a > cfg::kJnd * s.realMs) ++ss.flatOverRel;  // descompasado de forma perceptible
     }
     if (!s.generated && s.realMs > 0) ss.aePrevReal = s.realMs;
+    if (now >= ss.phaseStart && !s.generated && s.realMs > 0 && s.realMs <= cfg::kSpikeMs && s.cpuBusyMs >= 0 &&
+        s.gpuBusyMs >= 0 && ss.wkT.size() < 600000) {
+      ss.wkT.push_back(static_cast<float>(now - ss.start));
+      ss.wkReal.push_back(static_cast<float>(s.realMs));
+      ss.wkCpu.push_back(static_cast<float>(s.cpuBusyMs));
+      ss.wkGpu.push_back(static_cast<float>(s.gpuBusyMs));
+    }
     if (now >= ss.phaseStart && s.presentMs > 0 && s.presentMs <= cfg::kSpikeMs) {
       if (ss.sPrev > 0) {
         double d = std::fabs(s.presentMs - ss.sPrev);
@@ -2600,6 +2678,38 @@ static void WriteCachedHz(const std::string& key, double hz) {
 }
 
 // Datos simples clave=valor en la carpeta de datos (por ejemplo, lo aprendido del equipo).
+// Rendimiento de la CPU respecto a su frecuencia nominal (contador de Windows "% Processor Performance":
+// 100 = frecuencia nominal; por encima, turbo; por debajo, la CPU baja de frecuencia por calor, energia
+// o ahorro). En un portatil, CPU y GPU comparten energia y temperatura: si la CPU baja de frecuencia en
+// las zonas pesadas, ahi esta la causa de los tirones. Se lee una vez por segundo desde el motor.
+struct CpuPerfMeter {
+  PDH_HQUERY query = nullptr;
+  PDH_HCOUNTER counter = nullptr;
+  bool ok = false;
+  void Init() {
+    if (PdhOpenQueryW(nullptr, 0, &query) != ERROR_SUCCESS) return;
+    if (PdhAddEnglishCounterW(query, L"\\Processor Information(_Total)\\% Processor Performance", 0, &counter) !=
+        ERROR_SUCCESS) {
+      PdhCloseQuery(query);
+      query = nullptr;
+      return;
+    }
+    PdhCollectQueryData(query);  // el primer valor necesita dos lecturas
+    ok = true;
+  }
+  double Sample() {
+    if (!ok || PdhCollectQueryData(query) != ERROR_SUCCESS) return -1.0;
+    PDH_FMT_COUNTERVALUE v;
+    if (PdhGetFormattedCounterValue(counter, PDH_FMT_DOUBLE | PDH_FMT_NOCAP100, nullptr, &v) != ERROR_SUCCESS ||
+        v.CStatus != ERROR_SUCCESS)
+      return -1.0;
+    return v.doubleValue;
+  }
+  ~CpuPerfMeter() {
+    if (query) PdhCloseQuery(query);
+  }
+};
+
 // La ventana y el motor leen y escriben los mismos archivos de ajustes: sin este cerrojo, dos escrituras
 // a la vez (leer todo, cambiar una clave, reescribir) podian perder la de uno de los dos.
 static std::recursive_mutex g_kvMutex;
@@ -3927,6 +4037,8 @@ static void PublishSession(const Session& ss, const ChangeStore& store, bool app
 
 
 static void RunEngine(std::wstring presentMonPath) {
+  CpuPerfMeter cpuPerf;
+  cpuPerf.Init();
   std::wstring logPath = OpenLog();
   {
     std::lock_guard<std::mutex> lock(g_ui.m);
@@ -5136,6 +5248,11 @@ static void RunEngine(std::wstring presentMonPath) {
       double dt = session.lastTick > 0 ? std::min(2.0, now - session.lastTick) : 0.0;
       session.lastTick = now;
       if (st.frames > 0 && now >= session.phaseStart) {
+        if (const double perf = cpuPerf.Sample(); perf > 0) {
+          g_cpuPerfPct = perf;
+          if (session.cpuPerf.size() < 20000)
+            session.cpuPerf.push_back({static_cast<float>(now - session.start), static_cast<float>(perf)});
+        }
         session.gameSecs += dt;
         if (session.vrrActive) session.vrrSecs += dt;
         if (st.capped && st.capFps > 0 && session.expectedFps <= 0 && HeldRate(st) > 0) {

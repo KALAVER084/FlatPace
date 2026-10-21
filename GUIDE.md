@@ -1,4 +1,4 @@
-# FlatPace 0.50.3 user guide
+# FlatPace 0.51 user guide
 
 This guide describes the current version. Changes between versions are listed in the [changelog](CHANGELOG.md) (in Spanish). The app has an English interface: switch it with **ES | EN** at the bottom of the sidebar.
 
@@ -26,7 +26,7 @@ The sidebar has four sections:
 - **Now:** the current game and the status tag of its limit (*LOCKED* in blue; *UNCONFIRMED* or *NO LIMIT* in red); a card with the real FPS, four metrics (1 % low, consistency, stutters and pace swing) and the **pacing graph**; and two cards: *Limit* (applied, recommended and status, with *Apply now*, *Manual limit…* and *Undo*) and *Details* (VRR, presentation, the game's own limit, bottleneck and display). The graph stays visible when you switch to the app.
 - **Games:** the priority, the games with a limit (each with *Set…* and *Undo* buttons), *Undo all changes* and *Choose game…*.
 - **System:** GPU, display, driver and VRR status with the monitor's refresh range.
-- **Log:** everything the app does and measures, with a button to open the log file and the **Record per-frame data** checkbox, which saves a CSV file per session in the `grabaciones` folder (*Open recordings* button), useful for analyzing the pace in detail. In games with Reflex, each session summary also includes **PC latency** (from when the game reads your input until the image is sent to the display), with and without the limit, so you can see whether the limit improves or worsens it.
+- **Log:** everything the app does and measures, with a button to open the log file and the **Record per-frame data** checkbox, which saves a CSV file per session in the `grabaciones` folder (*Open recordings* button), useful for analyzing the pace in detail. In games with Reflex, each session summary also includes **PC latency** (from when the game reads your input until the image is sent to the display), with and without the limit, so you can see whether the limit improves or worsens it. The summary also says **what limits the slow moments** (the CPU or the GPU), with the matching advice: if it's the CPU, lowering graphics won't help, but the settings that load it will (population, physics, view distance). And it warns if the CPU lowers its frequency right in those moments, common on laptops due to heat or power.
 
 At the bottom of the sidebar: **Apply limits** (when off, the app only measures), **In-game overlay** (the app remembers your choice) and the language (**ES | EN**).
 

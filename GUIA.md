@@ -1,4 +1,4 @@
-# Guía de uso de FlatPace 0.50.3
+# Guía de uso de FlatPace 0.51
 
 Esta guía describe la versión actual. Los cambios entre versiones están en el [historial](CHANGELOG.md).
 
@@ -26,7 +26,7 @@ La barra lateral tiene cuatro secciones:
 - **Ahora:** el juego actual y la etiqueta de estado de su límite (*FIJADO* en azul; *SIN CONFIRMAR* o *SIN LÍMITE* en rojo); una tarjeta con los FPS reales, cuatro métricas (1 % bajo, consistencia, tirones y variación del ritmo) y la **gráfica de ritmo**; y dos tarjetas: *Límite* (aplicado, recomendado y estado, con *Aplicar ya*, *Límite manual…* y *Deshacer*) y *Detalles* (VRR, presentación, límite del juego, cuello de botella y pantalla). La gráfica se conserva cuando cambias a la app.
 - **Juegos:** la prioridad, los juegos con límite (cada uno con sus botones *Fijar…* y *Deshacer*), *Deshacer todos los cambios* y *Elegir juego*.
 - **Equipo:** gráfica, pantalla, driver y estado del VRR con el rango de frecuencias del monitor.
-- **Registro:** todo lo que la app hace y mide, con el botón para abrir el archivo de registro y la casilla **Grabar los datos de cada fotograma**, que guarda un archivo CSV por partida en la carpeta `grabaciones` (botón *Abrir grabaciones*), útil para analizar el ritmo con detalle. En los juegos con Reflex, el resumen de cada partida incluye además la **latencia del PC** (desde que el juego lee tu acción hasta que la imagen sale hacia la pantalla), con el límite y sin él, para que veas si el límite la mejora o la empeora.
+- **Registro:** todo lo que la app hace y mide, con el botón para abrir el archivo de registro y la casilla **Grabar los datos de cada fotograma**, que guarda un archivo CSV por partida en la carpeta `grabaciones` (botón *Abrir grabaciones*), útil para analizar el ritmo con detalle. En los juegos con Reflex, el resumen de cada partida incluye además la **latencia del PC** (desde que el juego lee tu acción hasta que la imagen sale hacia la pantalla), con el límite y sin él, para que veas si el límite la mejora o la empeora. El resumen también dice **qué limita los momentos lentos** (la CPU o la GPU), con el consejo que corresponde: si es la CPU, bajar los gráficos no ayudará, pero sí los ajustes que la cargan (población, física, distancia de visión). Y avisa si la CPU baja de frecuencia justo en esos momentos, algo frecuente en portátiles por calor o energía.
 
 Al pie de la barra: **Aplicar límites** (si está apagado, la app solo mide), **Overlay en el juego** (la app recuerda tu elección) e idioma (**ES | EN**).
 
