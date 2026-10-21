@@ -1,4 +1,4 @@
-# Guía de uso de FlatPace 0.47
+# Guía de uso de FlatPace 0.48
 
 Esta guía describe la versión actual. Los cambios entre versiones están en el [historial](CHANGELOG.md).
 
@@ -88,6 +88,7 @@ La app **no cambiará nunca** un límite manual: solo comprobará que funciona (
 En una esquina del juego: FPS, 1 % bajo, una etiqueta con el estado del límite y la gráfica de ritmo de los últimos 3 segundos.
 
 - **Azul ("FIJADO 225 fps"):** el límite está confirmado; el juego va a su ritmo.
+- En los juegos con Reflex, la fila de cifras incluye la **latencia del PC** (*"latencia 24 ms"*). Con un límite fijado y sin generación de fotogramas, la compara con la del juego sin límite: *"latencia 18 ms (antes 22)"*. Si la fila no cabe, se quitan primero los datos secundarios.
 - **Rojo ("SIN CONFIRMAR" o "SIN LÍMITE"):** el juego aún no tiene límite, o lo tiene pero todavía no se ha comprobado.
 - La gráfica muestra las **desviaciones** del ritmo: mientras el tiempo de los fotogramas está dentro de la tolerancia (±13 % del objetivo, indicada en la etiqueta: *"objetivo 8,3 ms ±1,1"*), la línea es recta; solo se dibuja lo que se sale. Se aplica igual con y sin límite, así que la diferencia que ves es real. Los **tirones** aparecen en ámbar.
 - **Con generación de fotogramas**, la gráfica dibuja las imágenes **en pantalla** (lo que ves), y la etiqueta lo indica (*"en pantalla 13,9 ms ±1,8"*). Si el juego activa y desactiva la generación por su cuenta, la app lo avisa en *Juegos*.

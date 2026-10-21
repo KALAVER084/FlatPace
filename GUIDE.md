@@ -1,4 +1,4 @@
-# FlatPace 0.47 user guide
+# FlatPace 0.48 user guide
 
 This guide describes the current version. Changes between versions are listed in the [changelog](CHANGELOG.md) (in Spanish). The app has an English interface: switch it with **ES | EN** at the bottom of the sidebar.
 
@@ -88,6 +88,7 @@ The app **never changes** a manual limit: it only checks that it works (the over
 In a corner of the game: FPS, 1 % low, a tag with the limit status and the pacing graph of the last 3 seconds.
 
 - **Blue ("LOCKED 225 fps"):** the limit is confirmed; the game runs at its pace.
+- In games with Reflex, the numbers row includes **PC latency** (*"latency 24 ms"*). With a locked limit and no frame generation, it compares it with the game's latency without a limit: *"latency 18 ms (before 22)"*. If the row doesn't fit, secondary data is dropped first.
 - **Red ("UNCONFIRMED" or "NO LIMIT"):** the game has no limit yet, or has one that hasn't been checked yet.
 - The graph shows pace **deviations**: while frame times stay within the tolerance (±13 % of the target, shown in the label: *"target 8.3 ms ±1.1"*), the line is straight; only what goes outside is drawn. The same rule applies with and without a limit, so the difference you see is real. **Stutters** appear in amber.
 - **With frame generation**, the graph draws the images **on screen** (what you see), and the label says so (*"on screen 13.9 ms ±1.8"*). If the game turns frame generation on and off by itself, the app warns about it on *Games*.

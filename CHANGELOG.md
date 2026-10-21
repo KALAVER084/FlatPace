@@ -2,6 +2,11 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). La versión más reciente va primero.
 
+## 0.48
+- **Nuevo: la latencia del PC en el overlay,** en la fila de cifras, junto al 1 % bajo: *"latencia 24 ms"*. Con un límite fijado y sin generación de fotogramas, se compara con la latencia del juego sin límite, con el mismo estilo que la variación: *"latencia 18 ms (antes 22)"*. La referencia "antes" se guarda de las partidas sin límite y sin generación (`latencia-antes|juego.exe`). Solo en juegos con marcadores de Reflex/PC Latency; en los demás no aparece.
+- **Cambiado:** la cifra *"pantalla X"* solo se muestra cuando aporta: sin límite fijado, o si el ritmo en pantalla se aleja más de un 13 % del límite; si no, repetía lo que ya dice la etiqueta del límite.
+- **La fila de cifras se ajusta al espacio:** si no cabe junto a la etiqueta del límite, se quitan elementos por orden de importancia (el "(antes)", "pantalla" y la latencia); el 1 % bajo se mantiene siempre. Comprobado dibujando el overlay real en cuatro situaciones, incluida la etiqueta más larga.
+
 ## 0.47
 - **Nuevo: medición de la latencia del PC** en los juegos con marcadores de Reflex/PC Latency (como Space Marine 2 o Control Resonant), con la medida `MsPCLatency` de PresentMon: desde que el juego lee la entrada hasta que la imagen sale hacia la pantalla. El resumen de cada partida da su mediana y su 1 % peor, por separado con el límite funcionando y sin él, y la grabación de fotogramas incluye la columna `latencia_pc_ms`. Sirve para comprobar si el límite de un juego mejora o empeora su latencia; el ratón y el monitor añaden lo mismo en ambos casos, así que no hace falta hardware para comparar.
 

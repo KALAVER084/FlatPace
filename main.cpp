@@ -127,7 +127,7 @@ static std::atomic<bool> g_quit{false};
 static std::atomic<int> g_lang{0};
 static const char* T(const char* es, const char* en) { return g_lang == 1 ? en : es; }
 
-static constexpr const char* kVersion = "0.47";
+static constexpr const char* kVersion = "0.48";
 
 // Carpeta donde esta este .exe.
 static std::wstring ExeDirectory() {
@@ -1649,6 +1649,7 @@ struct Session {
   int fgToggles = 0;  // cambios de estado de la generacion en esta partida
   // Latencia del PC por fotograma real (ms): con el limite funcionando y sin el (o antes de comprobarlo).
   std::vector<float> pcLatLimited, pcLatOther;
+  double baseLat = -1.0;  // latencia del PC de este juego sin limite (guardada)
   bool climbHandled = false;  // la subida automatica se ocupo de este limite al cerrar (sin sugerencia)
   // Coste de FlatPace durante la partida
   double engMsSum = 0.0, engMsMax = 0.0, cpuAtStart = -1.0, pmCpuAtStart = -1.0;
@@ -1888,6 +1889,13 @@ static void PrintSessionSummary(const Session& s, double hz) {
   if (s.pcLatLimited.size() >= 300 || s.pcLatOther.size() >= 300) {
     latLine(s.pcLatLimited, "con el limite");
     latLine(s.pcLatOther, s.pcLatLimited.size() >= 300 ? "sin limite o antes de comprobarlo" : "");
+  }
+  // Partida sin limite de la app y sin generacion de fotogramas: su latencia es la referencia "antes".
+  if (!s.appliedAtStart && s.expectedFps <= 0 && !FrameGenInvolved(s) && s.pcLatOther.size() >= 1000 &&
+      s.gameSecs >= 60.0 && !s.exe.empty()) {
+    std::vector<double> d(s.pcLatOther.begin(), s.pcLatOther.end());
+    std::sort(d.begin(), d.end());
+    WriteKv(L"equipo.txt", "latencia-antes|" + s.exe, Fmt("%.1f", PercentileSorted(d, 50)));
   }
   if (s.aeN > 100)
     Log("\n  Error de animacion: media %.2f ms | %.1f %% de fotogramas con mas de 1 ms | maximo %.1f ms",
@@ -2591,6 +2599,8 @@ struct Feed {
   // Intervalo entre imagenes presentadas (ms). La cifra "en pantalla" se calcula con su duracion real:
   // contar las imagenes llegadas en los ultimos 5 s (hasta la 0.43) saltaba con cada tanda de datos.
   std::deque<double> presentMs;
+  std::deque<float> latMs;     // latencia del PC de los ultimos fotogramas reales (juegos con Reflex)
+  double baseLatMs = -1.0;     // latencia del PC de este juego sin limite (guardada), -1 si no hay
   // Bufer de reproduccion: sigue al mayor intervalo reciente entre tandas de datos de PresentMon,
   // para que el borde derecho de la grafica nunca quede vacio.
   double lagSec = 1.1;
@@ -2613,6 +2623,10 @@ static void Push(const FrameSample& s) {
   if (s.presentMs > 0 && s.presentMs < 250.0) {
     feed.presentMs.push_back(s.presentMs);  // todas las imagenes presentadas (reales y generadas)
     while (feed.presentMs.size() > 8000) feed.presentMs.pop_front();
+  }
+  if (!s.generated && !std::isnan(s.pcLatencyMs) && s.pcLatencyMs < 1000.0) {
+    feed.latMs.push_back(static_cast<float>(s.pcLatencyMs));
+    while (feed.latMs.size() > 240) feed.latMs.pop_front();
   }
   if (!s.generated && s.realMs > 0) {
     feed.realOnly.push_back(s.presentRealMs > 0 ? s.presentRealMs : s.realMs);
@@ -2708,7 +2722,7 @@ static void SetGameLow(double fps) {
 }
 
 static void SetGame(DWORD pid, double targetMs, const std::string& limitLabel, LimitState state,
-                    double baseSwingMs = -1.0) {
+                    double baseSwingMs = -1.0, double baseLatMs = -1.0) {
   std::lock_guard<std::mutex> lock(feed.m);
   // Solo se borran los datos al cambiar de juego: asi la ventana sigue mostrando la
   // ultima grafica mientras miras la app.
@@ -2716,6 +2730,7 @@ static void SetGame(DWORD pid, double targetMs, const std::string& limitLabel, L
     feed.real.clear();
     feed.realOnly.clear();
     feed.presentMs.clear();
+    feed.latMs.clear();
     feed.lastVt = 0.0;
     feed.playInit = false;
     feed.refAuto = 0.0;
@@ -2727,6 +2742,7 @@ static void SetGame(DWORD pid, double targetMs, const std::string& limitLabel, L
   feed.limitLabel = limitLabel;
   feed.limitState = state;
   feed.baseSwingMs = baseSwingMs;
+  feed.baseLatMs = baseLatMs;
 }
 
 class Window {
@@ -2822,6 +2838,13 @@ class Window {
       limitState = feed.limitState;
       baseSwing = feed.baseSwingMs;
       gameLow = feed.gameLowFps;
+      baseLat_ = feed.baseLatMs;
+      curLat_ = -1.0;
+      if (feed.latMs.size() >= 30) {
+        std::vector<float> lv(feed.latMs.end() - std::min<size_t>(feed.latMs.size(), 120), feed.latMs.end());
+        std::nth_element(lv.begin(), lv.begin() + lv.size() / 2, lv.end());
+        curLat_ = lv[lv.size() / 2];
+      }
       screenMode = feed.screenMode;
       screenMode_ = screenMode;
       realMs.assign(feed.realOnly.begin(), feed.realOnly.end());
@@ -2928,6 +2951,28 @@ class Window {
   // posiciones que el overlay clasico. Sigue sin recibir clics (WS_EX_TRANSPARENT).
   // -------------------------------------------------------------------------
   HWND ActiveHwnd() const { return gpu_ ? ghwnd_ : hwnd_; }
+
+  // Cifras de la fila superior: "1 % bajo · pantalla · latencia (antes)". "pantalla" solo si aporta:
+  // sin limite fijado, o si el ritmo en pantalla se aleja mas de un 13 % del limite (si no, la
+  // etiqueta del limite ya lo dice). Si la linea no cabe en el espacio, se quitan elementos por orden
+  // de importancia: el "(antes)", "pantalla" y la latencia; el 1 % bajo nunca.
+  template <typename WidthFn>
+  std::string TopLine(double low, double screenFps, bool locked, double refMs, float avail, WidthFn width) const {
+    std::string lowS = Fmt(T("1%% bajo %.0f", "1%% low %.0f"), low), scr, lat, before;
+    const double limitScreen = locked && refMs > 0 ? 1000.0 / refMs : 0.0;
+    if (screenFps > 0 && (limitScreen <= 0 || !screenMode_ ||
+                          std::fabs(screenFps - limitScreen) > cfg::kJnd * limitScreen))
+      scr = Fmt(T("  ·  pantalla %.0f", "  ·  screen %.0f"), screenFps);
+    if (curLat_ > 0) {
+      lat = Fmt(T("  ·  latencia %.0f ms", "  ·  latency %.0f ms"), curLat_);
+      if (locked && baseLat_ > 0 && !screenMode_) before = Fmt(T(" (antes %.0f)", " (before %.0f)"), baseLat_);
+    }
+    auto line = [&] { return lowS + scr + lat + before; };
+    if (width(line()) > avail) before.clear();
+    if (width(line()) > avail) scr.clear();
+    if (width(line()) > avail) lat.clear();
+    return line();
+  }
 
   bool InitGpu(std::string& why) {
     if (!dev_ || !ctx_) {
@@ -3077,14 +3122,15 @@ class Window {
     Text(gBig_, 26 * s, 3 * s, C(240, 242, 245, 1.0f), fpsText);
     const float fw = TextW(gBig_, fpsText);
     Text(gSmall_, 26 * s + fw + 4 * s, 10 * s, C(150, 158, 170, 1.0f), "FPS");
-    std::string sub = Fmt(T("1%% bajo %.0f", "1%% low %.0f"), low);
-    if (screenFps > 0) sub += Fmt(T("  ·  pantalla %.0f", "  ·  screen %.0f"), screenFps);
-    Text(gSmall_, 26 * s + fw + 34 * s, 10 * s, C(150, 158, 170, 1.0f), sub);
     const std::string pill = locked ? std::string(T("FIJADO  ", "LOCKED  ")) + limitLabel
                              : limitState == LimitState::Pending ? std::string(T("SIN CONFIRMAR  ", "UNCONFIRMED  ")) + limitLabel
                                                                  : std::string(T("SIN LÍMITE", "NO LIMIT"));
     const float pw = TextW(gSmall_, pill);
     const float px1 = W_ - 10 * s, px0 = px1 - pw - 16 * s;
+    const float subX = 26 * s + fw + 34 * s;
+    const std::string sub = TopLine(low, screenFps, locked, refMs, px0 - 10 * s - subX,
+                                    [&](const std::string& t) { return TextW(gSmall_, t); });
+    Text(gSmall_, subX, 10 * s, C(150, 158, 170, 1.0f), sub);
     dl->AddRectFilled(ImVec2(px0, 7 * s), ImVec2(px1, 27 * s), C(sr, sg, sb, 0.18f), 10 * s);
     Text(gSmall_, px0 + 8 * s, 9 * s, C(sr, sg, sb, 1.0f), pill);
 
@@ -3194,6 +3240,7 @@ class Window {
 
   ID3D11Device* dev_ = nullptr;
   ID3D11DeviceContext* ctx_ = nullptr;
+  double curLat_ = -1.0, baseLat_ = -1.0;  // latencia del PC actual y sin limite (ms)
   bool gpu_ = false;
   bool gImguiReady_ = false;
   std::string pendingNote_;
@@ -3355,15 +3402,15 @@ class Window {
     Text(fpsText, static_cast<int>(26 * s), static_cast<int>(3 * s), big_, 240, 242, 245);
     int fw = TextWidth(fpsText, big_);
     Text("FPS", static_cast<int>(26 * s) + fw + static_cast<int>(4 * s), static_cast<int>(10 * s), small_, 150, 158, 170);
-    std::string sub = Fmt(T("1%% bajo %.0f", "1%% low %.0f"), low);
-    if (screenFps > 0) sub += Fmt(T("  ·  pantalla %.0f", "  ·  screen %.0f"), screenFps);
-    Text(sub, static_cast<int>(26 * s) + fw + static_cast<int>(34 * s), static_cast<int>(10 * s), small_, 150, 158, 170);
-
     std::string pill = locked ? std::string(T("FIJADO  ", "LOCKED  ")) + limitLabel
                        : limitState == LimitState::Pending ? std::string(T("SIN CONFIRMAR  ", "UNCONFIRMED  ")) + limitLabel
                                                            : std::string(T("SIN LÍMITE", "NO LIMIT"));
     int pw = TextWidth(pill, small_);
     float px1 = W_ - 10 * s, px0 = px1 - pw - 16 * s;
+    const int subX = static_cast<int>(26 * s) + fw + static_cast<int>(34 * s);
+    const std::string sub = TopLine(low, screenFps, locked, refMs, px0 - 10 * s - subX,
+                                    [&](const std::string& t) { return static_cast<float>(TextWidth(t, small_)); });
+    Text(sub, subX, static_cast<int>(10 * s), small_, 150, 158, 170);
     RoundRect(px0, 7 * s, px1, 27 * s, 10 * s, sr, sg, sb, 0.18f);
     Text(pill, static_cast<int>(px0 + 8 * s), static_cast<int>(9 * s), small_, sr, sg, sb);
 
@@ -4564,6 +4611,8 @@ static void RunEngine(std::wstring presentMonPath) {
         {
           std::string b = ReadKv(L"equipo.txt", "ritmo-antes|" + foundExe);
           if (!b.empty()) session.baseSwing = std::atof(b.c_str());
+          std::string bl = ReadKv(L"equipo.txt", "latencia-antes|" + foundExe);
+          if (!bl.empty()) session.baseLat = std::atof(bl.c_str());
         }
         session.label = label;
         g_gameLabels[foundExe] = label;
@@ -4920,7 +4969,7 @@ static void RunEngine(std::wstring presentMonPath) {
         state = session.verified ? overlay::LimitState::Locked : overlay::LimitState::Pending;
       }
       overlay::SetGame(session.background || !session.seenForeground ? 0 : session.pid, target, limitLabel, state,
-                       session.baseSwing);
+                       session.baseSwing, session.baseLat);
     }
     {
       static int lastOv = -2;
