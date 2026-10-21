@@ -1,4 +1,4 @@
-# FlatPace 0.49 user guide
+# FlatPace 0.49.1 user guide
 
 This guide describes the current version. Changes between versions are listed in the [changelog](CHANGELOG.md) (in Spanish). The app has an English interface: switch it with **ES | EN** at the bottom of the sidebar.
 
@@ -53,7 +53,7 @@ On *Games*:
 
 With G-SYNC/FreeSync, neither counts **stutters** (frames over 2.5 times the usual): no limit fixes them. Without VRR, the previous rules are kept for now.
 
-**The priority is each game's starting point.** With *Smoothness*, if a game turns out to be unstable with its limit (its slowest frames sink in a sustained way in two sessions in a row), the app moves it to *Stability* and shows it on its *Games* row: *"· Stability (chosen by the app)"*. That way stable games make the most of your PC and unstable ones keep a steady pace. It only changes in that direction; *Undo* forgets it.
+**The priority is each game's starting point.** With *Smoothness*, if a game turns out to be unstable with its limit (its slowest frames sink in a sustained way in two sessions in a row), the app moves it to *Stability* and shows it on its *Games* row: *"· Stability (chosen by the app)"*. That way stable games make the most of your PC and unstable ones keep a steady pace. It only changes in that direction; *Undo* forgets it. If you'd rather decide yourself, each game's priority button on *Games* lets you choose **Automatic**, **Always Smoothness** or **Always Stability**; the app doesn't change the last two.
 
 Limits already accepted don't change when you switch priority: undo the game to recalculate it with the new criterion.
 

@@ -127,7 +127,7 @@ static std::atomic<bool> g_quit{false};
 static std::atomic<int> g_lang{0};
 static const char* T(const char* es, const char* en) { return g_lang == 1 ? en : es; }
 
-static constexpr const char* kVersion = "0.49";
+static constexpr const char* kVersion = "0.49.1";
 
 // Carpeta donde esta este .exe.
 static std::wstring ExeDirectory() {
@@ -708,6 +708,9 @@ struct UiChange {
   int fg = 1;       // factor de generacion de fotogramas
   bool manual = false;
   double suggestFps = 0;  // modo "Solo sugerir": limite sugerido (fps reales), 0 si no hay
+  int prioMode = 0;        // 0 = automatica, 1 = siempre Fluidez, 2 = siempre Estabilidad
+  bool usesFluid = true;   // prioridad que se aplica a este juego
+  bool autoStability = false;  // la app paso este juego a Estabilidad
 };
 
 struct UiState {
@@ -1655,6 +1658,7 @@ struct Session {
   double baseLat = -1.0;  // latencia del PC de este juego sin limite (guardada)
   bool climbHandled = false;  // la subida automatica se ocupo de este limite al cerrar (sin sugerencia)
   bool fluid = true;          // prioridad de este juego: la global, o Estabilidad si la app la eligio
+  bool prioFixed = false;     // prioridad elegida por el usuario para este juego (la app no la cambia)
   // Coste de FlatPace durante la partida
   double engMsSum = 0.0, engMsMax = 0.0, cpuAtStart = -1.0, pmCpuAtStart = -1.0;
   double ovMsAtStart = 0.0;
@@ -2042,6 +2046,19 @@ static void PrintSessionSummary(const Session& s, double hz) {
 }
 
 // Un segundo de analisis para el juego de la sesion.
+// Prioridad de un juego: elegida por el usuario en su fila ("prioridad-fija|exe": fluidez o
+// estabilidad), o automatica: la global, salvo que la app haya pasado el juego a Estabilidad.
+// mode: 0 = automatica, 1 = siempre Fluidez, 2 = siempre Estabilidad. Devuelve si usa Fluidez.
+static bool GameUsesFluid(const std::string& exe, int* mode = nullptr, bool* autoStability = nullptr) {
+  const std::string fixed = ReadKv(L"equipo.txt", "prioridad-fija|" + exe);
+  const bool autoSt = g_autoPriority && AutoPriority::Parse(ReadKv(L"equipo.txt", "prioridad|" + exe)).stability;
+  if (mode) *mode = fixed == "fluidez" ? 1 : fixed == "estabilidad" ? 2 : 0;
+  if (autoStability) *autoStability = autoSt;
+  if (fixed == "fluidez") return true;
+  if (fixed == "estabilidad") return false;
+  return g_priority == 1 && !autoSt;
+}
+
 // Va sobrado con su limite en TODA la partida (para subirlo solo): al menos 3 min con el limite
 // funcionando, ningun tramo por debajo (regla de fallos), como mucho un 1 % de segundos sueltos
 // claramente por debajo, y al menos el 98 % de los fotogramas de la partida esperando al limitador
@@ -2507,7 +2524,12 @@ static void WriteCachedHz(const std::string& key, double hz) {
 }
 
 // Datos simples clave=valor en la carpeta de datos (por ejemplo, lo aprendido del equipo).
+// La ventana y el motor leen y escriben los mismos archivos de ajustes: sin este cerrojo, dos escrituras
+// a la vez (leer todo, cambiar una clave, reescribir) podian perder la de uno de los dos.
+static std::recursive_mutex g_kvMutex;
+
 static std::string ReadKv(const std::wstring& file, const std::string& key) {
+  std::lock_guard<std::recursive_mutex> kvLock(g_kvMutex);
   FILE* f = _wfopen((DataDirectory() + L"\\" + file).c_str(), L"r");
   if (!f) return {};
   char line[512];
@@ -2523,6 +2545,7 @@ static std::string ReadKv(const std::wstring& file, const std::string& key) {
 }
 
 static void WriteKv(const std::wstring& file, const std::string& key, const std::string& value) {
+  std::lock_guard<std::recursive_mutex> kvLock(g_kvMutex);
   std::wstring path = DataDirectory() + L"\\" + file;
   std::map<std::string, std::string> all;
   if (FILE* f = _wfopen(path.c_str(), L"r")) {
@@ -3632,8 +3655,7 @@ static void PublishChanges(const ChangeStore& store) {
     }
     u.label = lb->second;
     u.desc = DescribeChange(c);
-    if (g_autoPriority && g_priority == 1 && AutoPriority::Parse(ReadKv(L"equipo.txt", "prioridad|" + exe)).stability)
-      u.desc += T(" · Estabilidad (elegida por la app)", " · Stability (chosen by the app)");
+    u.usesFluid = GameUsesFluid(exe, &u.prioMode, &u.autoStability);
     u.value = static_cast<int>(c.newValue);
     u.fg = std::max(1, c.fgFactor);
     u.manual = c.manual;
@@ -4231,7 +4253,7 @@ static void RunEngine(std::wstring presentMonPath) {
       // solo cuenta la mediana: acepta caidas en los momentos mas exigentes (en Greylock a 125, la
       // mediana se sostuvo el 100 % del tiempo y el 1 % bajo se hundio un 24-48 %).
       // Prioridad por juego: con Fluidez, el 1 % bajo hundido en dos partidas seguidas -> Estabilidad.
-      if (climbOk && g_autoPriority && session.fluid) {
+      if (climbOk && g_autoPriority && session.fluid && !session.prioFixed) {
         const AutoPriority before = AutoPriority::Parse(ReadKv(L"equipo.txt", "prioridad|" + session.exe));
         const AutoPriority after = UpdateAutoPriority(before, true, tailT);
         WriteKv(L"equipo.txt", "prioridad|" + session.exe, after.Serialize());
@@ -4665,8 +4687,11 @@ static void RunEngine(std::wstring presentMonPath) {
           if (!b.empty()) session.baseSwing = std::atof(b.c_str());
           std::string bl = ReadKv(L"equipo.txt", "latencia-antes|" + foundExe);
           if (!bl.empty()) session.baseLat = std::atof(bl.c_str());
-          session.fluid = g_priority == 1 &&
-                          !(g_autoPriority && AutoPriority::Parse(ReadKv(L"equipo.txt", "prioridad|" + foundExe)).stability);
+          {
+            int mode = 0;
+            session.fluid = GameUsesFluid(foundExe, &mode);
+            session.prioFixed = mode != 0;
+          }
         }
         session.label = label;
         g_gameLabels[foundExe] = label;
@@ -5975,10 +6000,22 @@ static void PageGames(const View& v) {
       ImVec2 p = ImGui::GetCursorScreenPos();
       float w = ImGui::GetContentRegionAvail().x;
       float line = ImGui::GetTextLineHeightWithSpacing();
-      float wrapW = w - (c.suggestFps > 0 ? 360 : 160) * scale;
+      const float pad2 = ImGui::GetStyle().FramePadding.x * 2;
+      const float bw = ImGui::CalcTextSize(T("Deshacer", "Undo")).x + pad2;
+      const float mw = ImGui::CalcTextSize(T("Fijar…", "Set…")).x + pad2;
+      // Boton de la prioridad del juego: ancho fijo (el de la etiqueta mas larga) para que no baile.
+      const float prw = std::max({ImGui::CalcTextSize(T("Auto · Estabilidad", "Auto · Stability")).x,
+                                  ImGui::CalcTextSize(T("Estabilidad", "Stability")).x}) + pad2 + 18 * scale;
+      const std::string sugLabel =
+          c.suggestFps > 0 ? Fmt(T("Aplicar sugerencia (%.0f)", "Apply suggestion (%.0f)"), c.suggestFps) : std::string();
+      const float sw = c.suggestFps > 0 ? ImGui::CalcTextSize(sugLabel.c_str()).x + pad2 : 0.0f;
+      float wrapW = w - (bw + mw + prw + (sw > 0 ? sw + 8 * scale : 0.0f) + 70 * scale);
       float warnH = c.warning.empty() ? 0.0f
                     : ImGui::CalcTextSize(c.warning.c_str(), nullptr, false, wrapW).y + 6 * scale;
-      float h = line * 2 + warnH + 22 * scale;
+      // La descripcion tambien se ajusta al espacio que dejan los botones (con cuatro, una linea larga
+      // pasaba por debajo de ellos).
+      const float descH = ImGui::CalcTextSize(c.desc.c_str(), nullptr, false, wrapW).y;
+      float h = line + descH + ImGui::GetStyle().ItemSpacing.y + warnH + 22 * scale;
       ImDrawList* dl = ImGui::GetWindowDrawList();
       dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), Col(kCard), 10 * scale);
       if (!c.warning.empty())
@@ -5988,21 +6025,20 @@ static void PageGames(const View& v) {
       ImGui::PushFont(fontStrong);
       ImGui::TextUnformatted(c.label.c_str());
       ImGui::PopFont();
+      ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + wrapW);
       ImGui::TextColored(kDim, "%s", c.desc.c_str());
+      ImGui::PopTextWrapPos();
       if (!c.warning.empty()) {
         ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + wrapW);
         ImGui::TextColored(kAmber, "%s", c.warning.c_str());
         ImGui::PopTextWrapPos();
       }
       ImGui::EndGroup();
-      float bw = ImGui::CalcTextSize(T("Deshacer", "Undo")).x + ImGui::GetStyle().FramePadding.x * 2;
-      float mw = ImGui::CalcTextSize(T("Fijar…", "Set…")).x + ImGui::GetStyle().FramePadding.x * 2;
+      const float by = p.y + (h - ImGui::GetFrameHeight()) * 0.5f;
       if (c.suggestFps > 0) {
-        const std::string sl = Fmt(T("Aplicar sugerencia (%.0f)", "Apply suggestion (%.0f)"), c.suggestFps);
-        const float sw = ImGui::CalcTextSize(sl.c_str()).x + ImGui::GetStyle().FramePadding.x * 2;
-        ImGui::SetCursorScreenPos(ImVec2(p.x + w - bw - mw - sw - 30 * scale, p.y + (h - ImGui::GetFrameHeight()) * 0.5f));
+        ImGui::SetCursorScreenPos(ImVec2(p.x + w - bw - mw - prw - sw - 38 * scale, by));
         PrimaryButtonStyle(true);
-        if (ImGui::Button(sl.c_str())) {
+        if (ImGui::Button(sugLabel.c_str())) {
           std::lock_guard<std::mutex> lock(g_manualLimitMutex);
           g_applySuggestionReq.push_back(c.exe);
         }
@@ -6013,12 +6049,69 @@ static void PageGames(const View& v) {
                                     "Raises the limit to the suggested value. If the game can't hold it,\n"
                                     "the app will go back to the current limit on its own."));
       }
-      ImGui::SetCursorScreenPos(ImVec2(p.x + w - bw - mw - 22 * scale, p.y + (h - ImGui::GetFrameHeight()) * 0.5f));
+      // Prioridad del juego: automatica (la global; la app puede pasarlo a Estabilidad) o fija.
+      if (!c.manual) {
+        ImGui::SetCursorScreenPos(ImVec2(p.x + w - bw - mw - prw - 30 * scale, by));
+        const char* applied = c.usesFluid ? T("Fluidez", "Smoothness") : T("Estabilidad", "Stability");
+        const std::string pl = c.prioMode == 0 ? std::string("Auto · ") + applied : std::string(applied);
+        // Texto alineado a la izquierda y un triangulo dibujado a la derecha (indica que despliega un menu;
+        // el caracter del triangulo no esta en la fuente de la ventana).
+        ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.0f, 0.5f));
+        if (ImGui::Button((pl + "##prio").c_str(), ImVec2(prw, 0))) ImGui::OpenPopup("prio");
+        ImGui::PopStyleVar();
+        {
+          const ImVec2 bmax = ImGui::GetItemRectMax(), bmin = ImGui::GetItemRectMin();
+          const float cx = bmax.x - 12 * scale, cy = (bmin.y + bmax.y) * 0.5f, r = 3.5f * scale;
+          ImGui::GetWindowDrawList()->AddTriangleFilled(ImVec2(cx - r, cy - r * 0.6f), ImVec2(cx + r, cy - r * 0.6f),
+                                                        ImVec2(cx, cy + r * 0.7f), ImGui::GetColorU32(kDim));
+        }
+        if (ImGui::IsItemHovered())
+          ImGui::SetTooltip("%s", c.prioMode != 0
+              ? T("Prioridad elegida por ti para este juego. La app no la cambia.",
+                  "Priority you chose for this game. The app doesn't change it.")
+              : c.autoStability
+              ? T("Automática: la app pasó este juego a Estabilidad porque es inestable con su límite.",
+                  "Automatic: the app moved this game to Stability because it's unstable with its limit.")
+              : T("Automática: usa la prioridad global; la app puede pasarlo a Estabilidad si es inestable.",
+                  "Automatic: uses the global priority; the app may move it to Stability if it's unstable."));
+        if (ImGui::BeginPopup("prio")) {
+          int choice = -1;
+          if (ImGui::Selectable(T("Automática", "Automatic"), c.prioMode == 0)) choice = 0;
+          if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s", T("Empieza con la prioridad global; si el juego resulta inestable con su límite,\n"
+                                      "la app lo pasa a Estabilidad.",
+                                      "Starts with the global priority; if the game turns out to be unstable with its\n"
+                                      "limit, the app moves it to Stability."));
+          if (ImGui::Selectable(T("Siempre Fluidez", "Always Smoothness"), c.prioMode == 1)) choice = 1;
+          if (ImGui::Selectable(T("Siempre Estabilidad", "Always Stability"), c.prioMode == 2)) choice = 2;
+          ImGui::Separator();
+          ImGui::TextColored(kDim, "%s", T("Se aplica desde la próxima partida.", "Applies from the next session."));
+          ImGui::EndPopup();
+          if (choice >= 0 && choice != c.prioMode) {
+            WriteKv(L"equipo.txt", "prioridad-fija|" + c.exe, choice == 1 ? "fluidez" : choice == 2 ? "estabilidad" : "");
+            int mode = 0;
+            bool autoSt = false;
+            const bool fluidNow = GameUsesFluid(c.exe, &mode, &autoSt);
+            std::lock_guard<std::mutex> lock(g_ui.m);
+            for (auto& u : g_ui.changes)
+              if (u.exe == c.exe) {
+                u.prioMode = mode;
+                u.usesFluid = fluidNow;
+                u.autoStability = autoSt;
+              }
+            g_ui.notice = Fmt(T("%s: prioridad %s desde la próxima partida.", "%s: %s priority from the next session."),
+                              c.label.c_str(),
+                              choice == 0 ? T("automática", "automatic") : choice == 1 ? T("Fluidez", "Smoothness")
+                                                                                  : T("Estabilidad", "Stability"));
+          }
+        }
+      }
+      ImGui::SetCursorScreenPos(ImVec2(p.x + w - bw - mw - 22 * scale, by));
       if (ImGui::Button(T("Fijar…", "Set…"))) RequestManual(c.exe, c.label, c.value, c.fg);
       if (ImGui::IsItemHovered())
         ImGui::SetTooltip("%s", T("Pon tú el límite de este juego. La app no lo cambiará.",
                                   "Set this game's limit yourself. The app won't change it."));
-      ImGui::SetCursorScreenPos(ImVec2(p.x + w - bw - 14 * scale, p.y + (h - ImGui::GetFrameHeight()) * 0.5f));
+      ImGui::SetCursorScreenPos(ImVec2(p.x + w - bw - 14 * scale, by));
       PrimaryButtonStyle(!c.warning.empty());
       if (ImGui::Button(T("Deshacer", "Undo"))) {
         std::lock_guard<std::mutex> lock(g_undoOneMutex);

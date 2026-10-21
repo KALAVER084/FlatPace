@@ -1,4 +1,4 @@
-# Guía de uso de FlatPace 0.49
+# Guía de uso de FlatPace 0.49.1
 
 Esta guía describe la versión actual. Los cambios entre versiones están en el [historial](CHANGELOG.md).
 
@@ -53,7 +53,7 @@ En *Juegos*:
 
 Con G-SYNC/FreeSync, ninguna de las dos cuenta los **tirones** (fotogramas de más de 2,5 veces lo normal): ningún límite los arregla. Sin VRR, por ahora se mantienen las reglas anteriores.
 
-**La prioridad es el punto de partida de cada juego.** Con *Fluidez*, si un juego resulta inestable con su límite (sus fotogramas más lentos se hunden de forma sostenida en dos partidas seguidas), la app lo pasa a *Estabilidad* y lo indica en su fila de *Juegos*: *"· Estabilidad (elegida por la app)"*. Así, los juegos estables aprovechan al máximo tu equipo y los inestables mantienen un ritmo constante. Solo cambia en esa dirección; *Deshacer* lo olvida.
+**La prioridad es el punto de partida de cada juego.** Con *Fluidez*, si un juego resulta inestable con su límite (sus fotogramas más lentos se hunden de forma sostenida en dos partidas seguidas), la app lo pasa a *Estabilidad* y lo indica en su fila de *Juegos*: *"· Estabilidad (elegida por la app)"*. Así, los juegos estables aprovechan al máximo tu equipo y los inestables mantienen un ritmo constante. Solo cambia en esa dirección; *Deshacer* lo olvida. Si prefieres decidirlo tú, el botón de prioridad de cada juego en *Juegos* permite elegir **Automática**, **Siempre Fluidez** o **Siempre Estabilidad**; las dos últimas no las cambia la app.
 
 Los límites ya aceptados no cambian al cambiar la prioridad: deshaz el juego para recalcularlo con el criterio nuevo.
 
