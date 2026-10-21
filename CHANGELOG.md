@@ -2,6 +2,10 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). La versión más reciente va primero.
 
+## 0.40.1
+- **Corregido:** en juegos con generación de fotogramas, la app podía sugerir que el juego "va sobrado" y subir el límite cuando no era así. Los modelos de capacidad suponen que el límite rige siempre sobre los fotogramas reales; con generación intermitente no es cierto (en Control Resonant, sin generación los fotogramas reales iban a 60-72 FPS con un límite de 36 reales, y el modelo los tomaba por fotogramas esperando en el límite). Ahora, con generación, no se calculan la capacidad, el 1 % bajo causado por el juego, la memoria ni las sugerencias; el resumen lo indica y la sugerencia errónea se retira.
+- **Corregido:** las comillas tipográficas aparecían como "?" en la interfaz (*Click ?Undo?*): la fuente solo cargaba la raya y los puntos suspensivos de ese bloque de signos. Ahora carga todo el bloque de puntuación (comillas, apóstrofos y guiones).
+
 ## 0.40
 Cambios a partir de las pruebas con CONTROL Resonant (generación de fotogramas que el juego activa y desactiva sola).
 - **Cambiado:** en los juegos con generación de fotogramas, la gráfica dibuja las **imágenes en pantalla** (lo que se ve), con la referencia del límite en pantalla, durante toda la partida. Antes dibujaba los fotogramas reales, que en Control Resonant saltaban entre 36 FPS (con generación) y 60-68 (sin ella), aunque en pantalla la diferencia era mucho menor. La etiqueta lo indica (*"en pantalla 13,9 ms ±1,8"*). La cifra grande y el 1 % bajo siguen siendo de fotogramas reales, que marcan la respuesta del juego.

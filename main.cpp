@@ -124,7 +124,7 @@ static std::atomic<bool> g_quit{false};
 static std::atomic<int> g_lang{0};
 static const char* T(const char* es, const char* en) { return g_lang == 1 ? en : es; }
 
-static constexpr const char* kVersion = "0.40";
+static constexpr const char* kVersion = "0.40.1";
 
 // Carpeta donde esta este .exe.
 static std::wstring ExeDirectory() {
@@ -1778,6 +1778,13 @@ static std::string ReadKv(const std::wstring& file, const std::string& key);
 
 // Periodo (ms de fotograma real) del limite que esta actuando, para el modelo de datos censurados:
 // el de FlatPace si esta comprobado o se aplico al abrir el juego, o el que se detecta (del juego).
+// Con generacion de fotogramas (vista en la partida o con la que se aplico el limite), los modelos de
+// capacidad no se aplican: suponen que el limite rige siempre sobre los fotogramas reales, y con
+// generacion (sobre todo intermitente) no es asi. En Control Resonant, con la generacion apagada los
+// fotogramas reales iban a 60-72 fps con un limite de 36 reales, y el modelo los tomaba por fotogramas
+// esperando en el limite ("va sobrado").
+static bool FrameGenInvolved(const Session& ss) { return ss.fgEverSeen || ss.expectFg > 1; }
+
 static double ActiveCapMs(const Session& ss) {
   if (ss.expectedFps > 0 && (ss.verified || ss.appliedAtStart)) return 1000.0 / ss.expectedFps;
   if (ss.lastStats.capped && ss.lastStats.capFps > 0) return 1000.0 / ss.lastStats.capFps;
@@ -1894,7 +1901,17 @@ static void PrintSessionSummary(const Session& s, double hz) {
 
   // Modelos estadisticos: capacidad con el limite puesto (datos censurados), memoria del juego
   // entre partidas y fases de juego. Por ahora informan y sugieren; no cambian las decisiones.
-  {
+  if (FrameGenInvolved(s)) {
+    Log("  Capacidad, memoria y sugerencias: no se calculan con generacion de fotogramas (los\n"
+        "  fotogramas reales cambian de ritmo con ella y el limite no rige siempre sobre ellos).\n");
+    // Quitar una sugerencia de subir que se hubiera calculado antes con datos mezclados.
+    std::lock_guard<std::mutex> lock(g_ui.m);
+    auto w = g_ui.warnings.find(s.exe);
+    if (w != g_ui.warnings.end() && (w->second.rfind(T("Va sobrado", "It has plenty"), 0) == 0 ||
+                                     w->second.rfind(T("Podría sostener", "It could hold"), 0) == 0))
+      g_ui.warnings.erase(w);
+  }
+  if (!FrameGenInvolved(s)) {
     std::vector<double> msv;
     msv.reserve(s.longReal.size());
     for (const auto& r : s.longReal) msv.push_back(r.second);
@@ -1997,6 +2014,7 @@ static void PrintSessionSummary(const Session& s, double hz) {
 // Un segundo de analisis para el juego de la sesion.
 // 1 % bajo (fps) causado por el juego en los ultimos 20 s, con un limite activo (0 si no hay limite).
 static double GameLowFps(const Session& ss) {
+  if (FrameGenInvolved(ss)) return 0.0;
   const double capMs = ActiveCapMs(ss);
   if (capMs <= 0 || ss.samples.empty()) return 0.0;
   const double from = ss.samples.back().t - cfg::kWindowSec;
@@ -2377,7 +2395,7 @@ static void ProcessSession(Session& ss, std::vector<FrameSample>& fresh, double 
                     st.capFits ? "" : " (no encaja)");
       extra += buf;
     }
-    if (const double capMs = ActiveCapMs(ss); capMs > 0) {
+    if (const double capMs = ActiveCapMs(ss); capMs > 0 && !FrameGenInvolved(ss)) {
       std::vector<double> win;
       for (const auto& f : ss.samples)
         if (!f.generated && f.realMs > 0 && f.t >= now - cfg::kWindowSec) win.push_back(f.realMs);
@@ -4514,7 +4532,7 @@ static void ApplyTheme() {
 
 static void LoadFontsInto(ImFont*& body, ImFont*& strong, ImFont*& big) {
   ImGuiIO& io = ImGui::GetIO();
-  static const ImWchar ranges[] = {0x0020, 0x00FF, 0x2014, 0x2014, 0x2026, 0x2026,
+  static const ImWchar ranges[] = {0x0020, 0x00FF, 0x2010, 0x2027,
                                    0x2190, 0x2193, 0x2022, 0x2022, 0};
   wchar_t winDir[MAX_PATH];
   GetWindowsDirectoryW(winDir, MAX_PATH);
@@ -4538,7 +4556,7 @@ static void LoadFonts() {
   wchar_t winDir[MAX_PATH];
   GetWindowsDirectoryW(winDir, MAX_PATH);
   std::string path = Narrow(std::wstring(winDir)) + "\\Fonts\\bahnschrift.ttf";
-  static const ImWchar ranges[] = {0x0020, 0x00FF, 0x2014, 0x2014, 0x2026, 0x2026, 0x2190, 0x2193, 0x2713, 0x2713, 0};
+  static const ImWchar ranges[] = {0x0020, 0x00FF, 0x2010, 0x2027, 0x2190, 0x2193, 0x2713, 0x2713, 0};
   if (GetFileAttributesA(path.c_str()) != INVALID_FILE_ATTRIBUTES) {
     fontHead = io.Fonts->AddFontFromFileTTF(path.c_str(), 24.0f * scale, nullptr, ranges);
     fontNum = io.Fonts->AddFontFromFileTTF(path.c_str(), 60.0f * scale, nullptr, ranges);
