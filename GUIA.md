@@ -1,4 +1,4 @@
-# Guía de uso de FlatPace 0.48.2
+# Guía de uso de FlatPace 0.48.3
 
 Esta guía describe la versión actual. Los cambios entre versiones están en el [historial](CHANGELOG.md).
 
@@ -44,12 +44,12 @@ Al pie de la barra: **Aplicar límites** (si está apagado, la app solo mide), *
 
 **¿Cuándo se sube?** Con G-SYNC/FreeSync y sin generación de fotogramas, si el juego fue **sobrado** toda la partida: al menos 3 minutos con el límite, ni un tramo por debajo (ni de la mediana ni del 1 % bajo) y casi todos los fotogramas esperando al limitador. Con *Fluidez* basta una partida así; con *Estabilidad* hacen falta dos seguidas. Las reglas eligen el límite con prudencia, y muchos juegos rinden más con un límite puesto que sin él, así que la app va subiendo poco a poco hasta lo que el juego sostiene de verdad. Si una subida no se sostiene (con *Estabilidad*, aunque solo sea en las zonas pesadas), vuelve al límite anterior y no lo vuelve a intentar durante 30 días. Si prefieres decidir tú, elige **Solo sugerir** en *Juegos* → *Ajuste de límites*: la app te avisará de que el juego va sobrado y mostrará el botón **Aplicar sugerencia**, con las mismas protecciones. Las bajadas son automáticas en ambos modos, porque un límite que el juego no sostiene siempre empeora el ritmo; si quieres control total sobre un juego, usa *Fijar…*.
 
-## 5. Prioridad: Estabilidad o Fluidez
+## 5. Prioridad: Fluidez o Estabilidad
 
 En *Juegos*:
 
-- **Estabilidad** (por defecto, recomendada): un límite que el juego sostiene incluso en sus peores momentos **sin bajar de forma perceptible** (su 1 % más lento llega como mucho un 13 % tarde, una diferencia que no se nota). Es el ritmo más regular y la línea más plana en la gráfica.
-- **Fluidez:** el límite que el juego alcanza **el 90 % del tiempo**, aceptando caídas breves en los momentos más exigentes. Da más FPS; en las pruebas, las caídas perceptibles fueron de alrededor del 1 % del tiempo.
+- **Fluidez** (por defecto, recomendada): el límite que el juego alcanza **el 90 % del tiempo**, aceptando caídas breves en los momentos más exigentes. Da más FPS; en las pruebas, las caídas perceptibles fueron de alrededor del 1 % del tiempo.
+- **Estabilidad:** un límite que el juego sostiene incluso en sus peores momentos **sin bajar de forma perceptible** (su 1 % más lento llega como mucho un 13 % tarde, una diferencia que no se nota). Es el ritmo más regular y la línea más plana en la gráfica.
 
 Con G-SYNC/FreeSync, ninguna de las dos cuenta los **tirones** (fotogramas de más de 2,5 veces lo normal): ningún límite los arregla. Sin VRR, por ahora se mantienen las reglas anteriores.
 

@@ -2,6 +2,9 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). La versión más reciente va primero.
 
+## 0.48.3
+- **Cambiado: *Fluidez* es la prioridad por defecto y la recomendada** (antes, *Estabilidad*). Con las reglas validadas con partidas reales, *Fluidez* da límites más altos con caídas perceptibles alrededor del 1 % del tiempo, y con las subidas automáticas llega antes a lo que el juego sostiene. Solo afecta a instalaciones nuevas: una prioridad ya guardada se respeta. En la ventana, *Fluidez* aparece primero.
+
 ## 0.48.2
 - **Corregido: la regla del 1 % bajo (0.48.1) solo baja límites con *Estabilidad*.** Aplicada también con *Fluidez*, convertía esa prioridad en *Estabilidad* partida a partida (en Greylock: 125 → 110 → 97), aunque *Fluidez* promete justo lo contrario: el ritmo que el juego alcanza la mayor parte del tiempo, aceptando caídas en los momentos más exigentes (a 125, la mediana se sostuvo el 100 % del tiempo). Con *Fluidez*, un límite falla solo si cae la mediana. En ambas prioridades, "va sobrado" sigue exigiendo que el 1 % bajo no se haya hundido.
 - **Nuevo: el último minuto antes de cerrar el juego no cuenta para la regla de fallos.** Ahí suelen estar los menús, la salida o, como en una partida de Greylock, un cuelgue en el que el juego siguió presentando imágenes a ~52 FPS durante 50 segundos: para FlatPace es indistinguible de una zona lenta. (En esa partida no cambió la decisión, pero en una más corta podría haberlo hecho.)

@@ -127,7 +127,7 @@ static std::atomic<bool> g_quit{false};
 static std::atomic<int> g_lang{0};
 static const char* T(const char* es, const char* en) { return g_lang == 1 ? en : es; }
 
-static constexpr const char* kVersion = "0.48.2";
+static constexpr const char* kVersion = "0.48.3";
 
 // Carpeta donde esta este .exe.
 static std::wstring ExeDirectory() {
@@ -734,7 +734,7 @@ struct UiState {
 };
 static UiState g_ui;
 static std::atomic<bool> g_applyMode{true};
-static std::atomic<int> g_priority{0};  // 0 = estabilidad (por defecto), 1 = fluidez
+static std::atomic<int> g_priority{1};  // 0 = estabilidad, 1 = fluidez (por defecto desde la 0.48.3)
 // Usar G-SYNC / FreeSync cuando actuen (automatico). Ajuste avanzado, sin interfaz:
 // "divisores-siempre=si" en equipo.txt fuerza los divisores de los Hz aunque haya VRR, para
 // pantallas que parpadean con VRR (algunas OLED y VA).
@@ -5873,8 +5873,8 @@ static void PageGames(const View& v) {
   {
     int pr = g_priority;
     const char* names[2] = {T("Estabilidad", "Stability"), T("Fluidez", "Smoothness")};
-    for (int i = 0; i <= 1; ++i) {  // Estabilidad primero (predeterminada)
-      if (i == 1) ImGui::SameLine(0, 4 * scale);
+    for (int i : {1, 0}) {  // Fluidez primero (predeterminada)
+      if (i == 0) ImGui::SameLine(0, 4 * scale);
       bool sel = pr == i;
       PrimaryButtonStyle(sel);
       if (ImGui::Button(names[i], ImVec2(140 * scale, 0)) && !sel) {
@@ -5885,14 +5885,14 @@ static void PageGames(const View& v) {
     }
     ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x * 0.85f);
     ImGui::TextColored(kDim, "%s", pr == 1
-        ? T("Fluidez: el límite más alto que el juego alcanza la mayor parte del tiempo, aceptando "
-            "pequeñas irregularidades en los momentos más exigentes.",
-            "Smoothness: the highest limit the game reaches most of the time, accepting small "
-            "irregularities in the most demanding moments.")
-        : T("Estabilidad (recomendada): un límite que el juego sostiene siempre, incluso en sus peores "
-            "momentos. El ritmo más regular, aunque a veces algo más bajo.",
-            "Stability (recommended): a limit the game always holds, even in its worst moments. The "
-            "steadiest pace, though sometimes a bit lower."));
+        ? T("Fluidez (recomendada): el límite más alto que el juego alcanza la mayor parte del tiempo, "
+            "aceptando caídas breves en los momentos más exigentes.",
+            "Smoothness (recommended): the highest limit the game reaches most of the time, accepting "
+            "brief drops in the most demanding moments.")
+        : T("Estabilidad: un límite que el juego sostiene incluso en sus peores momentos. El ritmo más "
+            "regular, aunque a veces algo más bajo.",
+            "Stability: a limit the game holds even in its worst moments. The steadiest pace, though "
+            "sometimes a bit lower."));
     ImGui::PopTextWrapPos();
     ImGui::Dummy(ImVec2(0, 4 * scale));
     ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x * 0.85f);
@@ -6146,11 +6146,10 @@ static void Draw() {
 
 int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
   {
-    if (ReadKv(L"equipo.txt", "prioridad-v2") != "1") {
-      WriteKv(L"equipo.txt", "prioridad", "estabilidad");
-      WriteKv(L"equipo.txt", "prioridad-v2", "1");
-    }
-    g_priority = ReadKv(L"equipo.txt", "prioridad") == "fluidez" ? 1 : 0;
+    // Sin prioridad guardada (instalacion nueva): Fluidez, la predeterminada desde la 0.48.3. Una
+    // prioridad ya guardada se respeta.
+    if (ReadKv(L"equipo.txt", "prioridad").empty()) WriteKv(L"equipo.txt", "prioridad", "fluidez");
+    g_priority = ReadKv(L"equipo.txt", "prioridad") == "estabilidad" ? 0 : 1;
     if (ReadKv(L"equipo.txt", "divisores-siempre") == "si") g_useVrr = false;
     if (ReadKv(L"equipo.txt", "overlay") == "no") overlay::enabled = false;
     if (ReadKv(L"equipo.txt", "grabar-fotogramas") == "si") g_recordFrames = true;

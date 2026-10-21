@@ -1,4 +1,4 @@
-# FlatPace 0.48.2 user guide
+# FlatPace 0.48.3 user guide
 
 This guide describes the current version. Changes between versions are listed in the [changelog](CHANGELOG.md) (in Spanish). The app has an English interface: switch it with **ES | EN** at the bottom of the sidebar.
 
@@ -44,12 +44,12 @@ At the bottom of the sidebar: **Apply limits** (when off, the app only measures)
 
 **When is it raised?** With G-SYNC/FreeSync and without frame generation, if the game had **headroom** the whole session: at least 3 minutes with the limit, no stretch below it (neither the median nor the 1 % low) and almost all frames waiting on the limiter. With *Smoothness* one such session is enough; with *Stability* it takes two in a row. The rules pick the limit cautiously, and many games perform better with a limit than without one, so the app climbs step by step to what the game really holds. If a raise doesn't hold (with *Stability*, even if only in the heavy areas), it goes back to the previous limit and won't try again for 30 days. If you'd rather decide yourself, choose **Suggest only** in *Games* → *Limit adjustment*: the app will tell you the game has headroom and show an **Apply suggestion** button, with the same protections. Lowering is automatic in both modes, because a limit the game can't hold always worsens the pace; for full control over a game, use *Set…*.
 
-## 5. Priority: Stability or Smoothness
+## 5. Priority: Smoothness or Stability
 
 On *Games*:
 
-- **Stability** (default, recommended): a limit the game holds even in its worst moments **without perceptible drops** (its slowest 1 % arrives at most 13 % late, a difference you can't notice). It gives the steadiest pace and the flattest line in the graph.
-- **Smoothness:** the limit the game reaches **90 % of the time**, accepting brief drops in the most demanding moments. More FPS; in testing, perceptible drops took about 1 % of the time.
+- **Smoothness** (default, recommended): the limit the game reaches **90 % of the time**, accepting brief drops in the most demanding moments. More FPS; in testing, perceptible drops took about 1 % of the time.
+- **Stability:** a limit the game holds even in its worst moments **without perceptible drops** (its slowest 1 % arrives at most 13 % late, a difference you can't notice). It gives the steadiest pace and the flattest line in the graph.
 
 With G-SYNC/FreeSync, neither counts **stutters** (frames over 2.5 times the usual): no limit fixes them. Without VRR, the previous rules are kept for now.
 
