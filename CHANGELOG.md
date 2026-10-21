@@ -2,6 +2,9 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). La versión más reciente va primero.
 
+## 0.47
+- **Nuevo: medición de la latencia del PC** en los juegos con marcadores de Reflex/PC Latency (como Space Marine 2 o Control Resonant), con la medida `MsPCLatency` de PresentMon: desde que el juego lee la entrada hasta que la imagen sale hacia la pantalla. El resumen de cada partida da su mediana y su 1 % peor, por separado con el límite funcionando y sin él, y la grabación de fotogramas incluye la columna `latencia_pc_ms`. Sirve para comprobar si el límite de un juego mejora o empeora su latencia; el ratón y el monitor añaden lo mismo en ambos casos, así que no hace falta hardware para comparar.
+
 ## 0.46
 - **Nuevo: interruptor "Ajuste de límites"** en *Juegos*, debajo de la prioridad: **Automático** (por defecto: los límites suben solos cuando el juego va sobrado) o **Solo sugerir** (la app lo avisa y la fila del juego muestra el botón **Aplicar sugerencia**). Antes, la única forma de elegir era editar `equipo.txt`.
 - **Aplicar sugerencia** sube el límite aunque el juego no esté abierto (por el mismo camino que *Fijar…*), pero lo deja como límite automático y con las mismas protecciones que las subidas automáticas: si no se sostiene, vuelve al límite anterior y guarda el techo. La sugerencia se conserva al reiniciar la app y se descarta si el límite actual falla o se deshace.

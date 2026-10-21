@@ -21,4 +21,7 @@ struct FrameSample {
   // Error de animacion (PresentMon): diferencia entre el ritmo de la simulacion del juego y el
   // de la pantalla. NAN si no esta disponible.
   double animErrMs = std::numeric_limits<double>::quiet_NaN();
+  // Latencia del PC (PresentMon, MsPCLatency): desde que el juego lee la entrada hasta que la imagen
+  // sale hacia la pantalla. Solo en juegos con marcadores de Reflex/PC Latency; NAN si no esta disponible.
+  double pcLatencyMs = std::numeric_limits<double>::quiet_NaN();
 };

@@ -1,4 +1,4 @@
-# FlatPace 0.46 technical documentation
+# FlatPace 0.47 technical documentation
 
 This document explains how FlatPace works inside: architecture, algorithms, formulas, data formats and the sources behind its decisions. Some names (log lines, data files and keys) are in Spanish, as they appear in the program.
 
@@ -104,7 +104,7 @@ If the monitor offers other refresh rates at the current resolution and one of t
 **`cambios-aplicados.txt` format (v2), tab-separated:**
 `v2  exe  created(0/1)  method(0 limit / 1 VSync)  divisor  fps  n  [id_hex  had(0/1)  original_hex]×n` followed by optional fields: `fg k frl`, `hz rate`, `ok 1` (accepted), `base real_fps`, `vrr 1`, `manual 1` (set by the user: the app doesn't change it).
 
-**Recording format (CSV):** header lines starting with `#` (version, game, real refresh rate, VRR range, priority and limit at start) and one row per game frame with: `t_llegada_s` (when the data arrived, in batches), `t_acumulado_s` (sum of presents), `presentacion_ms`, `real_ms` (with Reflex markers, the simulation interval), `real_presentacion_ms`, `generado` (0/1), `cpu_ms`, `gpu_ms`, `pantalla_ms`, `error_animacion_ms`, `vrr` and `limite_confirmado` (state at that moment). Unavailable values are left empty.
+**Recording format (CSV):** header lines starting with `#` (version, game, real refresh rate, VRR range, priority and limit at start) and one row per game frame with: `t_llegada_s` (when the data arrived, in batches), `t_acumulado_s` (sum of presents), `presentacion_ms`, `real_ms` (with Reflex markers, the simulation interval), `real_presentacion_ms`, `generado` (0/1), `cpu_ms`, `gpu_ms`, `pantalla_ms`, `error_animacion_ms`, `vrr` and `limite_confirmado` (state at that moment) and, since 0.47, `latencia_pc_ms`: PC latency according to PresentMon (`MsPCLatency`, from when the game reads input until the image is sent to the display), only in games with Reflex/PC Latency markers. Each session summary gives its median and worst 1 %, separately with the limit working and without it, to compare the limit's effect on latency (the mouse and the monitor add the same in both cases). Unavailable values are left empty.
 
 ## 8. Advanced settings
 

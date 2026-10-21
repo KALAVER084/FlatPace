@@ -127,7 +127,7 @@ static std::atomic<bool> g_quit{false};
 static std::atomic<int> g_lang{0};
 static const char* T(const char* es, const char* en) { return g_lang == 1 ? en : es; }
 
-static constexpr const char* kVersion = "0.46";
+static constexpr const char* kVersion = "0.47";
 
 // Carpeta donde esta este .exe.
 static std::wstring ExeDirectory() {
@@ -598,13 +598,14 @@ class PresentMonReader {
         colType_ = FindColumn(cols, {"frametype"});
         colDisplay_ = FindColumn(cols, {"msbetweendisplaychange", "displayedtime"});
         colAnim_ = FindColumn(cols, {"msanimationerror", "animationerror"});
+        colPcLat_ = FindColumn(cols, {"mspclatency", "pclatency"});
         headerParsed_ = true;
         auto name = [&](int c) { return c >= 0 ? Trim(cols[c]) : std::string("no disponible"); };
         Message("Columnas de PresentMon: fotograma=" +
                 (colFrame_ >= 0 ? Trim(cols[colFrame_]) : std::string("NO ENCONTRADA")) +
                 ", CPU=" + name(colCpu_) + ", GPU=" + name(colGpu_) +
                 ", tipo=" + name(colType_) + ", simulacion=" + name(colSim_) +
-                ", animacion=" + name(colAnim_));
+                ", animacion=" + name(colAnim_) + ", latencia=" + name(colPcLat_));
       } else if (line.find("already running") == std::string::npos &&
                  line.find("--session_name") == std::string::npos) {
         Message("[PresentMon] " + line);
@@ -623,6 +624,7 @@ class PresentMonReader {
     if (HasCol(colMode_, cols)) s.presentMode = Trim(cols[colMode_]);
     if (HasCol(colDisplay_, cols) && ParseNumber(cols[colDisplay_], v) && v > 0) s.displayMs = v;
     if (HasCol(colAnim_, cols) && ParseNumber(cols[colAnim_], v)) s.animErrMs = v;
+    if (HasCol(colPcLat_, cols) && ParseNumber(cols[colPcLat_], v) && v > 0) s.pcLatencyMs = v;
     if (HasCol(colPid_, cols) && ParseNumber(cols[colPid_], v)) s.pid = static_cast<DWORD>(v);
     s.swapchain = std::to_string(s.pid) + ":" + (HasCol(colSwap_, cols) ? Trim(cols[colSwap_]) : "");
     if (HasCol(colType_, cols)) {
@@ -685,6 +687,7 @@ class PresentMonReader {
 
  private:
   int colFrame_ = -1, colCpu_ = -1, colGpu_ = -1, colSwap_ = -1, colType_ = -1, colDisplay_ = -1, colAnim_ = -1;
+  int colPcLat_ = -1;
   int colApp_ = -1, colPid_ = -1, colSim_ = -1, colMode_ = -1;
   static constexpr int kSimTrustFrames = 60;
   std::map<DWORD, int> simSeen_;
@@ -1644,6 +1647,8 @@ struct Session {
   double start = -1.0, phaseStart = 0.0, lastStatus = 0.0, lastFrameArrival = 0.0;
   bool haveRec = false, fgActive = false, fgEverSeen = false, paused = false;
   int fgToggles = 0;  // cambios de estado de la generacion en esta partida
+  // Latencia del PC por fotograma real (ms): con el limite funcionando y sin el (o antes de comprobarlo).
+  std::vector<float> pcLatLimited, pcLatOther;
   bool climbHandled = false;  // la subida automatica se ocupo de este limite al cerrar (sin sugerencia)
   // Coste de FlatPace durante la partida
   double engMsSum = 0.0, engMsMax = 0.0, cpuAtStart = -1.0, pmCpuAtStart = -1.0;
@@ -1809,7 +1814,7 @@ struct FrameRecorder {
     setvbuf(f, nullptr, _IOFBF, 1 << 16);
     for (const auto& h : header) std::fprintf(f, "# %s\n", h.c_str());
     std::fprintf(f, "t_llegada_s,t_acumulado_s,presentacion_ms,real_ms,real_presentacion_ms,generado,"
-                    "cpu_ms,gpu_ms,pantalla_ms,error_animacion_ms,vrr,limite_confirmado\n");
+                    "cpu_ms,gpu_ms,pantalla_ms,error_animacion_ms,vrr,limite_confirmado,latencia_pc_ms\n");
     rows = 0;
     tSum = 0.0;
     return true;
@@ -1819,13 +1824,13 @@ struct FrameRecorder {
     if (!f) return;
     if (s.presentMs > 0) tSum += s.presentMs / 1000.0;
     auto num = [](double v, const char* fmt) { return std::isnan(v) || v < -1e8 ? std::string() : Fmt(fmt, v); };
-    std::fprintf(f, "%.4f,%.4f,%.3f,%s,%s,%d,%s,%s,%s,%s,%d,%d\n", s.t - sessionStart, tSum, s.presentMs,
+    std::fprintf(f, "%.4f,%.4f,%.3f,%s,%s,%d,%s,%s,%s,%s,%d,%d,%s\n", s.t - sessionStart, tSum, s.presentMs,
                  num(s.realMs > 0 ? s.realMs : NAN, "%.3f").c_str(),
                  num(s.presentRealMs > 0 ? s.presentRealMs : NAN, "%.3f").c_str(), s.generated ? 1 : 0,
                  num(s.cpuBusyMs >= 0 ? s.cpuBusyMs : NAN, "%.3f").c_str(),
                  num(s.gpuBusyMs >= 0 ? s.gpuBusyMs : NAN, "%.3f").c_str(),
                  num(s.displayMs > 0 ? s.displayMs : NAN, "%.3f").c_str(), num(s.animErrMs, "%.3f").c_str(),
-                 vrr ? 1 : 0, verified ? 1 : 0);
+                 vrr ? 1 : 0, verified ? 1 : 0, num(s.pcLatencyMs, "%.3f").c_str());
     ++rows;
   }
 
@@ -1870,6 +1875,19 @@ static void PrintSessionSummary(const Session& s, double hz) {
         Log(" | antes, sin limite: +-%.2f ms", s.baseSwing);
       }
     }
+  }
+  // Latencia del PC (solo juegos con marcadores de Reflex/PC Latency)
+  auto latLine = [](const std::vector<float>& v, const char* what) {
+    if (v.size() < 300) return;
+    std::vector<double> d(v.begin(), v.end());
+    std::sort(d.begin(), d.end());
+    Log("\n  Latencia del PC%s%s: mediana %.1f ms | 1 %% peor %.1f ms (%zu fotogramas)", *what ? " " : "", what,
+        PercentileSorted(d, 50),
+        PercentileSorted(d, 99), d.size());
+  };
+  if (s.pcLatLimited.size() >= 300 || s.pcLatOther.size() >= 300) {
+    latLine(s.pcLatLimited, "con el limite");
+    latLine(s.pcLatOther, s.pcLatLimited.size() >= 300 ? "sin limite o antes de comprobarlo" : "");
   }
   if (s.aeN > 100)
     Log("\n  Error de animacion: media %.2f ms | %.1f %% de fotogramas con mas de 1 ms | maximo %.1f ms",
@@ -2146,6 +2164,10 @@ static void ProcessSession(Session& ss, std::vector<FrameSample>& fresh, double 
       ss.aeN++;
       if (a > 1.0) ss.aeOver1++;
       ss.aeMax = std::max(ss.aeMax, a);
+    }
+    if (now >= ss.phaseStart && !s.generated && !std::isnan(s.pcLatencyMs) && s.pcLatencyMs < 1000.0) {
+      auto& v = ss.verified && ss.expectedFps > 0 ? ss.pcLatLimited : ss.pcLatOther;
+      if (v.size() < 400000) v.push_back(static_cast<float>(s.pcLatencyMs));
     }
     if (now >= ss.phaseStart && s.presentMs > 0 && s.presentMs <= cfg::kSpikeMs) {
       if (ss.sPrev > 0) {

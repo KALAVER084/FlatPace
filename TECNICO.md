@@ -1,4 +1,4 @@
-# Documentación técnica de FlatPace 0.46
+# Documentación técnica de FlatPace 0.47
 
 Este documento explica cómo funciona FlatPace por dentro: arquitectura, algoritmos, fórmulas, formatos de datos y las fuentes en que se basan sus decisiones.
 
@@ -104,7 +104,7 @@ Si el monitor ofrece otras frecuencias en la resolución actual y alguna permite
 **Formato de `cambios-aplicados.txt` (v2), separado por tabuladores:**
 `v2  exe  creado(0/1)  método(0 límite / 1 VSync)  divisor  fps  n  [id_hex  tenía(0/1)  original_hex]×n` seguido de campos opcionales: `fg k frl`, `hz frecuencia`, `ok 1` (aceptado), `base fps_reales`, `vrr 1`, `manual 1` (puesto por el usuario: la app no lo cambia).
 
-**Formato de las grabaciones (CSV):** líneas de cabecera que empiezan por `#` (versión, juego, frecuencia real, rango VRR, prioridad y límite al empezar) y una fila por fotograma del juego con: `t_llegada_s` (cuándo llegó el dato, por tandas), `t_acumulado_s` (suma de presentaciones), `presentacion_ms`, `real_ms` (con marcadores de Reflex, intervalo de simulación), `real_presentacion_ms`, `generado` (0/1), `cpu_ms`, `gpu_ms`, `pantalla_ms`, `error_animacion_ms`, `vrr` y `limite_confirmado` (estado en ese momento). Los valores no disponibles quedan vacíos.
+**Formato de las grabaciones (CSV):** líneas de cabecera que empiezan por `#` (versión, juego, frecuencia real, rango VRR, prioridad y límite al empezar) y una fila por fotograma del juego con: `t_llegada_s` (cuándo llegó el dato, por tandas), `t_acumulado_s` (suma de presentaciones), `presentacion_ms`, `real_ms` (con marcadores de Reflex, intervalo de simulación), `real_presentacion_ms`, `generado` (0/1), `cpu_ms`, `gpu_ms`, `pantalla_ms`, `error_animacion_ms`, `vrr` y `limite_confirmado` (estado en ese momento) y, desde la 0.47, `latencia_pc_ms`: la latencia del PC según PresentMon (`MsPCLatency`, desde que el juego lee la entrada hasta que la imagen sale hacia la pantalla), solo en juegos con marcadores de Reflex/PC Latency. El resumen de cada partida da su mediana y su 1 % peor, por separado con el límite funcionando y sin él, para comparar el efecto del límite sobre la latencia (el ratón y el monitor añaden lo mismo en ambos casos). Los valores no disponibles quedan vacíos.
 
 ## 8. Ajustes avanzados
 
