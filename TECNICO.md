@@ -1,4 +1,4 @@
-# Documentación técnica de FlatPace 0.43.3
+# Documentación técnica de FlatPace 0.43.4
 
 Este documento explica cómo funciona FlatPace por dentro: arquitectura, algoritmos, fórmulas, formatos de datos y las fuentes en que se basan sus decisiones.
 
@@ -15,7 +15,7 @@ Este documento explica cómo funciona FlatPace por dentro: arquitectura, algorit
 
 Los hilos se comunican con estructuras protegidas por mutex (estado de la ventana, datos del overlay, peticiones de deshacer). El motor nunca bloquea la interfaz.
 
-**Pila:** C++20, Win32, Dear ImGui, Direct3D 11, NVAPI (cargada en tiempo de ejecución desde `nvapi64.dll`), PresentMon. Código en dos partes: `main.cpp` (~5.200 líneas: Windows, interfaz, motor, driver y overlay) y `src/core/` (~660 líneas: la lógica pura, sin dependencias de Windows, en varios módulos: parámetros, estadísticas, análisis y recomendaciones, ciclo de decisión (`decision.h`), modelos estadísticos, EDID y gráfica de ritmo). `main.cpp` incluye cada módulo en el mismo punto donde estaba su código. Se compila con MinGW-w64 (compilación cruzada) o con CMake + MSVC.
+**Pila:** C++20, Win32, Dear ImGui, Direct3D 11, NVAPI (cargada en tiempo de ejecución desde `nvapi64.dll`), PresentMon. Código en dos partes: `main.cpp` (~5.700 líneas: Windows. interfaz. motor. driver y overlay) y `src/core/` (~1.300 líneas: la lógica pura, sin dependencias de Windows, en varios módulos: parámetros, estadísticas, análisis y recomendaciones, ciclo de decisión (`decision.h`), modelos estadísticos, EDID y gráfica de ritmo). `main.cpp` incluye cada módulo en el mismo punto donde estaba su código. Se compila con MinGW-w64 (compilación cruzada) o con CMake + MSVC.
 
 ## 2. Medición
 
@@ -152,7 +152,7 @@ x86_64-w64-mingw32-g++-posix -std=c++20 -municode -mwindows -O2 -DNDEBUG -Ithird
   -ld3d11 -ldxgi -ld3dcompiler_47 -ldwmapi -lgdi32 -lshell32 -luser32 -ladvapi32 -lversion \
   -limm32 -lwinmm -static -s
 ```
-Windows: `cmake -B build && cmake --build build --config Release`. Dear ImGui (con los backends Win32 y DX11) va en `third_party/imgui`.
+Windows: `cmake -B build && cmake --build build --config Release`. Dear ImGui (con los backends Win32 y DX11) va en `third_party/imgui`, y las declaraciones de NVAPI que usa FlatPace (de NVIDIA, licencia MIT) en `third_party/nvapi/nvapi_min.h`: todo el código de terceros está en `third_party/`.
 
 ## 13. Pruebas automáticas
 

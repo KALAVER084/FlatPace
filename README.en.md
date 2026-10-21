@@ -4,7 +4,7 @@
 
 **FlatPace measures your games and applies the frame-rate limit that makes them run as steadily as possible.** It does for Windows what the Steam Deck does in its own system: a steady pace feels smoother than higher but uneven FPS.
 
-Current version: **0.43.3** · Windows 10 (1803 or later) and Windows 11. [User guide](GUIDE.md) · [Technical documentation](TECHNICAL.md) · [License](LICENSE) · [Español](README.md). The changelog ([CHANGELOG.md](CHANGELOG.md)) is in Spanish; the app has an English interface (ES | EN selector).
+Current version: **0.43.4** · Windows 10 (1803 or later) and Windows 11. [User guide](GUIDE.md) · [Technical documentation](TECHNICAL.md) · [License](LICENSE) · [Español](README.md). The changelog ([CHANGELOG.md](CHANGELOG.md)) is in Spanish; the app has an English interface (ES | EN selector).
 
 ## What it does
 
@@ -65,5 +65,5 @@ FlatPace (© 2026 KALAVER084) is released under the [MIT License](LICENSE): you 
 ## Third-party credits and licenses
 
 - [PresentMon](https://github.com/GameTechDev/PresentMon) (Intel, MIT License): frame measurement.
-- [NVAPI](https://github.com/NVIDIA/nvapi) (NVIDIA, MIT License): driver profiles and G-SYNC status.
+- [NVAPI](https://github.com/NVIDIA/nvapi) (NVIDIA, MIT License): driver profiles and G-SYNC status. Its declarations live in `third_party/nvapi`.
 - [Dear ImGui](https://github.com/ocornut/imgui) (MIT License): interface.

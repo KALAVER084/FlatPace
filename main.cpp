@@ -124,7 +124,7 @@ static std::atomic<bool> g_quit{false};
 static std::atomic<int> g_lang{0};
 static const char* T(const char* es, const char* en) { return g_lang == 1 ? en : es; }
 
-static constexpr const char* kVersion = "0.43.3";
+static constexpr const char* kVersion = "0.43.4";
 
 // Carpeta donde esta este .exe.
 static std::wstring ExeDirectory() {
@@ -1117,131 +1117,18 @@ static std::string GameLabel(HWND wnd, const std::wstring& path, const std::stri
 
 // ---------------------------------------------------------------------------
 // Driver de NVIDIA (NVAPI): limite de FPS en el perfil de cada juego
-// Estructuras copiadas de los encabezados oficiales de NVAPI (licencia MIT).
+// Las declaraciones de NVAPI (de NVIDIA, licencia MIT) estan en third_party/nvapi/nvapi_min.h.
 // Las funciones se obtienen de nvapi64.dll, que instala el propio driver.
 // ---------------------------------------------------------------------------
-namespace nv {
-using NvU32 = uint32_t;
-using NvU16 = uint16_t;
-using NvU8 = uint8_t;
-using NvU64 = uint64_t;
-using Status = int;
-constexpr int kStringMax = 2048;
-using UnicodeString = NvU16[kStringMax];
-struct SessionH__ { int unused; };
-using Session = SessionH__*;
-struct ProfileH__ { int unused; };
-using Profile = ProfileH__*;
+#include "third_party/nvapi/nvapi_min.h"
 
-constexpr Status OK = 0;
-constexpr Status SETTING_NOT_FOUND = -160;
-constexpr Status PROFILE_NOT_FOUND = -163;
-constexpr Status EXECUTABLE_NOT_FOUND = -166;
-constexpr Status INVALID_USER_PRIVILEGE = -137;
-constexpr Status NVIDIA_DEVICE_NOT_FOUND = -6;
-constexpr NvU32 FRL_FPS_ID = 0x10835002;  // "Frame Rate Limiter" (Velocidad maxima de fotogramas)
-constexpr NvU32 VSYNCMODE_ID = 0x00A879CF;       // "Vertical Sync"
-constexpr NvU32 PRERENDERLIMIT_ID = 0x007BA09E;  // "Maximum pre-rendered frames"
-// "Power management mode" (Modo de administracion de energia): 1 = preferir rendimiento maximo.
-// Con un limite, el driver baja las frecuencias de la GPU hasta que va justa y tarda en subirlas en
-// las escenas pesadas, que se pasan del limite (Greylock con 90 fps: el doble de trabajo por fotograma
-// con el 85 % de uso). Es la combinacion que recomienda NVIDIA para su limitador; la GPU sigue
-// protegiendose sola por temperatura y potencia.
-constexpr NvU32 PREFERRED_PSTATE_ID = 0x1057EB71;
-constexpr NvU32 PSTATE_PREFER_MAX = 1;
-constexpr NvU32 VSYNC_FORCEON = 0x47814940;
-constexpr NvU32 VSYNC_FLIP2 = 0x32610244;        // VSync a 1/2 del refresco
-constexpr NvU32 VSYNC_FLIP3 = 0x71271021;        // 1/3
-constexpr NvU32 VSYNC_FLIP4 = 0x13245256;        // 1/4
+namespace nv {
 inline NvU32 VsyncForDivisor(int n) {
   return n == 1 ? VSYNC_FORCEON : n == 2 ? VSYNC_FLIP2 : n == 3 ? VSYNC_FLIP3 : VSYNC_FLIP4;
 }
 inline int DivisorForVsync(NvU32 v) {
   return v == VSYNC_FORCEON ? 1 : v == VSYNC_FLIP2 ? 2 : v == VSYNC_FLIP3 ? 3 : v == VSYNC_FLIP4 ? 4 : 0;
 }
-constexpr NvU32 FRL_FPS_MAX = 0x3ff;
-constexpr int DWORD_TYPE = 0;
-constexpr int CURRENT_PROFILE_LOCATION = 0;
-
-struct BinarySetting {
-  NvU32 valueLength;
-  NvU8 valueData[4096];
-};
-
-#pragma pack(push, 4)
-struct Setting {
-  NvU32 version;
-  UnicodeString settingName;
-  NvU32 settingId;
-  int settingType;
-  int settingLocation;
-  NvU32 isCurrentPredefined;
-  NvU32 isPredefinedValid;
-  union {
-    NvU32 u32PredefinedValue;
-    BinarySetting binaryPredefinedValue;
-    UnicodeString wszPredefinedValue;
-    NvU64 u64PredefinedValue;
-  };
-  union {
-    NvU32 u32CurrentValue;
-    BinarySetting binaryCurrentValue;
-    UnicodeString wszCurrentValue;
-    NvU64 u64CurrentValue;
-  };
-};
-#pragma pack(pop)
-
-struct Application {  // NVDRS_APPLICATION_V4
-  NvU32 version;
-  NvU32 isPredefined;
-  UnicodeString appName;
-  UnicodeString userFriendlyName;
-  UnicodeString launcher;
-  UnicodeString fileInFolder;
-  NvU32 isMetro : 1;
-  NvU32 isCommandLine : 1;
-  NvU32 reserved : 30;
-  UnicodeString commandLine;
-};
-
-struct ProfileInfo {  // NVDRS_PROFILE_V1
-  NvU32 version;
-  UnicodeString profileName;
-  NvU32 gpuSupport;
-  NvU32 isPredefined;
-  NvU32 numOfApps;
-  NvU32 numOfSettings;
-};
-
-static_assert(sizeof(Setting) == 12320, "NVDRS_SETTING_V1");
-static_assert(sizeof(Application) == 20492, "NVDRS_APPLICATION_V4");
-static_assert(sizeof(ProfileInfo) == 4116, "NVDRS_PROFILE_V1");
-constexpr NvU32 Ver(size_t size, NvU32 v) { return static_cast<NvU32>(size) | (v << 16); }
-constexpr NvU32 SETTING_VER = Ver(sizeof(Setting), 1);
-constexpr NvU32 APPLICATION_VER = Ver(sizeof(Application), 4);
-constexpr NvU32 PROFILE_VER = Ver(sizeof(ProfileInfo), 1);
-
-using QueryInterfaceFn = void*(__cdecl*)(unsigned int);
-using InitializeFn = Status(__cdecl*)();
-using CreateSessionFn = Status(__cdecl*)(Session*);
-using SessionFn = Status(__cdecl*)(Session);
-using FindAppFn = Status(__cdecl*)(Session, NvU16*, Profile*, Application*);
-using CreateProfileFn = Status(__cdecl*)(Session, ProfileInfo*, Profile*);
-using FindProfileFn = Status(__cdecl*)(Session, NvU16*, Profile*);
-using CreateAppFn = Status(__cdecl*)(Session, Profile, Application*);
-using GetSettingFn = Status(__cdecl*)(Session, Profile, NvU32, Setting*);
-struct VrrInfo {
-  NvU32 version;
-  NvU32 flags;  // bit 0 activo, 1 posible, 2 pedido, 3 indicador, 4 pantalla en modo VRR
-  NvU32 reservedEx[4];
-};
-using GetDisplayIdFn = Status(__cdecl*)(const char*, NvU32*);
-using GetVrrInfoFn = Status(__cdecl*)(NvU32, VrrInfo*);
-using SetSettingFn = Status(__cdecl*)(Session, Profile, Setting*);
-using DeleteSettingFn = Status(__cdecl*)(Session, Profile, NvU32);
-using DeleteProfileFn = Status(__cdecl*)(Session, Profile);
-
 static void Copy(NvU16* dst, const std::wstring& s) {
   std::memset(dst, 0, sizeof(NvU16) * kStringMax);
   size_t n = std::min<size_t>(s.size(), kStringMax - 1);
@@ -1285,7 +1172,7 @@ struct AppliedChange {
 static std::string DescribeChangeBase(const AppliedChange& c);
 static bool HasMaxPerf(const AppliedChange& c) {
   for (const auto& sv : c.saved)
-    if (sv.id == 0x1057EB71u) return true;
+    if (sv.id == nv::PREFERRED_PSTATE_ID) return true;
   return false;
 }
 
@@ -1319,21 +1206,21 @@ class NvDriver {
         reinterpret_cast<void*>(GetProcAddress(dll_, "nvapi_QueryInterface")));
     if (!qi) { error = "NVAPI no disponible"; return false; }
     auto get = [&](unsigned id) { return qi(id); };
-    init_ = reinterpret_cast<nv::InitializeFn>(get(0x0150e828));
-    createSession_ = reinterpret_cast<nv::CreateSessionFn>(get(0x0694d52e));
-    destroySession_ = reinterpret_cast<nv::SessionFn>(get(0xdad9cff8));
-    load_ = reinterpret_cast<nv::SessionFn>(get(0x375dbd6b));
-    save_ = reinterpret_cast<nv::SessionFn>(get(0xfcbc7e14));
-    findApp_ = reinterpret_cast<nv::FindAppFn>(get(0xeee566b2));
-    createProfile_ = reinterpret_cast<nv::CreateProfileFn>(get(0xcc176068));
-    findProfile_ = reinterpret_cast<nv::FindProfileFn>(get(0x7e4a9a0b));
-    createApp_ = reinterpret_cast<nv::CreateAppFn>(get(0x4347a9de));
-    getSetting_ = reinterpret_cast<nv::GetSettingFn>(get(0x73bf8338));
-    setSetting_ = reinterpret_cast<nv::SetSettingFn>(get(0x577dd202));
-    deleteSetting_ = reinterpret_cast<nv::DeleteSettingFn>(get(0xe4a26362));
-    deleteProfile_ = reinterpret_cast<nv::DeleteProfileFn>(get(0x17093206));
-    getDisplayId_ = reinterpret_cast<nv::GetDisplayIdFn>(get(0xae457190));  // opcionales
-    getVrrInfo_ = reinterpret_cast<nv::GetVrrInfoFn>(get(0xdf8fda57));
+    init_ = reinterpret_cast<nv::InitializeFn>(get(nv::fn::Initialize));
+    createSession_ = reinterpret_cast<nv::CreateSessionFn>(get(nv::fn::DRS_CreateSession));
+    destroySession_ = reinterpret_cast<nv::SessionFn>(get(nv::fn::DRS_DestroySession));
+    load_ = reinterpret_cast<nv::SessionFn>(get(nv::fn::DRS_LoadSettings));
+    save_ = reinterpret_cast<nv::SessionFn>(get(nv::fn::DRS_SaveSettings));
+    findApp_ = reinterpret_cast<nv::FindAppFn>(get(nv::fn::DRS_FindApplicationByName));
+    createProfile_ = reinterpret_cast<nv::CreateProfileFn>(get(nv::fn::DRS_CreateProfile));
+    findProfile_ = reinterpret_cast<nv::FindProfileFn>(get(nv::fn::DRS_FindProfileByName));
+    createApp_ = reinterpret_cast<nv::CreateAppFn>(get(nv::fn::DRS_CreateApplication));
+    getSetting_ = reinterpret_cast<nv::GetSettingFn>(get(nv::fn::DRS_GetSetting));
+    setSetting_ = reinterpret_cast<nv::SetSettingFn>(get(nv::fn::DRS_SetSetting));
+    deleteSetting_ = reinterpret_cast<nv::DeleteSettingFn>(get(nv::fn::DRS_DeleteProfileSetting));
+    deleteProfile_ = reinterpret_cast<nv::DeleteProfileFn>(get(nv::fn::DRS_DeleteProfile));
+    getDisplayId_ = reinterpret_cast<nv::GetDisplayIdFn>(get(nv::fn::DISP_GetDisplayIdByDisplayName));  // opcionales
+    getVrrInfo_ = reinterpret_cast<nv::GetVrrInfoFn>(get(nv::fn::Disp_GetVRRInfo));
     if (!init_ || !createSession_ || !destroySession_ || !load_ || !save_ || !findApp_ ||
         !createProfile_ || !findProfile_ || !createApp_ || !getSetting_ || !setSetting_ ||
         !deleteSetting_ || !deleteProfile_) {

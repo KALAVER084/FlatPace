@@ -2,6 +2,11 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). La versión más reciente va primero.
 
+## 0.43.4
+Revisión de autoría del código, sin cambios de comportamiento (el programa compilado es idéntico byte a byte, salvo el número de versión).
+- **Cambiado:** las declaraciones de NVAPI que usa FlatPace (tipos, estructuras, códigos de estado e identificadores de ajustes y funciones del driver, reproducidos de los encabezados públicos de NVIDIA, licencia MIT) estaban dentro de `main.cpp`, mezcladas con código propio. Ahora están en `third_party/nvapi/nvapi_min.h`, con su aviso de autoría, igual que Dear ImGui en `third_party/imgui`: todo el código de terceros queda en `third_party/`. Los identificadores de las funciones del driver tienen ahora nombre (por ejemplo `nv::fn::DRS_SetSetting`) en lugar de números sueltos.
+- **Documentación:** la técnica y los README indican dónde está cada parte de terceros, y los tamaños del código están al día.
+
 ## 0.43.3
 Revisión del código y la documentación, sin cambios de comportamiento.
 - **Código:** eliminados restos sin uso (la lista de horas de llegada de las imágenes, que dejó de usarse con la corrección de la cifra en pantalla; dos métodos sin uso; un parámetro que ya siempre valía lo mismo); corregidos tres comentarios que describían valores anteriores (el reloj de reproducción, la prioridad de PresentMon y el criterio de la memoria); un nombre de variable más claro.

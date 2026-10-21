@@ -4,7 +4,7 @@
 
 **FlatPace mide tus juegos y aplica el límite de FPS que hace que vayan lo más estables posible.** Hace en Windows lo que la Steam Deck hace en su sistema: un ritmo constante se siente más fluido que unos FPS más altos pero irregulares.
 
-Versión actual: **0.43.3** · Windows 10 (1803 o posterior) y Windows 11 · [Guía de uso](GUIA.md) · [Documentación técnica](TECNICO.md) · [Historial de cambios](CHANGELOG.md) · [Licencia](LICENSE) · [English](README.en.md)
+Versión actual: **0.43.4** · Windows 10 (1803 o posterior) y Windows 11 · [Guía de uso](GUIA.md) · [Documentación técnica](TECNICO.md) · [Historial de cambios](CHANGELOG.md) · [Licencia](LICENSE) · [English](README.en.md)
 
 ## Qué hace
 
@@ -65,5 +65,5 @@ FlatPace (© 2026 KALAVER084) se distribuye con la [licencia MIT](LICENSE): pued
 ## Créditos y licencias de terceros
 
 - [PresentMon](https://github.com/GameTechDev/PresentMon) (Intel, licencia MIT): medición de fotogramas.
-- [NVAPI](https://github.com/NVIDIA/nvapi) (NVIDIA, licencia MIT): perfiles del driver y estado de G-SYNC.
+- [NVAPI](https://github.com/NVIDIA/nvapi) (NVIDIA, licencia MIT): perfiles del driver y estado de G-SYNC. Sus declaraciones están en `third_party/nvapi`.
 - [Dear ImGui](https://github.com/ocornut/imgui) (licencia MIT): interfaz.
