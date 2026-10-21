@@ -1,4 +1,4 @@
-# Documentación técnica de FlatPace 0.43
+# Documentación técnica de FlatPace 0.43.1
 
 Este documento explica cómo funciona FlatPace por dentro: arquitectura, algoritmos, fórmulas, formatos de datos y las fuentes en que se basan sus decisiones.
 

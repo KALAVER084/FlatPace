@@ -2,6 +2,9 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). La versión más reciente va primero.
 
+## 0.43.1
+- **Corregido:** la cifra de imágenes en pantalla del overlay (*"pantalla 118"*) parpadeaba con cada tanda de datos: contaba las imágenes **llegadas** en los últimos 5 s, y como llegan en tandas de ~1 s, la cuenta saltaba al entrar o salir una tanda de la ventana (en Space Marine 2, entre 93 y 132 con un límite de 112). Ahora se calcula con la duración real de las imágenes, como los FPS reales: entre 111,7 y 112,0.
+
 ## 0.43
 Los picos que se veían en la gráfica con generación de fotogramas, al ritmo de los refrescos, venían del propio dibujo, no del juego. Se encontraron simulando el overlay completo con su código real y las horas de llegada de una partida grabada de Space Marine 2.
 - **Corregido (desplazamiento):** el reloj de reproducción dejaba muy poco margen: antes de cada tanda de datos llegaba casi al último dato, frenaba, y al llegar la tanda aceleraba. El avance por dibujo variaba entre 12,4 y 20,8 ms (debería ser constante: 16,7 ms a 60 dibujos por segundo). Ahora deja 0,6 s de margen (antes 0,35; la gráfica va ~0,25 s más retrasada) y corrige con suavidad (entre 0,95 y 1,05×): de 15,8 a 17,5 ms.

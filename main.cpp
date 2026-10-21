@@ -124,7 +124,7 @@ static std::atomic<bool> g_quit{false};
 static std::atomic<int> g_lang{0};
 static const char* T(const char* es, const char* en) { return g_lang == 1 ? en : es; }
 
-static constexpr const char* kVersion = "0.43";
+static constexpr const char* kVersion = "0.43.1";
 
 // Carpeta donde esta este .exe.
 static std::wstring ExeDirectory() {
@@ -2648,6 +2648,9 @@ struct Feed {
   // Control Resonant, 36 reales con ella y 60-68 sin ella, con ~72 en pantalla en ambos casos).
   bool screenMode = false;
   std::deque<double> realOnly;        // fotogramas reales (ms), para las cifras del overlay
+  // Intervalo entre imagenes presentadas (ms). La cifra "en pantalla" se calcula con su duracion real:
+  // contar las imagenes llegadas en los ultimos 5 s (hasta la 0.43) saltaba con cada tanda de datos.
+  std::deque<double> presentMs;
   // Bufer de reproduccion: sigue al mayor intervalo reciente entre tandas de datos de PresentMon,
   // para que el borde derecho de la grafica nunca quede vacio.
   double lagSec = 1.1;
@@ -2668,6 +2671,10 @@ static void Push(const FrameSample& s) {
   std::lock_guard<std::mutex> lock(feed.m);
   if (s.pid == 0 || s.pid != feed.pid) return;
   feed.presents.push_back(s.t);
+  if (s.presentMs > 0 && s.presentMs < 250.0) {
+    feed.presentMs.push_back(s.presentMs);  // todas las imagenes presentadas (reales y generadas)
+    while (feed.presentMs.size() > 8000) feed.presentMs.pop_front();
+  }
   if (!s.generated && s.realMs > 0) {
     feed.realOnly.push_back(s.presentRealMs > 0 ? s.presentRealMs : s.realMs);
     while (feed.realOnly.size() > 4000) feed.realOnly.pop_front();
@@ -2770,6 +2777,7 @@ static void SetGame(DWORD pid, double targetMs, const std::string& limitLabel, L
   if (pid != 0 && pid != lastGamePid) {
     feed.real.clear();
     feed.realOnly.clear();
+    feed.presentMs.clear();
     feed.presents.clear();
     feed.lastVt = 0.0;
     feed.playInit = false;
@@ -2850,6 +2858,7 @@ class Window {
     double display = now, refAuto = 0.0;
     std::vector<std::pair<double, double>> real;
     size_t presents5 = 0;
+    double presentsSpanMs = 0.0;
     {
       std::lock_guard<std::mutex> lock(feed.m);
       pid = feed.pid;
@@ -2866,8 +2875,13 @@ class Window {
       refAuto = GraphAutoRefLocked(now, display);
       for (const auto& r : feed.real)
         if (r.first >= display - 11.0) real.push_back(r);
-      for (double t : feed.presents)
-        if (t >= now - 5.0) presents5++;
+      // Imagenes en pantalla por segundo: las ultimas imagenes que suman 5 s de duracion real.
+      double sumMs = 0.0;
+      for (auto it = feed.presentMs.rbegin(); it != feed.presentMs.rend() && sumMs < 5000.0; ++it) {
+        sumMs += *it;
+        presents5++;
+      }
+      presentsSpanMs = sumMs;
     }
     HWND fg = GetForegroundWindow();
     DWORD fgPid = 0;
@@ -2892,7 +2906,7 @@ class Window {
     std::sort(sorted.begin(), sorted.end());
     double low = 1000.0 / PercentileSorted(sorted, 99);
     if (gameLow > 0) low = gameLow;  // con un limite activo, sin los retrasos del limitador
-    double screenFps = presents5 / 5.0;
+    double screenFps = presentsSpanMs > 0 ? presents5 * 1000.0 / presentsSpanMs : 0.0;
     bool fg2 = screenFps > fps * 1.4;
 
     double swing = RecentSwing(real);
