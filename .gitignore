@@ -16,8 +16,10 @@ tests/*.obj
 # Programas de terceros que no van en el codigo (se incluyen en las releases)
 PresentMon*.exe
 
-# Registros y archivos del sistema
+# Registros, grabaciones de partidas, paquetes y archivos del sistema
 registro-*.txt
+grabaciones/
+*.zip
 .vs/
 .vscode/
 Thumbs.db
