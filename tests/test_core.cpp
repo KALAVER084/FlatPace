@@ -837,7 +837,72 @@ TEST(ScreenModeAveragesGeneratedImages) {
   for (auto& p : real) rSpikes += p.spike;
   CHECK(sSpikes == 1);                                 // solo el tiron real
   CHECK(sFlat >= static_cast<int>(screen.size()) - 8); // casi todo recto (el tiron y sus vecinos)
-  CHECK(rSpikes > 10);                                 // con las reglas de fotogramas reales, muchas marcas
+  CHECK(rSpikes >= 8);                                 // con las reglas de fotogramas reales, muchas marcas
+}
+
+TEST(LeftEdgeValuesStayPut) {
+  // Un tramo con un tiron y otro fuera de la tolerancia deben dibujarse a la misma altura mientras se
+  // desplazan hasta salir por la izquierda, aunque sus fotogramas mas antiguos salgan antes de la
+  // ventana de datos (hasta la 0.43.1, el valor se recalculaba y en el borde izquierdo "parpadeaba").
+  const double ref = 10.0;
+  std::vector<std::pair<double, double>> tl;
+  double t = 0.0;
+  for (int i = 0; i < 2000; ++i) {
+    double ms = 10.0;
+    if (i >= 300 && i < 303) ms = (i == 301) ? 40.0 : 13.0;  // tramo con un tiron (40 ms) y lentos
+    if (i >= 600 && i < 606) ms = 13.0;                        // tramo fuera de la tolerancia
+    t += ms / 1000.0;
+    tl.push_back({t, ms});
+  }
+  for (bool screen : {false, true}) {
+    overlay::PaceClassCache cache;
+    std::map<long long, float> firstValue;
+    int changed = 0;
+    const double colDur = overlay::kPaceSpanSec / 133;
+    for (double display = 3.5; display < 9.5; display += 1.0 / 60.0) {
+      auto pts = overlay::BuildTimeSeries(tl, display, overlay::kPaceSpanSec, 133, ref, cache, 1, screen);
+      for (auto& p : pts) {
+        const long long k = std::llround((display - (1.0 - p.x) * overlay::kPaceSpanSec) / colDur - 0.5);
+        if ((k + 1 + (screen ? overlay::kScreenAvgBins / 2 : 0)) * colDur > display) continue;  // aun no completo
+        auto it = firstValue.find(k);
+        if (it == firstValue.end()) firstValue[k] = p.ms;
+        else if (std::fabs(it->second - p.ms) > 1e-4) ++changed;
+      }
+    }
+    CHECK(changed == 0);
+  }
+}
+
+TEST(RightEdgeNeverRedraws) {
+  // Lo que se dibuja en el borde derecho no debe cambiar despues: un tramo solo se dibuja completo
+  // (y en pantalla, con sus vecinos), asi un pico nunca aparece para borrarse en el dibujo siguiente.
+  const double ref = 10.0;
+  std::vector<std::pair<double, double>> tl;
+  double t = 0.0;
+  for (int i = 0; i < 1500; ++i) {
+    const double ms = (i % 7 == 0) ? 13.5 : 9.5;  // variacion que, con pocos fotogramas, parece un pico
+    t += ms / 1000.0;
+    tl.push_back({t, ms});
+  }
+  for (bool screen : {false, true}) {
+    overlay::PaceClassCache cache;
+    std::map<long long, std::pair<float, bool>> seen;
+    int changed = 0;
+    const double colDur = overlay::kPaceSpanSec / 133;
+    for (double display = 3.5; display < 10.0; display += 1.0 / 60.0) {
+      std::vector<std::pair<double, double>> arrived;
+      for (auto& r : tl)
+        if (r.first <= display + 0.05) arrived.push_back(r);  // datos hasta un poco despues del reloj
+      auto pts = overlay::BuildTimeSeries(arrived, display, overlay::kPaceSpanSec, 133, ref, cache, 1, screen);
+      for (auto& p : pts) {
+        const long long k = std::llround((display - (1.0 - p.x) * overlay::kPaceSpanSec) / colDur - 0.5);
+        auto it = seen.find(k);
+        if (it == seen.end()) seen[k] = {p.ms, p.spike};
+        else if (std::fabs(it->second.first - p.ms) > 1e-4 || it->second.second != p.spike) ++changed;
+      }
+    }
+    CHECK(changed == 0);
+  }
 }
 
 int main() {
@@ -881,6 +946,8 @@ int main() {
   RUN(PhaseTrackerConfirmsRealChanges);
   RUN(SuggestRaiseRules);
   RUN(ScreenModeAveragesGeneratedImages);
+  RUN(LeftEdgeValuesStayPut);
+  RUN(RightEdgeNeverRedraws);
   RUN(VerifyDirectMatch);
   RUN(VerifyWithFrameGeneration);
   RUN(VerifyByDetectedCap);

@@ -2,6 +2,11 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). La versión más reciente va primero.
 
+## 0.43.2
+- **Corregido (borde derecho de la gráfica):** el tramo más reciente se dibujaba antes de estar completo, con una clasificación provisional que se recalculaba en cada dibujo: podía aparecer como pico con los primeros fotogramas y volver a la línea al completarse (en modo en pantalla, los 3 últimos tramos, que esperan a sus vecinos para la media). Ahora solo se dibujan los tramos completos: la línea termina unos píxeles antes (como mucho ~75 ms de datos), pero nada de lo que se dibuja cambia después.
+- **Corregido (borde izquierdo):** el valor de los tramos que se salen de la línea se recalculaba mientras sus fotogramas más antiguos salían de la ventana de datos, así que un tirón podía encoger justo antes de desaparecer. Ahora el valor se fija al completarse el tramo, junto con su clasificación.
+- **Añadido:** dos pruebas automáticas que comprueban que nada de lo dibujado cambia en ninguno de los dos bordes (166 comprobaciones).
+
 ## 0.43.1
 - **Corregido:** la cifra de imágenes en pantalla del overlay (*"pantalla 118"*) parpadeaba con cada tanda de datos: contaba las imágenes **llegadas** en los últimos 5 s, y como llegan en tandas de ~1 s, la cuenta saltaba al entrar o salir una tanda de la ventana (en Space Marine 2, entre 93 y 132 con un límite de 112). Ahora se calcula con la duración real de las imágenes, como los FPS reales: entre 111,7 y 112,0.
 

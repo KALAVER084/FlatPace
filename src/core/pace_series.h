@@ -8,9 +8,13 @@
 // Clasificacion de un tramo ya completo: se decide una vez y se recuerda, para que un tramo no
 // pase de "dentro" a "fuera" de la tolerancia (ni un tiron aparezca o desaparezca) mientras se
 // desplaza, aunque la referencia sin limite se mueva poco a poco.
+// Tambien se guarda el valor (la altura): en el borde izquierdo, los fotogramas mas antiguos de un
+// tramo salen de la ventana de datos uno a uno, y recalcularlo hacia que un tiron encogiera o un
+// tramo cambiara de altura justo antes de desaparecer (parpadeo en el borde, hasta la 0.43.1).
 struct PaceClass {
-  bool flat;   // dentro de la tolerancia: se dibuja sobre la referencia
-  bool spike;  // tiron
+  bool flat;    // dentro de la tolerancia: se dibuja sobre la referencia
+  bool spike;   // tiron
+  float value;  // altura con la que se dibuja si no es recto
 };
 struct PaceClassCache {
   std::map<long long, PaceClass> bins;
@@ -68,14 +72,17 @@ static std::vector<PacePoint> BuildTimeSeries(const std::vector<std::pair<double
       std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end());
       med = v[v.size() / 2];
     }
-    PaceClass c{!(mx > spikeAt) && std::fabs(med - ref) <= tol, mx > spikeAt};
-    const bool complete = (k + 1 + half) * colDur <= display;  // con los vecinos ya completos
-    if (complete) {
+    PaceClass c{!(mx > spikeAt) && std::fabs(med - ref) <= tol, mx > spikeAt, mx > spikeAt ? mx : med};
+    // Solo se dibujan los tramos completos (en pantalla, con sus vecinos): un tramo a medias podia
+    // aparecer como pico en el borde derecho y volver a la linea al completarse (hasta la 0.43.1).
+    const bool complete = (k + 1 + half) * colDur <= display;
+    if (!complete) continue;
+    {
       auto it = cache.bins.find(k);
       if (it != cache.bins.end()) c = it->second;
       else cache.bins[k] = c;
     }
-    const float value = c.spike ? mx : (c.flat ? static_cast<float>(ref) : med);
+    const float value = c.flat ? static_cast<float>(ref) : c.value;
     out.push_back({static_cast<float>(1.0 - (display - center) / span), value, c.spike});
   }
   // Olvidar los tramos que ya salieron de la grafica

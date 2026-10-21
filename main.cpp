@@ -124,7 +124,7 @@ static std::atomic<bool> g_quit{false};
 static std::atomic<int> g_lang{0};
 static const char* T(const char* es, const char* en) { return g_lang == 1 ? en : es; }
 
-static constexpr const char* kVersion = "0.43.1";
+static constexpr const char* kVersion = "0.43.2";
 
 // Carpeta donde esta este .exe.
 static std::wstring ExeDirectory() {
