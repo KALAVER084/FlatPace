@@ -124,7 +124,7 @@ static std::atomic<bool> g_quit{false};
 static std::atomic<int> g_lang{0};
 static const char* T(const char* es, const char* en) { return g_lang == 1 ? en : es; }
 
-static constexpr const char* kVersion = "0.39.1";
+static constexpr const char* kVersion = "0.40";
 
 // Carpeta donde esta este .exe.
 static std::wstring ExeDirectory() {
@@ -1670,6 +1670,7 @@ struct Session {
   std::deque<FrameSample> samples;
   double start = -1.0, phaseStart = 0.0, lastStatus = 0.0, lastFrameArrival = 0.0;
   bool haveRec = false, fgActive = false, fgEverSeen = false, paused = false;
+  int fgToggles = 0;  // cambios de estado de la generacion en esta partida
   bool background = false, seenForeground = false, rateChangeNoted = false;
   bool fgAdviceDue = false;
   int fgOnCount = 0, fgOffCount = 0;  // segundos seguidos con/sin generacion
@@ -2167,16 +2168,37 @@ static void ProcessSession(Session& ss, std::vector<FrameSample>& fresh, double 
   // Solo cuenta un cambio que dure 3 s seguidos (algunos juegos la alternan en menus).
   ss.fgOnCount = fgFraction > cfg::kFgOnFraction ? ss.fgOnCount + 1 : 0;
   ss.fgOffCount = fgFraction < 0.01 ? ss.fgOffCount + 1 : 0;
+  // Generacion intermitente: algunos juegos (o el driver) la activan y desactivan solos, a menudo
+  // con un modo dinamico. Tras 4 cambios en la partida se avisa una vez y ya no se anota cada cambio.
+  auto NoteFgToggle = [&]() {
+    ++ss.fgToggles;
+    if (ss.fgToggles == 4) {
+      Log("[%5.0f s] La generacion de fotogramas se activa y desactiva sola (4 cambios): probablemente\n"
+          "          un modo dinamico del juego o del driver. Los fotogramas reales cambian de ritmo en\n"
+          "          cada cambio; la grafica muestra las imagenes en pantalla. Ya no anoto cada cambio.\n",
+          ss.T(now));
+      std::lock_guard<std::mutex> lock(g_ui.m);
+      g_ui.warnings[ss.exe] =
+          T("La generación de fotogramas se activa y desactiva sola: los fotogramas reales cambian de ritmo cada vez, "
+            "aunque en pantalla apenas se note. Si el juego tiene un modo de generación automático o dinámico, "
+            "fijarlo (activado o desactivado) da un ritmo más constante.",
+            "Frame generation turns itself on and off: real frames change pace each time, even if it's barely "
+            "visible on screen. If the game has an automatic or dynamic frame generation mode, setting it "
+            "(on or off) gives a steadier pace.");
+    }
+    return ss.fgToggles < 4;  // anotar en el registro solo los primeros cambios
+  };
   if (!ss.fgActive && ss.fgOnCount >= 3) {
     ss.fgSince = now;
     ss.fgActive = ss.fgEverSeen = true;
-    Log("[%5.0f s] Generacion de fotogramas detectada. Mido los fotogramas reales y elijo\n"
-        "          un ritmo en pantalla que encaje con tus Hz. Vuelvo a medir.\n", ss.T(now));
-    ss.fgAdviceDue = true;
+    if (NoteFgToggle())
+      Log("[%5.0f s] Generacion de fotogramas detectada. Mido los fotogramas reales y elijo\n"
+          "          un ritmo en pantalla que encaje con tus Hz. Vuelvo a medir.\n", ss.T(now));
+    ss.fgAdviceDue = ss.fgToggles <= 1;
     if (ss.haveRec) { ss.ResetPhase(now); return; }
   } else if (ss.fgActive && ss.fgOffCount >= 3) {
     ss.fgActive = false;
-    Log("[%5.0f s] Generacion de fotogramas desactivada. Vuelvo a medir.\n", ss.T(now));
+    if (NoteFgToggle()) Log("[%5.0f s] Generacion de fotogramas desactivada. Vuelvo a medir.\n", ss.T(now));
     if (ss.haveRec) { ss.ResetPhase(now); return; }
   }
 
@@ -2512,6 +2534,11 @@ struct Feed {
   LimitState limitState = LimitState::None;
   double baseSwingMs = -1.0;          // variacion del ritmo de este juego sin limite ("antes")
   double gameLowFps = 0.0;            // 1 % bajo causado por el juego con un limite activo (0 = no)
+  // Juegos con generacion de fotogramas: la grafica dibuja las imagenes EN PANTALLA (lo que se ve),
+  // porque los fotogramas reales cambian de ritmo cuando la generacion se activa o se desactiva (en
+  // Control Resonant, 36 reales con ella y 60-68 sin ella, con ~72 en pantalla en ambos casos).
+  bool screenMode = false;
+  std::deque<double> realOnly;        // fotogramas reales (ms), para las cifras del overlay
   // Bufer de reproduccion: sigue al mayor intervalo reciente entre tandas de datos de PresentMon,
   // para que el borde derecho de la grafica nunca quede vacio.
   double lagSec = 1.1;
@@ -2533,6 +2560,11 @@ static void Push(const FrameSample& s) {
   if (s.pid == 0 || s.pid != feed.pid) return;
   feed.presents.push_back(s.t);
   if (!s.generated && s.realMs > 0) {
+    feed.realOnly.push_back(s.presentRealMs > 0 ? s.presentRealMs : s.realMs);
+    while (feed.realOnly.size() > 4000) feed.realOnly.pop_front();
+  }
+  const bool forGraph = feed.screenMode ? (s.displayMs > 0 && s.displayMs < 250.0) : (!s.generated && s.realMs > 0);
+  if (forGraph) {
     // Una tanda nueva de datos: su intervalo con la anterior marca el retraso de dibujo.
     if (s.t - feed.lastArrival > 0.01) {
       double gap = feed.lastArrival > 0 ? s.t - feed.lastArrival : 1.0;
@@ -2545,7 +2577,8 @@ static void Push(const FrameSample& s) {
     // regula el limitador (comparable a lo que muestran los limitadores que se inyectan en el juego).
     // Instante del fotograma: el anterior + su duracion. Se fija una vez, al llegar, y no cambia:
     // la linea de tiempo es continua y estable (una tanda nunca se amontona ni mueve lo anterior).
-    const double ms = s.presentRealMs > 0 ? s.presentRealMs : s.realMs;
+    // En modo en pantalla, cada imagen mostrada (real o generada) con lo que duro en pantalla.
+    const double ms = feed.screenMode ? s.displayMs : (s.presentRealMs > 0 ? s.presentRealMs : s.realMs);
     double vt = feed.lastVt > 0 ? feed.lastVt + ms / 1000.0 : s.t;
     feed.lastVt = vt;
     feed.real.push_back({vt, ms});
@@ -2597,6 +2630,19 @@ static double GraphAutoRefLocked(double now, double display) {
 
 #include "src/core/pace_series.h"
 
+// Cambia la grafica a imagenes en pantalla (o la devuelve a fotogramas reales). Al cambiar, se
+// empieza la linea de nuevo para no mezclar las dos medidas.
+static void SetScreenMode(bool on) {
+  std::lock_guard<std::mutex> lock(feed.m);
+  if (feed.screenMode == on) return;
+  feed.screenMode = on;
+  feed.real.clear();
+  feed.lastVt = 0.0;
+  feed.playInit = false;
+  feed.refAuto = 0.0;
+  feed.generation++;
+}
+
 static void SetGameLow(double fps) {
   std::lock_guard<std::mutex> lock(feed.m);
   feed.gameLowFps = fps;
@@ -2609,6 +2655,7 @@ static void SetGame(DWORD pid, double targetMs, const std::string& limitLabel, L
   // ultima grafica mientras miras la app.
   if (pid != 0 && pid != lastGamePid) {
     feed.real.clear();
+    feed.realOnly.clear();
     feed.presents.clear();
     feed.lastVt = 0.0;
     feed.playInit = false;
@@ -2682,6 +2729,8 @@ class Window {
     std::string limitLabel;
     LimitState limitState;
     double baseSwing = -1.0, gameLow = 0.0;
+    bool screenMode = false;
+    std::vector<double> realMs;
     double display = now, refAuto = 0.0;
     std::vector<std::pair<double, double>> real;
     size_t presents5 = 0;
@@ -2693,6 +2742,9 @@ class Window {
       limitState = feed.limitState;
       baseSwing = feed.baseSwingMs;
       gameLow = feed.gameLowFps;
+      screenMode = feed.screenMode;
+      screenMode_ = screenMode;
+      realMs.assign(feed.realOnly.begin(), feed.realOnly.end());
       display = GraphPlaybackLocked(now);
       generation_ = feed.generation;
       refAuto = GraphAutoRefLocked(now, display);
@@ -2711,12 +2763,12 @@ class Window {
       return;
     }
 
-    // Estadisticas de los ultimos 5 s
+    // Estadisticas de los ultimos 5 s (siempre de fotogramas reales: marcan la respuesta del juego)
     std::vector<double> ms;
     double sum = 0;
-    for (size_t i = real.size(); i-- > 0 && sum < 5000.0;) {
-      ms.push_back(real[i].second);
-      sum += real[i].second;
+    for (size_t i = realMs.size(); i-- > 0 && sum < 5000.0;) {
+      ms.push_back(realMs[i]);
+      sum += realMs[i];
     }
     if (ms.empty()) return;
     double fps = 1000.0 * ms.size() / sum;
@@ -2934,7 +2986,9 @@ class Window {
       RoundRect(gx0 + 4 * s, ly - 1 * s, gx0 + 14 * s + sw_w, ly + 16 * s, 5 * s, 20, 24, 31, 0.85f);
       Text(sw, static_cast<int>(gx0 + 9 * s), ly, small_, 200, 206, 214);
     }
-    std::string refText = Fmt(isTarget ? T("objetivo %.1f ms ±%.1f", "target %.1f ms ±%.1f") : T("actual %.1f ms ±%.1f", "current %.1f ms ±%.1f"),
+    std::string refText = Fmt(screenMode_ ? (isTarget ? T("en pantalla %.1f ms ±%.1f", "on screen %.1f ms ±%.1f")
+                                                      : T("en pantalla ~%.1f ms ±%.1f", "on screen ~%.1f ms ±%.1f"))
+                              : isTarget ? T("objetivo %.1f ms ±%.1f", "target %.1f ms ±%.1f") : T("actual %.1f ms ±%.1f", "current %.1f ms ±%.1f"),
                               ref, PaceTolerance(ref));
     int tw = TextWidth(refText, small_);
     float lx = gx1 - 9 * s - tw;
@@ -2954,6 +3008,7 @@ class Window {
   float scale_ = 1.0f;
   PaceClassCache classCache_;
   unsigned generation_ = 0;
+  bool screenMode_ = false;
   bool visible_ = false;
   double lastDraw_ = 0.0;
 };
@@ -4272,7 +4327,12 @@ static void RunEngine(std::wstring presentMonPath) {
       std::string limitLabel;
       overlay::LimitState state = overlay::LimitState::None;
       auto known = store.items.find(session.exe);
-      if (session.expectedFps > 0) target = 1000.0 / session.expectedFps;
+      // Con generacion de fotogramas (vista en esta partida o con la que se aplico el limite), la
+      // grafica dibuja las imagenes en pantalla, con la referencia del limite en pantalla.
+      const int kFg = known != store.items.end() ? std::max(1, known->second.fgFactor) : std::max(1, session.expectFg);
+      const bool screenMode = session.fgEverSeen || kFg > 1;
+      overlay::SetScreenMode(screenMode);
+      if (session.expectedFps > 0) target = 1000.0 / (session.expectedFps * (screenMode ? kFg : 1));
       if (known != store.items.end()) {
         const AppliedChange& c = known->second;
         limitLabel = std::to_string(c.newValue) + (c.fgFactor > 1 ? T(" en pantalla", " on screen") : " fps");
@@ -4670,8 +4730,17 @@ static void PacingGraph(ImVec2 size) {
                 spike ? Col(kAmber) : Col(stateCol), 2.0f * scale);
   }
   dl->PopClipRect();
-  std::string refText = isTarget ? Fmt(T("objetivo %.1f ms ±%.1f", "target %.1f ms ±%.1f"), ref, overlay::PaceTolerance(ref))
-                                 : Fmt(T("actual %.1f ms ±%.1f", "current %.1f ms ±%.1f"), ref, overlay::PaceTolerance(ref));
+  bool screenMode = false;
+  {
+    std::lock_guard<std::mutex> lock(overlay::feed.m);
+    screenMode = overlay::feed.screenMode;
+  }
+  std::string refText =
+      screenMode ? Fmt(isTarget ? T("en pantalla %.1f ms ±%.1f", "on screen %.1f ms ±%.1f")
+                                : T("en pantalla ~%.1f ms ±%.1f", "on screen ~%.1f ms ±%.1f"),
+                       ref, overlay::PaceTolerance(ref))
+      : isTarget ? Fmt(T("objetivo %.1f ms ±%.1f", "target %.1f ms ±%.1f"), ref, overlay::PaceTolerance(ref))
+                 : Fmt(T("actual %.1f ms ±%.1f", "current %.1f ms ±%.1f"), ref, overlay::PaceTolerance(ref));
   ImVec2 rts = ImGui::CalcTextSize(refText.c_str());
   const float ly = p.y + size.y - rts.y - 8 * scale;
   ImVec2 tp(x1 - rts.x, ly);

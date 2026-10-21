@@ -1,4 +1,4 @@
-# Guía de uso de FlatPace 0.39.1
+# Guía de uso de FlatPace 0.40
 
 Esta guía describe la versión actual. Los cambios entre versiones están en el [historial](CHANGELOG.md).
 
@@ -87,6 +87,7 @@ En una esquina del juego: FPS, 1 % bajo, una etiqueta con el estado del límite 
 - **Azul ("FIJADO 225 fps"):** el límite está confirmado; el juego va a su ritmo.
 - **Rojo ("SIN CONFIRMAR" o "SIN LÍMITE"):** el juego aún no tiene límite, o lo tiene pero todavía no se ha comprobado.
 - La gráfica muestra las **desviaciones** del ritmo: mientras el tiempo de los fotogramas está dentro de la tolerancia (±13 % del objetivo, indicada en la etiqueta: *"objetivo 8,3 ms ±1,1"*), la línea es recta; solo se dibuja lo que se sale. Se aplica igual con y sin límite, así que la diferencia que ves es real. Los **tirones** aparecen en ámbar.
+- **Con generación de fotogramas**, la gráfica dibuja las imágenes **en pantalla** (lo que ves), y la etiqueta lo indica (*"en pantalla 13,9 ms ±1,8"*). Si el juego activa y desactiva la generación por su cuenta, la app lo avisa en *Juegos*.
 - Abajo a la izquierda, la **variación** del ritmo (±ms). La primera partida sin límite de cada juego queda como referencia, y con el límite confirmado verás la comparación: *"variación ±0,1 ms · antes ±0,4"*.
 - Con el límite confirmado, una **banda azul** muestra esa tolerancia alrededor del objetivo.
 - Con un límite activo, el **1 % bajo** descuenta los retrasos del propio limitador (fotogramas que salen algo tarde aunque el juego ya los tenía listos): muestra lo que causa el juego. El resumen de cada partida en *Registro* muestra los dos valores. Si la línea queda por encima del objetivo, el juego no llega del todo al límite: un límite algo más bajo dará al limitador margen para aplanarla.

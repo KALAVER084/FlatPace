@@ -333,7 +333,8 @@ TEST(EdidFreeSyncBlock) {
 TEST(PaceToleranceAndScale) {
   CHECK_NEAR(overlay::PaceTolerance(8.33), 0.13 * 8.33, 1e-9);
   CHECK_NEAR(overlay::PaceTolerance(2.0), 0.5, 1e-9);    // minimo
-  CHECK_NEAR(overlay::PaceTolerance(33.3), 2.0, 1e-9);   // maximo
+  CHECK_NEAR(overlay::PaceTolerance(27.8), 0.13 * 27.8, 1e-9);  // 36 fps: el 13 %, sin el maximo de 2 ms
+  CHECK_NEAR(overlay::PaceTolerance(60.0), 6.0, 1e-9);           // maximo (por debajo de ~22 fps)
   // Margen r = max(2 ms, 50 % del objetivo): a 4,44 ms, r = 2,22; a 2 ms, el minimo de 2 ms.
   auto s = overlay::PaceScale(4.44);
   CHECK_NEAR(s.lo, 4.44 - 2.22, 1e-9);

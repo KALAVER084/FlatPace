@@ -2,6 +2,13 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). La versión más reciente va primero.
 
+## 0.40
+Cambios a partir de las pruebas con CONTROL Resonant (generación de fotogramas que el juego activa y desactiva sola).
+- **Cambiado:** en los juegos con generación de fotogramas, la gráfica dibuja las **imágenes en pantalla** (lo que se ve), con la referencia del límite en pantalla, durante toda la partida. Antes dibujaba los fotogramas reales, que en Control Resonant saltaban entre 36 FPS (con generación) y 60-68 (sin ella), aunque en pantalla la diferencia era mucho menor. La etiqueta lo indica (*"en pantalla 13,9 ms ±1,8"*). La cifra grande y el 1 % bajo siguen siendo de fotogramas reales, que marcan la respuesta del juego.
+- **Corregido:** la tolerancia de la gráfica tenía un máximo de 2 ms, que a FPS bajos la hacía más estricta que el propio criterio del 13 % (a 36 FPS, un 7 %) y mostraba como picos variaciones imperceptibles. Ahora es el 13 % a cualquier FPS (mínimo 0,5 ms; el máximo de 6 ms solo actúa por debajo de ~22 FPS). Por encima de ~65 FPS no cambia nada.
+- **Añadido:** reconocimiento de la generación intermitente: tras 4 cambios de estado en una partida, la app avisa una vez en el registro y en *Juegos* (probablemente un modo dinámico del juego o del driver; fijarlo da un ritmo más constante) y deja de anotar cada cambio.
+- **Comprobado:** el overlay no causa los cambios de generación (con el overlay apagado siguieron igual).
+
 ## 0.39.1
 - **Mejorado:** el ciclo de decisión (verificar el límite, la regla de fallos, el valor al que se baja tras un fallo y la decisión al cerrar el juego) pasa de `main.cpp` al módulo `src/core/decision.h`, con pruebas automáticas, incluidas simulaciones del ciclo completo a lo largo de varias partidas (158 comprobaciones). Se comprobó que detectan cinco errores introducidos a propósito.
 - **Corregido (encontrado por las pruebas):** con un límite puesto, la decisión al cerrar podía bajarlo 1-2 FPS en cada partida por el temblor del limitador (en la simulación, de 150 a 87 en diez partidas): una espiral descendente como la de versiones antiguas. Ahora, con un límite activo, solo se baja si el juego queda por debajo de forma perceptible (más de un 13 %), igual que en la regla de fallos.

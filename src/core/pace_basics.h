@@ -14,6 +14,8 @@ struct PacePoint {
 };
 
 // Tolerancia de la grafica: +-13 % del tiempo de fotograma (la diferencia perceptible, ley de
-// Weber, el mismo umbral que usan las decisiones), entre 0,5 y 2 ms. Proporcional porque el ritmo
-// se percibe en proporcion: 2 ms fijos serian un 38 % a 190 fps y apenas un 12 % a 60 fps.
-static double PaceTolerance(double ref) { return std::clamp(0.13 * ref, 0.5, 2.0); }
+// Weber, el mismo umbral que usan las decisiones), con un minimo de 0,5 ms. Proporcional porque el
+// ritmo se percibe en proporcion. Hasta la 0.39.1 tenia ademas un maximo de 2 ms, que a FPS bajos la
+// hacia mas estricta que el propio criterio (a 36 fps, un 7 % en vez de un 13 %), y mostraba como
+// picos variaciones imperceptibles. El maximo de 6 ms solo actua por debajo de ~22 fps.
+static double PaceTolerance(double ref) { return std::clamp(0.13 * ref, 0.5, 6.0); }
