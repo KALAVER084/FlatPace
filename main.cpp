@@ -124,7 +124,7 @@ static std::atomic<bool> g_quit{false};
 static std::atomic<int> g_lang{0};
 static const char* T(const char* es, const char* en) { return g_lang == 1 ? en : es; }
 
-static constexpr const char* kVersion = "0.40.1";
+static constexpr const char* kVersion = "0.41";
 
 // Carpeta donde esta este .exe.
 static std::wstring ExeDirectory() {
@@ -363,6 +363,54 @@ static bool HasSystemBattery() {
 // ---------------------------------------------------------------------------
 #include "src/core/frame_sample.h"
 
+// ---------------------------------------------------------------------------
+// Que FlatPace no compita con el juego. Con las grabaciones se vio que los fotogramas que el juego
+// calcula justo despues de cada tanda de datos (cada ~1 s) salen mas lentos (Greylock: 1,6-2,1 veces
+// mas fotogramas lentos; en Space Marine 2, limitado por la CPU, la generacion de fotogramas se
+// saltaba imagenes: 44 % de generadas frente a 48 %). FlatPace baja su prioridad y pide a Windows 11
+// el modo de eficiencia (EcoQoS: nucleos de eficiencia y frecuencias bajas), salvo el hilo que lee
+// PresentMon, que no puede retrasarse; PresentMon se lanza con prioridad normal.
+// ---------------------------------------------------------------------------
+namespace eco {
+struct PowerThrottlingState {
+  ULONG Version, ControlMask, StateMask;
+};
+constexpr ULONG kExecutionSpeed = 0x1;
+using SetProcInfoFn = BOOL(WINAPI*)(HANDLE, int, LPVOID, DWORD);
+using SetThreadInfoFn = BOOL(WINAPI*)(HANDLE, int, LPVOID, DWORD);
+
+static void LowerProcess() {
+  SetPriorityClass(GetCurrentProcess(), BELOW_NORMAL_PRIORITY_CLASS);
+  auto fn = reinterpret_cast<SetProcInfoFn>(
+      reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "SetProcessInformation")));
+  PowerThrottlingState st{1, kExecutionSpeed, kExecutionSpeed};
+  if (fn) fn(GetCurrentProcess(), 4 /*ProcessPowerThrottling*/, &st, sizeof(st));
+}
+
+// El hilo actual no se frena: sin modo de eficiencia y, si raise, con prioridad alta dentro de la
+// clase baja (equivale a la prioridad normal de los hilos del juego). El hilo que dibuja la ventana y
+// el overlay queda sin modo de eficiencia (para que el overlay no vaya a tirones) pero con prioridad
+// baja, para que el juego siga teniendo preferencia.
+static void ExemptCurrentThread(bool raise = true) {
+  auto fn = reinterpret_cast<SetThreadInfoFn>(
+      reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "SetThreadInformation")));
+  PowerThrottlingState st{1, kExecutionSpeed, 0};
+  if (fn) fn(GetCurrentThread(), 3 /*ThreadPowerThrottling*/, &st, sizeof(st));
+  if (raise) SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+}
+
+// Tiempo de CPU (s) consumido por todo el proceso de FlatPace.
+static double ProcessCpuSec() {
+  FILETIME c, e, k, u;
+  if (!GetProcessTimes(GetCurrentProcess(), &c, &e, &k, &u)) return 0.0;
+  auto toSec = [](const FILETIME& f) {
+    return (static_cast<double>(f.dwHighDateTime) * 4294967296.0 + f.dwLowDateTime) * 1e-7;
+  };
+  return toSec(k) + toSec(u);
+}
+}  // namespace eco
+
+
 namespace overlay { static void Push(const FrameSample& s); }
 
 // Cierra una sesion de captura de Windows (ETW) por su nombre. Si PresentMon termina de
@@ -408,7 +456,7 @@ class PresentMonReader {
     si.hStdError = writeEnd;
     PROCESS_INFORMATION pi{};
     BOOL ok = CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE,
-                             CREATE_NO_WINDOW | CREATE_SUSPENDED, nullptr, nullptr, &si, &pi);
+                             CREATE_NO_WINDOW | CREATE_SUSPENDED | NORMAL_PRIORITY_CLASS, nullptr, nullptr, &si, &pi);
     CloseHandle(writeEnd);
     if (!ok) {
       CloseHandle(read_);
@@ -420,7 +468,10 @@ class PresentMonReader {
     CloseHandle(pi.hThread);
     process_ = pi.hProcess;
     running_ = true;
-    thread_ = std::thread([this] { ReadLoop(); });
+    thread_ = std::thread([this] {
+      eco::ExemptCurrentThread();
+      ReadLoop();
+    });
     return true;
   }
 
@@ -1671,6 +1722,12 @@ struct Session {
   double start = -1.0, phaseStart = 0.0, lastStatus = 0.0, lastFrameArrival = 0.0;
   bool haveRec = false, fgActive = false, fgEverSeen = false, paused = false;
   int fgToggles = 0;  // cambios de estado de la generacion en esta partida
+  // Coste de FlatPace durante la partida
+  double engMsSum = 0.0, engMsMax = 0.0, cpuAtStart = -1.0;
+  int engTicks = 0;
+  // Ultimos minutos ordenados, recalculados como mucho cada 5 s (era cada segundo)
+  std::vector<double> longSortedCache;
+  double longSortedAt = -1e9;
   bool background = false, seenForeground = false, rateChangeNoted = false;
   bool fgAdviceDue = false;
   int fgOnCount = 0, fgOffCount = 0;  // segundos seguidos con/sin generacion
@@ -1895,6 +1952,13 @@ static void PrintSessionSummary(const Session& s, double hz) {
   else
     Log("\n  Error de animacion: no disponible para este juego");
   Log("\n  Pausas largas ignoradas: %d\n", s.pauseTotal);
+  if (s.engTicks > 0) {
+    const double wall = std::max(1.0, NowSec() - s.start);
+    const double cpu = s.cpuAtStart >= 0 ? eco::ProcessCpuSec() - s.cpuAtStart : -1.0;
+    Log("  Coste de FlatPace: motor %.1f ms por segundo de media (maximo %.0f ms)", s.engMsSum / s.engTicks, s.engMsMax);
+    if (cpu >= 0) Log(" | proceso completo (con la ventana y el overlay): %.1f %% de un nucleo", 100.0 * cpu / wall);
+    Log("\n");
+  }
   Log("  Generacion de fotogramas: %s\n", s.fgEverSeen ? "detectada" : "no detectada");
   if (!s.MainPresentMode().empty())
     Log("  Presentacion: %s\n", s.MainPresentMode().c_str());
@@ -2048,6 +2112,10 @@ static void ProcessSession(Session& ss, std::vector<FrameSample>& fresh, double 
   // limitador se cuentan como el limite (tiempos causados por el juego), para que no empujen la
   // recomendacion hacia abajo sin motivo.
   auto Long = [&]() -> const std::vector<double>& {
+    if (!longReady && now - ss.longSortedAt < 5.0 && !ss.longSortedCache.empty()) {
+      longCache = ss.longSortedCache;
+      longReady = true;
+    }
     if (!longReady) {
       const double capMs = ActiveCapMs(ss);
       if (capMs > 0 && ss.longWork.size() == ss.longReal.size()) {
@@ -2062,6 +2130,8 @@ static void ProcessSession(Session& ss, std::vector<FrameSample>& fresh, double 
       } else {
         longCache = ss.LongSorted();
       }
+      ss.longSortedCache = longCache;
+      ss.longSortedAt = now;
       longReady = true;
     }
     return longCache;
@@ -2395,19 +2465,9 @@ static void ProcessSession(Session& ss, std::vector<FrameSample>& fresh, double 
                     st.capFits ? "" : " (no encaja)");
       extra += buf;
     }
-    if (const double capMs = ActiveCapMs(ss); capMs > 0 && !FrameGenInvolved(ss)) {
-      std::vector<double> win;
-      for (const auto& f : ss.samples)
-        if (!f.generated && f.realMs > 0 && f.t >= now - cfg::kWindowSec) win.push_back(f.realMs);
-      CapacityEstimate ce = EstimateCapacity(win, capMs);
-      if (ce.valid && ce.medianReliable)
-        extra += Fmt(" | sin limite ~%.0f fps (p99 ~%.0f)", 1000.0 / ce.medianMs, 1000.0 / ce.p99Ms);
-      else if (ce.valid)
-        extra += Fmt(" | capacidad: p99 ~%.0f fps, mediana por encima del limite", 1000.0 / ce.p99Ms);
-      else if (ce.censoredFraction > 0.98)
-        extra += " | sobrado (casi todo en el limite)";
-      if (const double gl = GameLowFps(ss); gl > 0) extra += Fmt(" | 1%% bajo del juego ~%.0f fps", gl);
-    }
+    // El modelo de capacidad (datos censurados) solo se calcula en el resumen de la partida: cada
+    // 5 s mientras se juega anadia un pico de trabajo que coincidia con fotogramas lentos.
+    if (const double gl = GameLowFps(ss); gl > 0) extra += Fmt(" | 1%% bajo del juego ~%.0f fps", gl);
     std::string rec = ss.current.valid
                           ? std::to_string(static_cast<int>(ss.current.capFps + 0.5)) + " fps"
                           : std::string("ninguno");
@@ -3306,6 +3366,7 @@ static void PublishSession(const Session& ss, const ChangeStore& store, bool app
   }
 }
 
+
 static void RunEngine(std::wstring presentMonPath) {
   std::wstring logPath = OpenLog();
   {
@@ -3461,6 +3522,7 @@ static void RunEngine(std::wstring presentMonPath) {
   bool hzFromCache = !hzClean && ReadCachedHz(monitorKey) > 0;
   double lastHzRetry = NowSec();
   Log("  Frecuencia real: %.3f Hz (Windows dice %.3f)\n", hz, nominalHz);
+  eco::LowerProcess();
 
   {
     std::lock_guard<std::mutex> lock(g_ui.m);
@@ -3757,9 +3819,22 @@ static void RunEngine(std::wstring presentMonPath) {
     }
   };
 
+  // Mide cuanto tarda cada vuelta del motor (se suma a la partida en curso).
+  struct TickTimer {
+    Session& s;
+    double t0 = NowSec();
+    ~TickTimer() {
+      if (s.start <= 0) return;
+      const double ms = (NowSec() - t0) * 1000.0;
+      s.engMsSum += ms;
+      s.engMsMax = std::max(s.engMsMax, ms);
+      ++s.engTicks;
+    }
+  };
   while (!g_quit) {
     for (int i = 0; i < 10 && !g_quit; ++i) Sleep(100);
     if (g_quit) break;
+    TickTimer tick{session};
     for (const auto& m : pm.DrainMessages()) Log("  %s\n", m.c_str());
     if (!pm.HeaderSeen() && !pmRestarted && NowSec() - pmStartedAt > 8.0) {
       pmRestarted = true;
@@ -4015,6 +4090,7 @@ static void RunEngine(std::wstring presentMonPath) {
         WriteKv(L"equipo.txt", "nombre|" + foundExe, label);
         PublishChanges(store);
         session.start = now;
+        session.cpuAtStart = eco::ProcessCpuSec();
         session.phaseStart = now;
         session.lastFrameArrival = now;
         gamesSeen++;
@@ -4085,6 +4161,7 @@ static void RunEngine(std::wstring presentMonPath) {
       session.seenForeground = true;
       Log("[%5.0f s] El juego esta en primer plano: empiezo a medir.\n", session.T(now));
       session.start = now;
+      session.cpuAtStart = eco::ProcessCpuSec();
       session.ResetPhase(now);
     }
     // G-SYNC actuando con el juego (se consulta cada 2 s; cambia tras 3 lecturas iguales).
@@ -5537,6 +5614,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
 
   overlay::Window ov;
   ov.Create(gui::scale);
+  eco::ExemptCurrentThread(false);  // ventana y overlay: sin modo de eficiencia
   std::thread engine(RunEngine, presentMonPath);
 
   bool running = true;

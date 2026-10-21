@@ -1,4 +1,4 @@
-# FlatPace 0.40.1 technical documentation
+# FlatPace 0.41 technical documentation
 
 This document explains how FlatPace works inside: architecture, algorithms, formulas, data formats and the sources behind its decisions. Some names (log lines, data files and keys) are in Spanish, as they appear in the program.
 
@@ -7,6 +7,8 @@ This document explains how FlatPace works inside: architecture, algorithms, form
 | Component | Thread | Role |
 |---|---|---|
 | Window (Dear ImGui 1.91.5 + Direct3D 11) | Main | Interface, ~60 FPS in the foreground and ~10 in the background or minimized |
+
+**Priority:** since 0.41, the FlatPace process runs at low priority (`BELOW_NORMAL_PRIORITY_CLASS`) and in Windows 11 efficiency mode (EcoQoS), so it doesn't compete with the game. Exceptions: the PresentMon reader thread (no efficiency mode, priority equivalent to normal) and the window and overlay thread (no efficiency mode, low priority). PresentMon is launched at normal priority. Each session summary reports FlatPace's cost (engine and whole process).
 | Engine | Own | Game detection, statistics, decisions, driver; one pass per second |
 | PresentMon reader | Own | Runs PresentMon 2.6.0 as a child process (`--output_stdout`) and parses its CSV line by line |
 | Overlay | Main | Its own transparent, always-on-top, click-through window (custom anti-aliased drawing + `UpdateLayeredWindow`), up to 60 updates per second |

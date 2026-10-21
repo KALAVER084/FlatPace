@@ -2,6 +2,13 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). La versión más reciente va primero.
 
+## 0.41
+- **Mejorado: FlatPace ya no compite con el juego por el procesador.** Las grabaciones mostraron que los fotogramas que el juego calcula justo después de cada tanda de datos de PresentMon (cada ~1 s) salían más lentos (Greylock y Megabonk: 1,6-2 veces más fotogramas lentos; en Space Marine 2, limitado por la CPU, la generación de fotogramas se saltaba imágenes: un 44 % de generadas frente al 48 %, lo que se veía como picos al actualizarse la gráfica). Ahora:
+  - FlatPace funciona con **prioridad baja** y en el **modo de eficiencia de Windows 11** (núcleos de eficiencia, frecuencias bajas), salvo el hilo que lee PresentMon (no puede retrasarse) y el que dibuja la ventana y el overlay (sin modo de eficiencia, para que no vaya a tirones). PresentMon se lanza con prioridad normal.
+  - El **modelo de capacidad** solo se calcula en el resumen de la partida: cada 5 s mientras se jugaba añadía un pico de trabajo que coincidía con fotogramas lentos (2-3 veces más en una de cada cinco tandas, con límite).
+  - Los últimos minutos de fotogramas se ordenan como mucho cada 5 s (antes, cada segundo).
+- **Añadido:** el resumen de cada partida indica el **coste de FlatPace** (tiempo del motor por segundo y uso de CPU del proceso completo), para comprobar el efecto con datos.
+
 ## 0.40.1
 - **Corregido:** en juegos con generación de fotogramas, la app podía sugerir que el juego "va sobrado" y subir el límite cuando no era así. Los modelos de capacidad suponen que el límite rige siempre sobre los fotogramas reales; con generación intermitente no es cierto (en Control Resonant, sin generación los fotogramas reales iban a 60-72 FPS con un límite de 36 reales, y el modelo los tomaba por fotogramas esperando en el límite). Ahora, con generación, no se calculan la capacidad, el 1 % bajo causado por el juego, la memoria ni las sugerencias; el resumen lo indica y la sugerencia errónea se retira.
 - **Corregido:** las comillas tipográficas aparecían como "?" en la interfaz (*Click ?Undo?*): la fuente solo cargaba la raya y los puntos suspensivos de ese bloque de signos. Ahora carga todo el bloque de puntuación (comillas, apóstrofos y guiones).
