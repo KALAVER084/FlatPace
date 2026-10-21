@@ -1,4 +1,4 @@
-# Guía de uso de FlatPace 0.43.4
+# Guía de uso de FlatPace 0.44
 
 Esta guía describe la versión actual. Los cambios entre versiones están en el [historial](CHANGELOG.md).
 
@@ -94,7 +94,7 @@ En una esquina del juego: FPS, 1 % bajo, una etiqueta con el estado del límite 
 - Con un límite activo, el **1 % bajo** descuenta los retrasos del propio limitador (fotogramas que salen algo tarde aunque el juego ya los tenía listos): muestra lo que causa el juego. El resumen de cada partida en *Registro* muestra los dos valores. Si la línea queda por encima del objetivo, el juego no llega del todo al límite: un límite algo más bajo dará al limitador margen para aplanarla.
 - Se actualiza hasta 60 veces por segundo y se desplaza de forma continua, con un pequeño retraso que se adapta solo (los datos de PresentMon llegan por tandas; con generación de fotogramas, el retraso puede llegar a unos 2 segundos).
 
-Es una ventana propia y transparente: no toca el juego.
+Es una ventana propia y transparente: no toca el juego. Desde la 0.44 la dibuja la GPU, con un coste casi nulo para el procesador; si en tu equipo no funcionara, la app vuelve sola al overlay clásico (y con `overlay=clasico` en `equipo.txt`, dentro de `%LOCALAPPDATA%\FlatPace`, se usa siempre el clásico).
 
 ## 10. Avisos y deshacer
 

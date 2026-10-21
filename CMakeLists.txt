@@ -11,7 +11,7 @@ add_executable(FlatPace WIN32
   ${IMGUI}/backends/imgui_impl_win32.cpp ${IMGUI}/backends/imgui_impl_dx11.cpp)
 target_include_directories(FlatPace PRIVATE ${IMGUI} ${IMGUI}/backends)
 target_compile_definitions(FlatPace PRIVATE UNICODE _UNICODE NDEBUG)
-target_link_libraries(FlatPace PRIVATE d3d11 dxgi d3dcompiler dwmapi gdi32 shell32 user32 advapi32 version imm32 winmm)
+target_link_libraries(FlatPace PRIVATE d3d11 dxgi d3dcompiler dwmapi dcomp gdi32 shell32 user32 advapi32 version imm32 winmm)
 
 if(MSVC)
   target_compile_options(FlatPace PRIVATE /utf-8 /W4)

@@ -1,4 +1,4 @@
-# FlatPace 0.43.4 user guide
+# FlatPace 0.44 user guide
 
 This guide describes the current version. Changes between versions are listed in the [changelog](CHANGELOG.md) (in Spanish). The app has an English interface: switch it with **ES | EN** at the bottom of the sidebar.
 
@@ -94,7 +94,7 @@ In a corner of the game: FPS, 1 % low, a tag with the limit status and the pacin
 - With an active limit, the **1 % low** discounts the limiter's own delays (frames that come out slightly late even though the game had them ready): it shows what the game causes. Each session summary in *Log* shows both values. If the line sits above the target, the game isn't quite reaching the limit: a slightly lower limit gives the limiter room to flatten it.
 - It refreshes up to 60 times per second and scrolls continuously, with a small delay that adapts on its own (PresentMon delivers data in batches; with frame generation the delay can reach about 2 seconds).
 
-It's a separate, transparent window: it doesn't touch the game.
+It's a separate, transparent window: it doesn't touch the game. Since 0.44 the GPU draws it, at almost no CPU cost; if it didn't work on your PC, the app falls back to the classic overlay on its own (and with `overlay=clasico` in `equipo.txt`, inside `%LOCALAPPDATA%\FlatPace`, the classic one is always used).
 
 ## 10. Warnings and undo
 

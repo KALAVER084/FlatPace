@@ -20,6 +20,7 @@
 #include <wrl/client.h>
 #include <d3d11_1.h>
 #include <dwmapi.h>
+#include <dcomp.h>
 #include <shellapi.h>
 #include <timeapi.h>
 
@@ -124,7 +125,7 @@ static std::atomic<bool> g_quit{false};
 static std::atomic<int> g_lang{0};
 static const char* T(const char* es, const char* en) { return g_lang == 1 ? en : es; }
 
-static constexpr const char* kVersion = "0.43.4";
+static constexpr const char* kVersion = "0.44";
 
 // Carpeta donde esta este .exe.
 static std::wstring ExeDirectory() {
@@ -734,6 +735,10 @@ static std::atomic<bool> g_useVrr{true};
 // Con cada limite, pedir al driver de NVIDIA que no baje las frecuencias de la GPU (avanzado:
 // rendimiento-maximo=no en equipo.txt lo desactiva).
 static std::atomic<bool> g_maxPerf{true};
+// Overlay clasico (dibujado con el procesador y UpdateLayeredWindow) en lugar del de la GPU
+// (DirectComposition): overlay=clasico en equipo.txt. La app tambien vuelve a el sola si el de la
+// GPU no se puede iniciar o falla durante la partida.
+static std::atomic<bool> g_overlayClassic{false};
 // Rango de VRR del monitor segun su EDID (0 = desconocido): el rango FreeSync si lo declara, si no
 // el rango de frecuencias. Por encima del maximo el VRR deja de actuar; por debajo del minimo, el
 // monitor solo sigue el ritmo si puede duplicar fotogramas (LFC, cuando maximo >= 2 x minimo).
@@ -2675,8 +2680,11 @@ static void SetGame(DWORD pid, double targetMs, const std::string& limitLabel, L
 
 class Window {
  public:
-  void Create(float scale) {
+  // dev y ctx: el dispositivo de Direct3D 11 de la ventana principal (lo comparte el overlay de la GPU).
+  void Create(float scale, ID3D11Device* dev, ID3D11DeviceContext* ctx) {
     scale_ = scale;
+    dev_ = dev;
+    ctx_ = ctx;
     W_ = static_cast<int>(420 * scale);
     H_ = static_cast<int>(112 * scale);
     WNDCLASSEXW wc{sizeof(wc), 0, DefWindowProcW, 0, 0, GetModuleHandleW(nullptr), nullptr, nullptr,
@@ -2707,9 +2715,20 @@ class Window {
                        ANTIALIASED_QUALITY, 0, L"Segoe UI");
     small_ = CreateFontW(static_cast<int>(-12 * scale), 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
                          ANTIALIASED_QUALITY, 0, L"Segoe UI");
+    // El registro se abre en el hilo del motor, despues: el aviso se escribe en la primera
+    // actualizacion con el registro ya abierto.
+    if (!g_overlayClassic) {
+      std::string why;
+      gpu_ = InitGpu(why);
+      pendingNote_ = gpu_ ? std::string("Overlay: dibujado con la GPU (DirectComposition).\n")
+                          : "Overlay: no pude usar la GPU (" + why + "); uso el overlay clasico.\n";
+    } else {
+      pendingNote_ = "Overlay: clasico (overlay=clasico en equipo.txt).\n";
+    }
   }
 
   void Destroy() {
+    ReleaseGpu();
     if (hwnd_) DestroyWindow(hwnd_);
     if (big_) DeleteObject(big_);
     if (small_) DeleteObject(small_);
@@ -2725,6 +2744,10 @@ class Window {
   // Se llama desde el bucle de la ventana principal; dibuja hasta 60 veces por segundo.
   void Update() {
     if (!hwnd_) return;
+    if (!pendingNote_.empty() && g_log) {
+      Log("%s", pendingNote_.c_str());
+      pendingNote_.clear();
+    }
     double now = NowSec();
     if (now - lastDraw_ < 0.0155) return;
     lastDraw_ = now;
@@ -2770,7 +2793,7 @@ class Window {
     bool show = enabled && pid != 0 && fgPid == pid && real.size() >= 10;
     state = !enabled ? 1 : pid == 0 ? 2 : fgPid != pid ? 3 : real.size() < 10 ? 4 : 0;
     if (!show) {
-      if (visible_) { ShowWindow(hwnd_, SW_HIDE); visible_ = false; }
+      if (visible_) { ShowWindow(ActiveHwnd(), SW_HIDE); visible_ = false; }
       return;
     }
 
@@ -2799,14 +2822,37 @@ class Window {
         ++eco::overlayDraws;
       }
     } drawTimer{drawT0};
-    Draw(display, fps, low, fg2 ? screenFps : 0.0, limitLabel, limitState, targetMs > 0 ? targetMs : refAuto, targetMs > 0,
-         real, swing, baseSwing);
-
     // Esquina superior izquierda de la pantalla del juego
     MONITORINFO mi{};
     mi.cbSize = sizeof(mi);
     GetMonitorInfoW(MonitorFromWindow(fg, MONITOR_DEFAULTTOPRIMARY), &mi);
     POINT pos{mi.rcMonitor.left + static_cast<LONG>(16 * scale_), mi.rcMonitor.top + static_cast<LONG>(16 * scale_)};
+
+    if (gpu_) {
+      std::string why;
+      if (DrawGpu(fps, low, fg2 ? screenFps : 0.0, limitLabel, limitState, targetMs > 0 ? targetMs : refAuto,
+                  targetMs > 0, real, display, swing, baseSwing, why)) {
+        if (!visible_ || pos.x != gpuPos_.x || pos.y != gpuPos_.y) {
+          SetWindowPos(ghwnd_, HWND_TOPMOST, pos.x, pos.y, W_, H_, SWP_NOACTIVATE);
+          gpuPos_ = pos;
+        }
+        if (!visible_) {
+          ShowWindow(ghwnd_, SW_SHOWNOACTIVATE);
+          visible_ = true;
+        }
+        SetWindowPos(ghwnd_, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        return;
+      }
+      // La GPU fallo (por ejemplo, un reinicio del driver): vuelta al overlay clasico, ya en este dibujo.
+      Log("Overlay: el dibujo con la GPU fallo (%s); vuelvo al overlay clasico.\n", why.c_str());
+      if (visible_) ShowWindow(ghwnd_, SW_HIDE);
+      visible_ = false;
+      ReleaseGpu();
+      gpu_ = false;
+    }
+
+    Draw(display, fps, low, fg2 ? screenFps : 0.0, limitLabel, limitState, targetMs > 0 ? targetMs : refAuto, targetMs > 0,
+         real, swing, baseSwing);
     SIZE size{W_, H_};
     POINT src{0, 0};
     BLENDFUNCTION bf{AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
@@ -2822,6 +2868,295 @@ class Window {
   }
 
  private:
+  // -------------------------------------------------------------------------
+  // Overlay con la GPU (DirectComposition). Una ventana sin superficie propia
+  // (WS_EX_NOREDIRECTIONBITMAP) muestra una cadena de imagenes de Direct3D 11 con transparencia
+  // premultiplicada, compuesta directamente por Windows: sin la copia de todos los pixeles que exige
+  // UpdateLayeredWindow en cada dibujo. El contenido lo dibuja Dear ImGui (un contexto propio del
+  // overlay, en el mismo dispositivo que la ventana principal) con las mismas formas, colores y
+  // posiciones que el overlay clasico. Sigue sin recibir clics (WS_EX_TRANSPARENT).
+  // -------------------------------------------------------------------------
+  HWND ActiveHwnd() const { return gpu_ ? ghwnd_ : hwnd_; }
+
+  bool InitGpu(std::string& why) {
+    if (!dev_ || !ctx_) {
+      why = "sin dispositivo de Direct3D";
+      return false;
+    }
+    WNDCLASSEXW wc{sizeof(wc), 0, DefWindowProcW, 0, 0, GetModuleHandleW(nullptr), nullptr, nullptr,
+                   nullptr, nullptr, L"FlatPaceOverlayGpu", nullptr};
+    RegisterClassExW(&wc);
+    ghwnd_ = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST |
+                                 WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                             wc.lpszClassName, L"FlatPace overlay", WS_POPUP, 0, 0, W_, H_, nullptr, nullptr,
+                             wc.hInstance, nullptr);
+    if (!ghwnd_) {
+      why = "no se pudo crear la ventana";
+      return false;
+    }
+    // Ventana por capas totalmente opaca: la transparencia la da el contenido; asi los clics la
+    // atraviesan (WS_EX_TRANSPARENT) y Windows la compone sin copiar pixeles.
+    SetLayeredWindowAttributes(ghwnd_, 0, 255, LWA_ALPHA);
+    auto fail = [&](const char* what, HRESULT hr) {
+      char buf[96];
+      snprintf(buf, sizeof(buf), "%s, error 0x%08lX", what, static_cast<unsigned long>(hr));
+      why = buf;
+      ReleaseGpu();
+      return false;
+    };
+    Microsoft::WRL::ComPtr<IDXGIDevice> dxgiDev;
+    HRESULT hr = dev_->QueryInterface(IID_PPV_ARGS(&dxgiDev));
+    if (FAILED(hr)) return fail("sin dispositivo DXGI", hr);
+    Microsoft::WRL::ComPtr<IDXGIAdapter> adapter;
+    hr = dxgiDev->GetAdapter(&adapter);
+    if (FAILED(hr)) return fail("sin adaptador", hr);
+    Microsoft::WRL::ComPtr<IDXGIFactory2> factory;
+    hr = adapter->GetParent(IID_PPV_ARGS(&factory));
+    if (FAILED(hr)) return fail("sin DXGI 1.2", hr);
+    DXGI_SWAP_CHAIN_DESC1 d{};
+    d.Width = static_cast<UINT>(W_);
+    d.Height = static_cast<UINT>(H_);
+    d.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    d.SampleDesc.Count = 1;
+    d.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    d.BufferCount = 2;
+    d.Scaling = DXGI_SCALING_STRETCH;
+    d.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
+    d.AlphaMode = DXGI_ALPHA_MODE_PREMULTIPLIED;
+    hr = factory->CreateSwapChainForComposition(dev_, &d, nullptr, &gsc_);
+    if (FAILED(hr)) return fail("CreateSwapChainForComposition", hr);
+    hr = DCompositionCreateDevice(dxgiDev.Get(), IID_PPV_ARGS(&gdc_));
+    if (FAILED(hr)) return fail("DCompositionCreateDevice", hr);
+    hr = gdc_->CreateTargetForHwnd(ghwnd_, TRUE, &gtarget_);
+    if (FAILED(hr)) return fail("CreateTargetForHwnd", hr);
+    hr = gdc_->CreateVisual(&gvisual_);
+    if (FAILED(hr)) return fail("CreateVisual", hr);
+    hr = gvisual_->SetContent(gsc_);
+    if (SUCCEEDED(hr)) hr = gtarget_->SetRoot(gvisual_);
+    if (SUCCEEDED(hr)) hr = gdc_->Commit();
+    if (FAILED(hr)) return fail("composicion", hr);
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> back;
+    hr = gsc_->GetBuffer(0, IID_PPV_ARGS(&back));
+    if (SUCCEEDED(hr)) hr = dev_->CreateRenderTargetView(back.Get(), nullptr, &grtv_);
+    if (FAILED(hr)) return fail("sin destino de dibujo", hr);
+
+    // Contexto de Dear ImGui propio del overlay, con sus fuentes (Segoe UI, como el clasico: el
+    // tamano en ImGui es la altura de linea, ~1,33 veces el tamano de letra de Windows).
+    ImGuiContext* prev = ImGui::GetCurrentContext();
+    gctx_ = ImGui::CreateContext();
+    ImGui::SetCurrentContext(gctx_);
+    ImGuiIO& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.LogFilename = nullptr;
+    static const ImWchar ranges[] = {0x0020, 0x00FF, 0x2010, 0x2027, 0};
+    wchar_t winDir[MAX_PATH];
+    GetWindowsDirectoryW(winDir, MAX_PATH);
+    const std::string fonts = Narrow(std::wstring(winDir)) + "\\Fonts\\";
+    auto load = [&](const char* file, float px) -> ImFont* {
+      const std::string path = fonts + file;
+      if (GetFileAttributesA(path.c_str()) == INVALID_FILE_ATTRIBUTES) return nullptr;
+      return io.Fonts->AddFontFromFileTTF(path.c_str(), px, nullptr, ranges);
+    };
+    gSmall_ = load("segoeui.ttf", 12.0f * 1.33f * scale_);
+    gBig_ = load("seguisb.ttf", 22.0f * 1.33f * scale_);
+    if (!gSmall_) gSmall_ = io.Fonts->AddFontDefault();
+    if (!gBig_) gBig_ = gSmall_;
+    const bool ok = ImGui_ImplDX11_Init(dev_, ctx_);
+    ImGui::SetCurrentContext(prev);
+    if (!ok) return fail("ImGui_ImplDX11_Init", E_FAIL);
+    gImguiReady_ = true;
+    return true;
+  }
+
+  void ReleaseGpu() {
+    if (gctx_) {
+      ImGuiContext* prev = ImGui::GetCurrentContext();
+      ImGui::SetCurrentContext(gctx_);
+      if (gImguiReady_) ImGui_ImplDX11_Shutdown();
+      ImGui::DestroyContext(gctx_);
+      ImGui::SetCurrentContext(prev == gctx_ ? nullptr : prev);
+      gctx_ = nullptr;
+      gImguiReady_ = false;
+    }
+    if (grtv_) { grtv_->Release(); grtv_ = nullptr; }
+    if (gvisual_) { gvisual_->Release(); gvisual_ = nullptr; }
+    if (gtarget_) { gtarget_->Release(); gtarget_ = nullptr; }
+    if (gdc_) { gdc_->Release(); gdc_ = nullptr; }
+    if (gsc_) { gsc_->Release(); gsc_ = nullptr; }
+    if (ghwnd_) { DestroyWindow(ghwnd_); ghwnd_ = nullptr; }
+  }
+
+  // Dibuja el overlay con la GPU: lo mismo que Draw, en el mismo orden (fondos, fila superior,
+  // rejilla, referencia, relleno, banda, curva y etiquetas). Devuelve false si la GPU falla.
+  bool DrawGpu(double fps, double low, double screenFps, const std::string& limitLabel, LimitState limitState,
+               double refMs, bool isTarget, const std::vector<std::pair<double, double>>& real, double display,
+               double swing, double baseSwing, std::string& why) {
+    ImGuiContext* prev = ImGui::GetCurrentContext();
+    ImGui::SetCurrentContext(gctx_);
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(static_cast<float>(W_), static_cast<float>(H_));
+    io.DeltaTime = 1.0f / 60.0f;
+    ImGui_ImplDX11_NewFrame();
+    ImGui::NewFrame();
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+
+    const float s = scale_;
+    const unsigned generation = generation_;
+    const double span = kPaceSpanSec;
+    const bool locked = limitState == LimitState::Locked;
+    const int sr = locked ? 47 : 255, sg = locked ? 168 : 107, sb = locked ? 255 : 107;
+    auto C = [](int r, int g, int b, float a) {
+      return IM_COL32(r, g, b, static_cast<int>(std::clamp(a, 0.0f, 1.0f) * 255.0f + 0.5f));
+    };
+    auto TextW = [&](ImFont* f, const std::string& t) {
+      return f->CalcTextSizeA(f->FontSize, FLT_MAX, 0.0f, t.c_str()).x;
+    };
+    auto Text = [&](ImFont* f, float x, float y, ImU32 col, const std::string& t) {
+      dl->AddText(f, f->FontSize, ImVec2(std::round(x), std::round(y)), col, t.c_str());
+    };
+
+    // Fondos
+    dl->AddRectFilled(ImVec2(0, 0), ImVec2(static_cast<float>(W_), static_cast<float>(H_)), C(14, 16, 21, 0.86f), 10 * s);
+    const float gx0 = 10 * s, gx1 = W_ - 10 * s, gy0 = 34 * s, gy1 = H_ - 10 * s;
+    dl->AddRectFilled(ImVec2(gx0, gy0), ImVec2(gx1, gy1), C(26, 30, 38, 0.92f), 6 * s);
+
+    // Fila superior: punto de estado, FPS, 1 % bajo y etiqueta del limite
+    dl->AddRectFilled(ImVec2(12 * s, 13 * s), ImVec2(20 * s, 21 * s), C(sr, sg, sb, 1.0f), 4 * s);
+    const std::string fpsText = Fmt("%.0f", fps);
+    Text(gBig_, 26 * s, 3 * s, C(240, 242, 245, 1.0f), fpsText);
+    const float fw = TextW(gBig_, fpsText);
+    Text(gSmall_, 26 * s + fw + 4 * s, 10 * s, C(150, 158, 170, 1.0f), "FPS");
+    std::string sub = Fmt(T("1%% bajo %.0f", "1%% low %.0f"), low);
+    if (screenFps > 0) sub += Fmt(T("  ·  pantalla %.0f", "  ·  screen %.0f"), screenFps);
+    Text(gSmall_, 26 * s + fw + 34 * s, 10 * s, C(150, 158, 170, 1.0f), sub);
+    const std::string pill = locked ? std::string(T("FIJADO  ", "LOCKED  ")) + limitLabel
+                             : limitState == LimitState::Pending ? std::string(T("SIN CONFIRMAR  ", "UNCONFIRMED  ")) + limitLabel
+                                                                 : std::string(T("SIN LÍMITE", "NO LIMIT"));
+    const float pw = TextW(gSmall_, pill);
+    const float px1 = W_ - 10 * s, px0 = px1 - pw - 16 * s;
+    dl->AddRectFilled(ImVec2(px0, 7 * s), ImVec2(px1, 27 * s), C(sr, sg, sb, 0.18f), 10 * s);
+    Text(gSmall_, px0 + 8 * s, 9 * s, C(sr, sg, sb, 1.0f), pill);
+
+    // Grafica
+    dl->PushClipRect(ImVec2(gx0, gy0), ImVec2(gx1, gy1), true);
+    const float iy0 = gy0 + 6 * s, iy1 = gy1 - 4 * s;
+    const double ref = refMs;
+    const PaceRange pr = PaceScale(ref);
+    auto Y = [&](double ms) {
+      const double t = std::clamp((ms - pr.lo) / (pr.hi - pr.lo), 0.0, 1.0);
+      return static_cast<float>(iy1 - t * (iy1 - iy0));
+    };
+    auto X = [&](float xf) { return gx0 + xf * (gx1 - gx0); };
+    for (double k = std::ceil(display - span); k <= display; k += 1.0) {
+      const float x = X(static_cast<float>(1.0 - (display - k) / span));
+      dl->AddLine(ImVec2(x, gy0), ImVec2(x, gy1), C(255, 255, 255, 0.06f), 1.0f);
+    }
+    const float ry = Y(ref);
+    for (float x = gx0; x < gx1; x += 8 * s)
+      dl->AddLine(ImVec2(x, ry), ImVec2(std::min(x + 4 * s, gx1), ry), C(255, 255, 255, 0.28f), 1.0f);
+
+    const int cols = std::max(2, static_cast<int>((gx1 - gx0) / (3.0f * s)));
+    std::vector<PacePoint> pts = BuildTimeSeries(real, display, span, cols, ref, classCache_, generation, screenMode_);
+    // Relleno degradado bajo la curva: el alfa depende solo de la altura (0,04 abajo, 0,40 arriba),
+    // como en el clasico; cada tramo es un cuadrilatero con color por vertice.
+    const ImVec2 uv = ImGui::GetFontTexUvWhitePixel();
+    const float full = std::max(1.0f, gy1 - gy0);
+    auto FillCol = [&](float y) { return C(sr, sg, sb, 0.04f + 0.36f * std::clamp((gy1 - y) / full, 0.0f, 1.0f)); };
+    for (size_t k = 1; k < pts.size(); ++k) {
+      const float xa = X(pts[k - 1].x), ya = Y(pts[k - 1].ms), xb = X(pts[k].x), yb = Y(pts[k].ms);
+      dl->PrimReserve(6, 4);
+      const ImDrawIdx i0 = static_cast<ImDrawIdx>(dl->_VtxCurrentIdx);
+      dl->PrimWriteIdx(i0);
+      dl->PrimWriteIdx(static_cast<ImDrawIdx>(i0 + 1));
+      dl->PrimWriteIdx(static_cast<ImDrawIdx>(i0 + 2));
+      dl->PrimWriteIdx(i0);
+      dl->PrimWriteIdx(static_cast<ImDrawIdx>(i0 + 2));
+      dl->PrimWriteIdx(static_cast<ImDrawIdx>(i0 + 3));
+      dl->PrimWriteVtx(ImVec2(xa, ya), uv, FillCol(ya));
+      dl->PrimWriteVtx(ImVec2(xb, yb), uv, FillCol(yb));
+      dl->PrimWriteVtx(ImVec2(xb, gy1), uv, FillCol(gy1));
+      dl->PrimWriteVtx(ImVec2(xa, gy1), uv, FillCol(gy1));
+    }
+    if (locked) {
+      const float bTop = Y(ref + PaceTolerance(ref)), bBot = Y(std::max(0.0, ref - PaceTolerance(ref)));
+      dl->AddRectFilled(ImVec2(gx0, bTop), ImVec2(gx1, bBot), C(sr, sg, sb, 0.12f));
+      dl->AddLine(ImVec2(gx0, bTop), ImVec2(gx1, bTop), C(sr, sg, sb, 0.38f), 1.0f);
+      dl->AddLine(ImVec2(gx0, bBot), ImVec2(gx1, bBot), C(sr, sg, sb, 0.38f), 1.0f);
+    }
+    // Curva: tramos seguidos del mismo color en una sola linea (uniones suaves); los tirones en ambar.
+    std::vector<ImVec2> run;
+    bool runSpike = false;
+    auto flush = [&]() {
+      if (run.size() >= 2)
+        dl->AddPolyline(run.data(), static_cast<int>(run.size()), runSpike ? C(245, 185, 66, 1.0f) : C(sr, sg, sb, 1.0f),
+                        ImDrawFlags_None, 1.8f * s);
+      run.clear();
+    };
+    for (size_t k = 1; k < pts.size(); ++k) {
+      const bool spike = pts[k].spike || pts[k - 1].spike;
+      const ImVec2 a(X(pts[k - 1].x), Y(pts[k - 1].ms)), b(X(pts[k].x), Y(pts[k].ms));
+      if (run.empty() || spike != runSpike) {
+        flush();
+        runSpike = spike;
+        run.push_back(a);
+      }
+      run.push_back(b);
+    }
+    flush();
+
+    // Etiquetas
+    const float ly = std::floor(gy1 - 19 * s);
+    if (swing >= 0) {
+      std::string sw = Fmt(T("variación ±%.1f ms", "swing ±%.1f ms"), swing);
+      if (locked && baseSwing > 0) sw += Fmt(T("  ·  antes ±%.1f", "  ·  before ±%.1f"), baseSwing);
+      const float swW = TextW(gSmall_, sw);
+      dl->AddRectFilled(ImVec2(gx0 + 4 * s, ly - 1 * s), ImVec2(gx0 + 14 * s + swW, ly + 16 * s), C(20, 24, 31, 0.85f), 5 * s);
+      Text(gSmall_, gx0 + 9 * s, ly, C(200, 206, 214, 1.0f), sw);
+    }
+    const std::string refText =
+        Fmt(screenMode_ ? (isTarget ? T("en pantalla %.1f ms ±%.1f", "on screen %.1f ms ±%.1f")
+                                    : T("en pantalla ~%.1f ms ±%.1f", "on screen ~%.1f ms ±%.1f"))
+                        : isTarget ? T("objetivo %.1f ms ±%.1f", "target %.1f ms ±%.1f") : T("actual %.1f ms ±%.1f", "current %.1f ms ±%.1f"),
+            ref, PaceTolerance(ref));
+    const float tw = TextW(gSmall_, refText);
+    const float lx = gx1 - 9 * s - tw;
+    dl->AddRectFilled(ImVec2(lx - 5 * s, ly - 1 * s), ImVec2(gx1 - 4 * s, ly + 16 * s), C(20, 24, 31, 0.85f), 5 * s);
+    Text(gSmall_, lx, ly, C(150, 158, 170, 1.0f), refText);
+    dl->PopClipRect();
+
+    ImGui::Render();
+    const float clear[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    ctx_->OMSetRenderTargets(1, &grtv_, nullptr);
+    ctx_->ClearRenderTargetView(grtv_, clear);
+    ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+    // Sin esperar al refresco: el hilo de la ventana no se bloquea; Windows muestra la ultima imagen.
+    const HRESULT hr = gsc_->Present(0, 0);
+    ImGui::SetCurrentContext(prev);
+    if (FAILED(hr)) {
+      char buf[64];
+      snprintf(buf, sizeof(buf), "Present, error 0x%08lX", static_cast<unsigned long>(hr));
+      why = buf;
+      return false;
+    }
+    return true;
+  }
+
+  ID3D11Device* dev_ = nullptr;
+  ID3D11DeviceContext* ctx_ = nullptr;
+  bool gpu_ = false;
+  bool gImguiReady_ = false;
+  std::string pendingNote_;
+  HWND ghwnd_ = nullptr;
+  POINT gpuPos_{-100000, -100000};
+  IDXGISwapChain1* gsc_ = nullptr;
+  IDCompositionDevice* gdc_ = nullptr;
+  IDCompositionTarget* gtarget_ = nullptr;
+  IDCompositionVisual* gvisual_ = nullptr;
+  ID3D11RenderTargetView* grtv_ = nullptr;
+  ImGuiContext* gctx_ = nullptr;
+  ImFont* gSmall_ = nullptr;
+  ImFont* gBig_ = nullptr;
+
   // Pixel con alfa premultiplicado (formato BGRA)
   void Blend(int x, int y, uint8_t r, uint8_t g, uint8_t b, float a) {
     if (x < 0 || y < 0 || x >= W_ || y >= H_ || a <= 0) return;
@@ -5594,8 +5929,9 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
   ImGui_ImplWin32_Init(hwnd);
   ImGui_ImplDX11_Init(gui::dev, gui::ctx);
 
+  if (ReadKv(L"equipo.txt", "overlay") == "clasico") g_overlayClassic = true;
   overlay::Window ov;
-  ov.Create(gui::scale);
+  ov.Create(gui::scale, gui::dev, gui::ctx);
   eco::ExemptCurrentThread();  // ventana y overlay
   std::thread engine(RunEngine, presentMonPath);
 

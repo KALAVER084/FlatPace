@@ -2,6 +2,11 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). La versión más reciente va primero.
 
+## 0.44
+- **Nuevo: overlay dibujado con la GPU (DirectComposition).** El overlay clásico se dibujaba con el procesador, píxel a píxel, y se entregaba con `UpdateLayeredWindow`, que obliga a Windows a copiar todos los píxeles en cada actualización (en Space Marine 2, 1,28 ms por dibujo, ~5 % de un núcleo). Ahora lo dibuja la GPU con Dear ImGui (un contexto propio, en el mismo dispositivo que la ventana principal) en una ventana sin superficie propia (`WS_EX_NOREDIRECTIONBITMAP`), cuya imagen, con transparencia premultiplicada, compone Windows directamente. Mismo diseño, colores, posiciones y comportamiento; sigue sin recibir clics.
+- **Respaldo automático:** si el overlay de la GPU no se puede iniciar, o falla durante la partida (por ejemplo, al reiniciarse el driver), la app vuelve sola al overlay clásico y lo anota en el registro. Con `overlay=clasico` en `equipo.txt` se usa siempre el clásico.
+- **Comprobado fuera de Windows:** el código de dibujo del overlay nuevo, extraído tal cual, se ejecutó con datos de partidas reales (Space Marine 2 y Control Resonant) y se rasterizó a imagen: mismo diseño que el clásico, incluidos el relleno degradado, los tirones en ámbar y la banda de tolerancia. La parte de DirectComposition solo se puede comprobar en Windows.
+
 ## 0.43.4
 Revisión de autoría del código, sin cambios de comportamiento (el programa compilado es idéntico byte a byte, salvo el número de versión).
 - **Cambiado:** las declaraciones de NVAPI que usa FlatPace (tipos, estructuras, códigos de estado e identificadores de ajustes y funciones del driver, reproducidos de los encabezados públicos de NVIDIA, licencia MIT) estaban dentro de `main.cpp`, mezcladas con código propio. Ahora están en `third_party/nvapi/nvapi_min.h`, con su aviso de autoría, igual que Dear ImGui en `third_party/imgui`: todo el código de terceros queda en `third_party/`. Los identificadores de las funciones del driver tienen ahora nombre (por ejemplo `nv::fn::DRS_SetSetting`) en lugar de números sueltos.

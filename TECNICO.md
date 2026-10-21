@@ -1,4 +1,4 @@
-# Documentación técnica de FlatPace 0.43.4
+# Documentación técnica de FlatPace 0.44
 
 Este documento explica cómo funciona FlatPace por dentro: arquitectura, algoritmos, fórmulas, formatos de datos y las fuentes en que se basan sus decisiones.
 
@@ -11,7 +11,7 @@ Este documento explica cómo funciona FlatPace por dentro: arquitectura, algorit
 **Prioridad:** desde la 0.41, el proceso de FlatPace tiene prioridad baja (`BELOW_NORMAL_PRIORITY_CLASS`) y modo de eficiencia de Windows 11 (EcoQoS), para no competir con el juego. Excepciones: el hilo lector de PresentMon (sin modo de eficiencia, prioridad baja; la tubería con PresentMon tiene 1 MB de búfer para que no se bloquee) y el hilo de la ventana y el overlay (sin modo de eficiencia, prioridad baja). PresentMon se lanza también con prioridad baja y modo de eficiencia, y sin seguimiento de entrada (`--no_track_input`), que FlatPace no usa. El resumen de cada partida indica el coste de FlatPace (motor, proceso completo, PresentMon y overlay).
 | Motor | Propio | Detección del juego, estadísticas, decisiones, driver; una vuelta por segundo |
 | Lector de PresentMon | Propio | Lanza PresentMon 2.6.0 como proceso hijo (`--output_stdout`) y analiza su CSV línea a línea |
-| Overlay | Principal | Ventana propia, transparente, siempre encima y que el ratón atraviesa (dibujo propio con suavizado + `UpdateLayeredWindow`), hasta 60 actualizaciones por segundo; fondos fijos y textos guardados entre fotogramas, mezcla de píxeles con enteros |
+| Overlay | Principal | Ventana propia, transparente, siempre encima y que el ratón atraviesa (dibujo propio con suavizado + `UpdateLayeredWindow`), hasta 60 actualizaciones por segundo; fondos fijos y textos guardados entre fotogramas, mezcla de píxeles con enteros. Desde la 0.44 lo dibuja la GPU: Dear ImGui (contexto propio, mismo dispositivo de Direct3D 11) en una cadena de imágenes para composición (`CreateSwapChainForComposition`, alfa premultiplicado) mostrada con DirectComposition en una ventana `WS_EX_NOREDIRECTIONBITMAP` por capas y transparente a los clics; si falla, vuelve al dibujo con el procesador (`overlay=clasico` lo fuerza) |
 
 Los hilos se comunican con estructuras protegidas por mutex (estado de la ventana, datos del overlay, peticiones de deshacer). El motor nunca bloquea la interfaz.
 
@@ -112,6 +112,7 @@ Sin interfaz, en `%LOCALAPPDATA%\FlatPace\equipo.txt` (una línea `clave=valor`)
 | Clave | Efecto |
 |---|---|
 | `rendimiento-maximo=no` | No acompañar los límites de *Preferir rendimiento máximo* (los cambios ya aplicados lo pierden al reaplicarse o al deshacerlos). |
+| `overlay=clasico` | Usar siempre el overlay clásico (dibujado con el procesador) en lugar del de la GPU. |
 | `divisores-siempre=si` | Usa siempre divisores de los Hz, aunque G-SYNC/FreeSync actúe. Para pantallas que parpadean con VRR (algunas OLED y VA). La sección *Equipo* lo indica en la fila *VRR*. |
 
 Los límites ya aplicados no cambian: para recalcular un juego con el ajuste nuevo, usa *Deshacer*.
@@ -149,7 +150,7 @@ MinGW-w64 (desde Linux):
 x86_64-w64-mingw32-windres app.rc -O coff -o app.res
 x86_64-w64-mingw32-g++-posix -std=c++20 -municode -mwindows -O2 -DNDEBUG -Ithird_party/imgui \
   -Ithird_party/imgui/backends main.cpp imgui*.o app.res -o FlatPace.exe \
-  -ld3d11 -ldxgi -ld3dcompiler_47 -ldwmapi -lgdi32 -lshell32 -luser32 -ladvapi32 -lversion \
+  -ld3d11 -ldxgi -ld3dcompiler_47 -ldwmapi -ldcomp -lgdi32 -lshell32 -luser32 -ladvapi32 -lversion \
   -limm32 -lwinmm -static -s
 ```
 Windows: `cmake -B build && cmake --build build --config Release`. Dear ImGui (con los backends Win32 y DX11) va en `third_party/imgui`, y las declaraciones de NVAPI que usa FlatPace (de NVIDIA, licencia MIT) en `third_party/nvapi/nvapi_min.h`: todo el código de terceros está en `third_party/`.
