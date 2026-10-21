@@ -127,7 +127,7 @@ static std::atomic<bool> g_quit{false};
 static std::atomic<int> g_lang{0};
 static const char* T(const char* es, const char* en) { return g_lang == 1 ? en : es; }
 
-static constexpr const char* kVersion = "0.50.1";
+static constexpr const char* kVersion = "0.50.2";
 
 // Carpeta donde esta este .exe.
 static std::wstring ExeDirectory() {
@@ -1341,6 +1341,26 @@ class NvDriver {
     Close(s);
     if (st != nv::OK) { error = Describe(st); return false; }
     change.saved.push_back(sv);
+    return true;
+  }
+
+  // Lo contrario de AddSetting: devuelve un ajuste anadido a un limite a su valor original (como
+  // Deshacer) y lo quita de la lista. Para desactivar "GPU al maximo" o el modo de baja latencia en
+  // limites que ya los tenian.
+  bool RemoveSetting(AppliedChange& change, uint32_t id) {
+    if (!ok_) return false;
+    auto it = std::find_if(change.saved.begin(), change.saved.end(), [&](const SavedSetting& sv) { return sv.id == id; });
+    if (it == change.saved.end()) return true;  // no lo tenia
+    nv::Session s = nullptr;
+    if (!Open(s)) return false;
+    nv::Profile p = nullptr;
+    bool created = false;
+    if (!FindOrCreateProfile(s, change.exe, p, created)) { Close(s); return false; }
+    nv::Status st = Restore(s, p, *it);
+    if (st == nv::OK) st = save_(s);
+    Close(s);
+    if (st != nv::OK) { error = Describe(st); return false; }
+    change.saved.erase(it);
     return true;
   }
 
@@ -3904,6 +3924,30 @@ static void RunEngine(std::wstring presentMonPath) {
     for (const auto& [exe, c] : store.items) {
       const std::string sv = ReadKv(L"equipo.txt", "sugerencia|" + exe);
       if (!sv.empty() && !c.manual) g_ui.suggestions[exe] = std::atof(sv.c_str());
+    }
+  }
+  // Desactivados en equipo.txt: quitarlos tambien de los limites que ya los tenian (hasta la 0.50.1
+  // solo se dejaban de anadir a los nuevos). Con el VSync por intervalos, la cola de un fotograma forma
+  // parte del metodo y se mantiene.
+  if (nvOk && (!g_lowLatency || !g_maxPerf)) {
+    int removedLl = 0, removedPerf = 0;
+    for (auto& [exe, c] : store.items) {
+      auto has = [&](uint32_t id) {
+        return std::any_of(c.saved.begin(), c.saved.end(), [&](const SavedSetting& sv) { return sv.id == id; });
+      };
+      if (!g_lowLatency && c.method != Method::DriverVsync && has(nv::PRERENDERLIMIT_ID) &&
+          nvd.RemoveSetting(c, nv::PRERENDERLIMIT_ID))
+        ++removedLl;
+      if (!g_maxPerf && has(nv::PREFERRED_PSTATE_ID) && nvd.RemoveSetting(c, nv::PREFERRED_PSTATE_ID)) ++removedPerf;
+    }
+    if (removedLl + removedPerf > 0) {
+      store.Save();
+      if (removedLl > 0)
+        Log("Modo de baja latencia quitado de %d juego%s (baja-latencia=no; actua al abrir el juego).\n", removedLl,
+            removedLl == 1 ? "" : "s");
+      if (removedPerf > 0)
+        Log("Rendimiento maximo de la GPU quitado de %d juego%s (rendimiento-maximo=no; actua al abrir el juego).\n",
+            removedPerf, removedPerf == 1 ? "" : "s");
     }
   }
   if (nvOk && g_lowLatency) {

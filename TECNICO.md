@@ -1,4 +1,4 @@
-# Documentación técnica de FlatPace 0.50.1
+# Documentación técnica de FlatPace 0.50.2
 
 Este documento explica cómo funciona FlatPace por dentro: arquitectura, algoritmos, fórmulas, formatos de datos y las fuentes en que se basan sus decisiones.
 
@@ -114,8 +114,8 @@ Sin interfaz, en `%LOCALAPPDATA%\FlatPace\equipo.txt` (para abrir la carpeta: Wi
 
 | Clave | Efecto |
 |---|---|
-| `baja-latencia=no` | No acompañar los límites del *Modo de baja latencia* (cola de render de un fotograma). |
-| `rendimiento-maximo=no` | No acompañar los límites de *Preferir rendimiento máximo* (los cambios ya aplicados lo pierden al reaplicarse o al deshacerlos). |
+| `baja-latencia=no` | No acompañar los límites del *Modo de baja latencia* (cola de render de un fotograma); al arrancar, la app lo quita también de los límites que ya lo tenían (salvo con el VSync por intervalos, donde forma parte del método). |
+| `rendimiento-maximo=no` | No acompañar los límites de *Preferir rendimiento máximo*; al arrancar, la app lo quita también de los límites que ya lo tenían. |
 | `prioridad-auto=no` | No pasar a *Estabilidad* los juegos inestables (cada juego usa siempre la prioridad global). |
 | `subir-solo=no` | Modo *Solo sugerir* (se elige también en *Juegos* → *Ajuste de límites*): las subidas se sugieren con un botón en lugar de aplicarse solas. |
 | `overlay=clasico` | Usar siempre el overlay clásico (dibujado con el procesador) en lugar del de la GPU. |

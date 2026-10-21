@@ -1,4 +1,4 @@
-# FlatPace 0.50.1 technical documentation
+# FlatPace 0.50.2 technical documentation
 
 This document explains how FlatPace works inside: architecture, algorithms, formulas, data formats and the sources behind its decisions. Some names (log lines, data files and keys) are in Spanish, as they appear in the program.
 
@@ -114,8 +114,8 @@ No interface; in `%LOCALAPPDATA%\FlatPace\equipo.txt` (to open the folder: Windo
 
 | Key | Effect |
 |---|---|
-| `baja-latencia=no` | Don't pair limits with *Low Latency Mode* (a one-frame render queue). |
-| `rendimiento-maximo=no` | Don't pair limits with *Prefer maximum performance* (changes already applied lose it when reapplied or undone). |
+| `baja-latencia=no` | Don't pair limits with *Low Latency Mode* (a one-frame render queue); at startup, the app also removes it from limits that already had it (except with interval VSync, where it's part of the method). |
+| `rendimiento-maximo=no` | Don't pair limits with *Prefer maximum performance*; at startup, the app also removes it from limits that already had it. |
 | `prioridad-auto=no` | Don't move unstable games to *Stability* (every game always uses the global priority). |
 | `subir-solo=no` | *Suggest only* mode (also chosen in *Games* → *Limit adjustment*): raises are suggested with a button instead of applied automatically. |
 | `overlay=clasico` | Always use the classic overlay (drawn by the CPU) instead of the GPU one. |

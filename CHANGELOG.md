@@ -2,6 +2,10 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). La versión más reciente va primero.
 
+## 0.50.2
+- **Corregido: `baja-latencia=no` y `rendimiento-maximo=no` no desactivaban nada en los límites existentes.** Solo impedían añadir esos ajustes a los límites nuevos; los que ya los tenían en el perfil del driver los conservaban. Ahora, al arrancar, la app los devuelve a su valor original (como *Deshacer*) en los límites que los tenían, y lo anota en el registro. Con el VSync por intervalos, la cola de un fotograma forma parte del método y se mantiene.
+- **Primer dato real de la espera en la cola de la GPU** (Greylock a 130 FPS, 3 minutos sin zonas pesadas): mientras el límite se sostiene, la cola está vacía (mediana de 0,18 ms), como predecía la simulación.
+
 ## 0.50.1
 - **Corregido: los ajustes avanzados escritos como `clave=valor` se ignoraban.** La documentación los mostraba así (`baja-latencia=no`, `overlay=clasico`…), pero la app solo leía la clave, una tabulación y el valor. Ahora acepta ambas formas, con o sin espacios alrededor del `=`, y al guardar normaliza las líneas al formato de la app.
 - **Nuevo: limpieza de ajustes antiguos.** Al arrancar, la app quita de `equipo.txt` las claves que ya no usa ninguna versión (`memoria|`, `memoria2|`, `ritmo-antes|`, `prioridad-v2`, `aprendizaje-generacion` y `vrr`) y lo anota en el registro.
