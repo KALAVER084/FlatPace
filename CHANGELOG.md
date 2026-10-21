@@ -2,6 +2,11 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). La versión más reciente va primero.
 
+## 0.43.3
+Revisión del código y la documentación, sin cambios de comportamiento.
+- **Código:** eliminados restos sin uso (la lista de horas de llegada de las imágenes, que dejó de usarse con la corrección de la cifra en pantalla; dos métodos sin uso; un parámetro que ya siempre valía lo mismo); corregidos tres comentarios que describían valores anteriores (el reloj de reproducción, la prioridad de PresentMon y el criterio de la memoria); un nombre de variable más claro.
+- **Documentación:** la guía explica la generación intermitente y que, con generación, no se calculan la capacidad ni las sugerencias, y responde cuánto consume FlatPace (con lo medido en las pruebas). Los README mencionan "GPU al máximo", la grabación de fotogramas y el bajo consumo, y el inglés vuelve a coincidir con el español (le faltaban dos líneas y tenía otro orden de secciones).
+
 ## 0.43.2
 - **Corregido (borde derecho de la gráfica):** el tramo más reciente se dibujaba antes de estar completo, con una clasificación provisional que se recalculaba en cada dibujo: podía aparecer como pico con los primeros fotogramas y volver a la línea al completarse (en modo en pantalla, los 3 últimos tramos, que esperan a sus vecinos para la media). Ahora solo se dibujan los tramos completos: la línea termina unos píxeles antes (como mucho ~75 ms de datos), pero nada de lo que se dibuja cambia después.
 - **Corregido (borde izquierdo):** el valor de los tramos que se salen de la línea se recalculaba mientras sus fotogramas más antiguos salían de la ventana de datos, así que un tirón podía encoger justo antes de desaparecer. Ahora el valor se fija al completarse el tramo, junto con su clasificación.

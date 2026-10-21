@@ -1,4 +1,4 @@
-# Documentación técnica de FlatPace 0.43.2
+# Documentación técnica de FlatPace 0.43.3
 
 Este documento explica cómo funciona FlatPace por dentro: arquitectura, algoritmos, fórmulas, formatos de datos y las fuentes en que se basan sus decisiones.
 
@@ -156,7 +156,7 @@ Windows: `cmake -B build && cmake --build build --config Release`. Dear ImGui (c
 
 ## 13. Pruebas automáticas
 
-`tests/test_core.cpp` prueba la lógica de `src/core` sin necesitar Windows (166 comprobaciones): percentiles y variación del ritmo, consistencia, detector de límites, recomendaciones con y sin VRR (techo, rango VRR del monitor y LFC, Fluidez), lectura del EDID, gráfica de ritmo (tolerancia, escala, tirones y estabilidad de los tramos al desplazarse) los modelos estadísticos (recuperación de la capacidad con datos censurados, detección de fases y su resistencia a picos aislados, memoria por juego y reglas de sugerencia) y el ciclo de decisión (verificación, regla de fallos, bajada tras un fallo, decisión al cerrar y simulaciones de varias partidas seguidas que comprueban que no hay espiral descendente). Cada prueba fija un comportamiento ya validado con partidas reales o en simulación.
+`tests/test_core.cpp` prueba la lógica de `src/core` sin necesitar Windows (166 comprobaciones): percentiles y variación del ritmo, consistencia, detector de límites, recomendaciones con y sin VRR (techo, rango VRR del monitor y LFC, Fluidez), lectura del EDID, gráfica de ritmo (tolerancia, escala, tirones, modo en pantalla y estabilidad de los tramos al desplazarse y en ambos bordes), los modelos estadísticos (recuperación de la capacidad con datos censurados, detección de fases y su resistencia a picos aislados, memoria por juego y reglas de sugerencia) y el ciclo de decisión (verificación, regla de fallos, bajada tras un fallo, decisión al cerrar y simulaciones de varias partidas seguidas que comprueban que no hay espiral descendente). Cada prueba fija un comportamiento ya validado con partidas reales o en simulación.
 
 - Linux/macOS: `sh tests/run_tests.sh`
 - Windows (MSVC): `tests\run_tests.bat`, o `ctest` tras compilar con CMake.

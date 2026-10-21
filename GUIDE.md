@@ -1,4 +1,4 @@
-# FlatPace 0.43.2 user guide
+# FlatPace 0.43.3 user guide
 
 This guide describes the current version. Changes between versions are listed in the [changelog](CHANGELOG.md) (in Spanish). The app has an English interface: switch it with **ES | EN** at the bottom of the sidebar.
 
@@ -77,7 +77,8 @@ The app **never changes** a manual limit: it only checks that it works (the over
 
 - The app separates real frames from generated ones. The limit is shown as *"122 on screen (61 real)"*.
 - Real frames never go below 30: below that, latency is poor.
-- If frame generation turns on or off (many games do this in menus), the app measures again.
+- If frame generation turns on or off (many games do this in menus), the app measures again. If the game turns it on and off by itself frequently (a dynamic or automatic mode), the app warns once on *Games* and stops logging each change: setting that mode in the game gives a steadier pace.
+- With frame generation, the graph shows the images **on screen** (section 9), and the app doesn't estimate the game's capacity or suggest raising the limit, because real frames change pace with frame generation.
 - The first time, it learns what the driver's limiter acts on in your PC (what you see on screen or the real frames).
 
 ## 9. In-game overlay
@@ -121,6 +122,8 @@ To find which limit gives the steadiest pace in a game, compare sessions of a fe
 **A game runs worse than before.** On *Games*, click *Undo* in its row and restart the game. Send the log if you'd like it investigated.
 
 **Can an anti-cheat ban me?** FlatPace never injects into games: it only changes the game's profile in the NVIDIA driver, just like the NVIDIA Control Panel.
+
+**Does it use a lot of resources?** It shouldn't be noticeable in your games. FlatPace and PresentMon run at low priority and in Windows 11 efficiency mode, so the game always comes first and, on CPUs with efficiency cores, FlatPace uses those. In testing on a laptop, the two together used about 10 % of one core, almost all of it on efficiency cores. Each session summary in the *Log* shows the real cost on your PC.
 
 **Why isn't the limit equal to my FPS?** The app picks the pace the game holds in its demanding moments, not in the quiet ones, so the pace stays constant.
 

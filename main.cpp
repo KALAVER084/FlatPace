@@ -124,7 +124,7 @@ static std::atomic<bool> g_quit{false};
 static std::atomic<int> g_lang{0};
 static const char* T(const char* es, const char* en) { return g_lang == 1 ? en : es; }
 
-static constexpr const char* kVersion = "0.43.2";
+static constexpr const char* kVersion = "0.43.3";
 
 // Carpeta donde esta este .exe.
 static std::wstring ExeDirectory() {
@@ -368,8 +368,9 @@ static bool HasSystemBattery() {
 // calcula justo despues de cada tanda de datos (cada ~1 s) salen mas lentos (Greylock: 1,6-2,1 veces
 // mas fotogramas lentos; en Space Marine 2, limitado por la CPU, la generacion de fotogramas se
 // saltaba imagenes: 44 % de generadas frente a 48 %). FlatPace baja su prioridad y pide a Windows 11
-// el modo de eficiencia (EcoQoS: nucleos de eficiencia y frecuencias bajas), salvo el hilo que lee
-// PresentMon, que no puede retrasarse; PresentMon se lanza con prioridad normal.
+// el modo de eficiencia (EcoQoS: nucleos de eficiencia y frecuencias bajas). Quedan sin modo de
+// eficiencia, pero con prioridad baja, el hilo que lee PresentMon y el que dibuja la ventana y el
+// overlay. PresentMon tambien funciona con prioridad baja y modo de eficiencia (desde la 0.42.1).
 // ---------------------------------------------------------------------------
 namespace eco {
 struct PowerThrottlingState {
@@ -395,16 +396,14 @@ static void LowerOtherProcess(HANDLE proc) {
   if (fn) fn(proc, 4 /*ProcessPowerThrottling*/, &st, sizeof(st));
 }
 
-// El hilo actual no se frena: sin modo de eficiencia y, si raise, con prioridad alta dentro de la
-// clase baja (equivale a la prioridad normal de los hilos del juego). El hilo que dibuja la ventana y
-// el overlay queda sin modo de eficiencia (para que el overlay no vaya a tirones) pero con prioridad
-// baja, para que el juego siga teniendo preferencia.
-static void ExemptCurrentThread(bool raise = true) {
+// El hilo actual queda sin modo de eficiencia, con la prioridad baja del proceso: el que lee
+// PresentMon (para no retrasarse) y el que dibuja la ventana y el overlay (para que no vaya a tirones).
+// El juego sigue teniendo preferencia sobre ambos.
+static void ExemptCurrentThread() {
   auto fn = reinterpret_cast<SetThreadInfoFn>(
       reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "SetThreadInformation")));
   PowerThrottlingState st{1, kExecutionSpeed, 0};
   if (fn) fn(GetCurrentThread(), 3 /*ThreadPowerThrottling*/, &st, sizeof(st));
-  if (raise) SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
 }
 
 // Proceso de PresentMon (para medir su coste) y tiempo de dibujo del overlay (suma y fotogramas).
@@ -492,7 +491,7 @@ class PresentMonReader {
     eco::presentMonProcess = pi.hProcess;
     running_ = true;
     thread_ = std::thread([this] {
-      eco::ExemptCurrentThread(false);  // sin modo de eficiencia, pero sin adelantar al juego
+      eco::ExemptCurrentThread();
       ReadLoop();
     });
     return true;
@@ -1347,7 +1346,6 @@ class NvDriver {
     return true;
   }
 
-  bool Available() const { return ok_; }
 
   // Deja en el perfil del juego exactamente los ajustes "desired". Guarda el valor
   // original de cada ajuste la primera vez que se toca, y devuelve a su estado
@@ -2011,7 +2009,7 @@ static void PrintSessionSummary(const Session& s, double hz) {
     msv.reserve(s.longReal.size());
     for (const auto& r : s.longReal) msv.push_back(r.second);
     const double capMs = ActiveCapMs(s);
-    double stableFps = 0.0;  // ritmo que el juego sostiene (criterio de Estabilidad: p99 x 1,05)
+    double stableFps = 0.0;  // ritmo que el juego sostiene (criterio de Estabilidad: 1,13 x 1000 / p99)
     bool plenty = false;     // casi todo en el limite: va sobrado
     CapacityEstimate ce;
     if (capMs > 0) ce = EstimateCapacity(msv, capMs);
@@ -2636,7 +2634,6 @@ struct Feed {
   // las duraciones de los fotogramas, anclada al reloj real. Los datos de PresentMon llegan por
   // tandas; con esta linea de tiempo la grafica puede desplazarse de forma continua.
   std::deque<std::pair<double, double>> real;
-  std::deque<double> presents;        // momentos de llegada de todo lo presentado
   double lastVt = 0.0;                // ultimo momento de la linea de tiempo continua
   double targetMs = 0.0;              // periodo objetivo de los fotogramas reales
   std::string limitLabel;             // "225 fps", "122 en pantalla"...
@@ -2670,7 +2667,6 @@ static Feed feed;
 static void Push(const FrameSample& s) {
   std::lock_guard<std::mutex> lock(feed.m);
   if (s.pid == 0 || s.pid != feed.pid) return;
-  feed.presents.push_back(s.t);
   if (s.presentMs > 0 && s.presentMs < 250.0) {
     feed.presentMs.push_back(s.presentMs);  // todas las imagenes presentadas (reales y generadas)
     while (feed.presentMs.size() > 8000) feed.presentMs.pop_front();
@@ -2703,7 +2699,6 @@ static void Push(const FrameSample& s) {
     feed.lastVt = vt;
     feed.real.push_back({vt, ms});
   }
-  while (feed.presents.size() > 8000) feed.presents.pop_front();
   while (feed.real.size() > 4000) feed.real.pop_front();
 }
 
@@ -2711,7 +2706,7 @@ static DWORD lastGamePid = 0;
 #include "src/core/pace_basics.h"
 
 // Reloj de reproduccion (con feed.m tomado): avanza a velocidad real hacia "dato mas reciente,
-// extrapolado al reloj actual, menos el bufer", con una correccion suave (entre 0,8x y 1,25x).
+// extrapolado al reloj actual, menos el bufer", con una correccion suave (entre 0,95x y 1,05x).
 // Asi la grafica se desplaza a velocidad constante aunque los datos lleguen por tandas.
 static double GraphPlaybackLocked(double now) {
   if (feed.real.empty()) return now;
@@ -2778,7 +2773,6 @@ static void SetGame(DWORD pid, double targetMs, const std::string& limitLabel, L
     feed.real.clear();
     feed.realOnly.clear();
     feed.presentMs.clear();
-    feed.presents.clear();
     feed.lastVt = 0.0;
     feed.playInit = false;
     feed.refAuto = 0.0;
@@ -2857,7 +2851,7 @@ class Window {
     std::vector<double> realMs;
     double display = now, refAuto = 0.0;
     std::vector<std::pair<double, double>> real;
-    size_t presents5 = 0;
+    size_t screenImages = 0;
     double presentsSpanMs = 0.0;
     {
       std::lock_guard<std::mutex> lock(feed.m);
@@ -2879,7 +2873,7 @@ class Window {
       double sumMs = 0.0;
       for (auto it = feed.presentMs.rbegin(); it != feed.presentMs.rend() && sumMs < 5000.0; ++it) {
         sumMs += *it;
-        presents5++;
+        screenImages++;
       }
       presentsSpanMs = sumMs;
     }
@@ -2906,7 +2900,7 @@ class Window {
     std::sort(sorted.begin(), sorted.end());
     double low = 1000.0 / PercentileSorted(sorted, 99);
     if (gameLow > 0) low = gameLow;  // con un limite activo, sin los retrasos del limitador
-    double screenFps = presentsSpanMs > 0 ? presents5 * 1000.0 / presentsSpanMs : 0.0;
+    double screenFps = presentsSpanMs > 0 ? screenImages * 1000.0 / presentsSpanMs : 0.0;
     bool fg2 = screenFps > fps * 1.4;
 
     double swing = RecentSwing(real);
@@ -2952,11 +2946,6 @@ class Window {
     const uint32_t pb = p & 0xFF, pg = (p >> 8) & 0xFF, pr = (p >> 16) & 0xFF, pa = p >> 24;
     p = ((b * a8 + pb * ia8) >> 8) | (((g * a8 + pg * ia8) >> 8) << 8) | (((r * a8 + pr * ia8) >> 8) << 16) |
         (((255 * a8 + pa * ia8) >> 8) << 24);
-  }
-
-  void Rect(int x0, int y0, int x1, int y1, uint8_t r, uint8_t g, uint8_t b, float a) {
-    for (int y = y0; y < y1; ++y)
-      for (int x = x0; x < x1; ++x) Blend(x, y, r, g, b, a);
   }
 
   // Rectangulo con esquinas redondeadas y bordes suavizados.
@@ -5720,7 +5709,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
 
   overlay::Window ov;
   ov.Create(gui::scale);
-  eco::ExemptCurrentThread(false);  // ventana y overlay: sin modo de eficiencia
+  eco::ExemptCurrentThread();  // ventana y overlay
   std::thread engine(RunEngine, presentMonPath);
 
   bool running = true;

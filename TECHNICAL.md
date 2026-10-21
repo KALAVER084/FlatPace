@@ -1,4 +1,4 @@
-# FlatPace 0.43.2 technical documentation
+# FlatPace 0.43.3 technical documentation
 
 This document explains how FlatPace works inside: architecture, algorithms, formulas, data formats and the sources behind its decisions. Some names (log lines, data files and keys) are in Spanish, as they appear in the program.
 
@@ -156,7 +156,7 @@ Windows: `cmake -B build && cmake --build build --config Release`. Dear ImGui (w
 
 ## 13. Automated tests
 
-`tests/test_core.cpp` tests the logic in `src/core` without needing Windows (166 checks): percentiles and pace swing, consistency, the limit detector, recommendations with and without VRR (ceiling, the monitor's VRR range and LFC, Smoothness), EDID parsing, the pacing graph (tolerance, scale, stutters and stability of stretches while scrolling) the statistical models (capacity recovery from censored data, phase detection and its resistance to isolated spikes, per-game memory and suggestion rules) and the decision cycle (verification, failure rule, lowering after a failure, the decision on close and multi-session simulations that check there is no downward spiral). Each test pins a behavior already validated with real sessions or in simulation.
+`tests/test_core.cpp` tests the logic in `src/core` without needing Windows (166 checks): percentiles and pace swing, consistency, the limit detector, recommendations with and without VRR (ceiling, the monitor's VRR range and LFC, Smoothness), EDID parsing, the pacing graph (tolerance, scale, stutters, on-screen mode and stability of stretches while scrolling and at both edges), the statistical models (capacity recovery from censored data, phase detection and its resistance to isolated spikes, per-game memory and suggestion rules) and the decision cycle (verification, failure rule, lowering after a failure, the decision on close and multi-session simulations that check there is no downward spiral). Each test pins a behavior already validated with real sessions or in simulation.
 
 - Linux/macOS: `sh tests/run_tests.sh`
 - Windows (MSVC): `tests\run_tests.bat`, or `ctest` after building with CMake.

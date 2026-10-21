@@ -1,4 +1,4 @@
-# Guía de uso de FlatPace 0.43.2
+# Guía de uso de FlatPace 0.43.3
 
 Esta guía describe la versión actual. Los cambios entre versiones están en el [historial](CHANGELOG.md).
 
@@ -77,7 +77,8 @@ La app **no cambiará nunca** un límite manual: solo comprobará que funciona (
 
 - La app separa los fotogramas reales de los generados. El límite se expresa como *"122 en pantalla (61 reales)"*.
 - Los fotogramas reales nunca bajan de 30: por debajo, la latencia es mala.
-- Si la generación se activa o desactiva (muchos juegos lo hacen en menús), la app vuelve a medir.
+- Si la generación se activa o desactiva (muchos juegos lo hacen en menús), la app vuelve a medir. Si el juego la activa y desactiva solo con frecuencia (un modo dinámico o automático), la app lo avisa una vez en *Juegos* y deja de anotar cada cambio: fijar ese modo en el juego da un ritmo más constante.
+- Con generación, la gráfica muestra las imágenes **en pantalla** (sección 9), y la app no calcula la capacidad del juego ni sugiere subir el límite, porque los fotogramas reales cambian de ritmo con la generación.
 - La primera vez, aprende sobre qué actúa el limitador del driver en tu equipo (lo que se ve en pantalla o los fotogramas reales).
 
 ## 9. Overlay en el juego
@@ -121,6 +122,8 @@ Para saber qué límite da el ritmo más regular en un juego, compara partidas d
 **Un juego va peor que antes.** En *Juegos*, pulsa *Deshacer* en su fila y reinicia el juego. Envía el registro si quieres que se investigue.
 
 **¿Puede banearme un anticheat?** FlatPace no entra en los juegos: solo cambia el perfil del juego en el driver de NVIDIA, igual que el Panel de control de NVIDIA.
+
+**¿Consume muchos recursos?** No debería notarse en tus juegos. FlatPace y PresentMon funcionan con prioridad baja y en el modo de eficiencia de Windows 11, así que el juego siempre tiene preferencia y, en procesadores con núcleos de eficiencia, FlatPace usa esos. En las pruebas con un portátil, entre los dos usaron alrededor de un 10 % de un núcleo, casi todo en los de eficiencia. El resumen de cada partida en el *Registro* indica el coste real en tu equipo.
 
 **¿Por qué el límite no es igual a mis FPS?** La app elige el ritmo que el juego sostiene en sus momentos exigentes, no en los tranquilos, para que el ritmo sea constante.
 
