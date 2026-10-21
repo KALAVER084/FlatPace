@@ -2,6 +2,11 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). La versión más reciente va primero.
 
+## 0.50.3
+- **Nuevo: el error de animación se compara con la partida sin límite**, igual que la variación del ritmo: el resumen muestra *"X % de fotogramas con más de 1 ms (sin límite: Y %)"*. Es una segunda medida, independiente de la gráfica, de que el límite mejora el movimiento (en Greylock, del 39 % sin límite al 7 % con él). La referencia se guarda de las partidas sin ningún límite y sin generación de fotogramas (`movimiento-antes|juego.exe`).
+- **Nuevo: movimiento con ritmo plano** en el resumen: el porcentaje de fotogramas de ritmo perfectamente plano cuyo movimiento está descompasado de forma perceptible (error de animación mayor que el 13 % del fotograma). Es algo que la gráfica no puede mostrar. En las grabaciones: Greylock a 130 y Megabonk a 225, ~2 %; Greylock sin límite, 16 %; **Space Marine 2 y Control Resonant con generación de fotogramas, 17-18 %**, aunque su gráfica sea plana. Un umbral del 5 % se descartó: a 225 FPS marcaba errores de 0,2 ms, imperceptibles.
+- **Medido: el modo de baja latencia no cambia nada en Greylock**, porque sus zonas pesadas las limita la CPU (8,8 ms por fotograma frente a 4,7 de la GPU) y la cola de render no llega a llenarse (sin el ajuste, la espera sube solo a ~1,9 ms). Se mantiene activado: su efecto se espera en los juegos limitados por la GPU.
+
 ## 0.50.2
 - **Corregido: `baja-latencia=no` y `rendimiento-maximo=no` no desactivaban nada en los límites existentes.** Solo impedían añadir esos ajustes a los límites nuevos; los que ya los tenían en el perfil del driver los conservaban. Ahora, al arrancar, la app los devuelve a su valor original (como *Deshacer*) en los límites que los tenían, y lo anota en el registro. Con el VSync por intervalos, la cola de un fotograma forma parte del método y se mantiene.
 - **Primer dato real de la espera en la cola de la GPU** (Greylock a 130 FPS, 3 minutos sin zonas pesadas): mientras el límite se sostiene, la cola está vacía (mediana de 0,18 ms), como predecía la simulación.

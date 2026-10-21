@@ -127,7 +127,7 @@ static std::atomic<bool> g_quit{false};
 static std::atomic<int> g_lang{0};
 static const char* T(const char* es, const char* en) { return g_lang == 1 ? en : es; }
 
-static constexpr const char* kVersion = "0.50.2";
+static constexpr const char* kVersion = "0.50.3";
 
 // Carpeta donde esta este .exe.
 static std::wstring ExeDirectory() {
@@ -1691,6 +1691,11 @@ struct Session {
   std::vector<float> pcLatLimited, pcLatOther;
   std::vector<float> gpuQueueLimited;  // espera en la cola de la GPU con el limite funcionando (ms)
   double baseLat = -1.0;  // latencia del PC de este juego sin limite (guardada)
+  // Error de animacion en fotogramas de ritmo plano (el fotograma dura lo mismo que el anterior,
+  // +-0,3 ms): movimiento descompasado que la grafica no muestra. Para investigarlo por juego.
+  double aePrevReal = -1.0;
+  long flatN = 0, flatOverRel = 0;
+  double baseMotion = -1.0;  // % de fotogramas con mas de 1 ms de error, sin limite (guardado)
   bool climbHandled = false;  // la subida automatica se ocupo de este limite al cerrar (sin sugerencia)
   bool fluid = true;          // prioridad de este juego: la global, o Estabilidad si la app la eligio
   bool prioFixed = false;     // prioridad elegida por el usuario para este juego (la app no la cambia)
@@ -1954,11 +1959,28 @@ static void PrintSessionSummary(const Session& s, double hz) {
     std::sort(d.begin(), d.end());
     WriteKv(L"equipo.txt", "latencia-antes|" + s.exe, Fmt("%.1f", PercentileSorted(d, 50)));
   }
-  if (s.aeN > 100)
-    Log("\n  Error de animacion: media %.2f ms | %.1f %% de fotogramas con mas de 1 ms | maximo %.1f ms",
-        s.aeSum / s.aeN, 100.0 * s.aeOver1 / s.aeN, s.aeMax);
-  else
+  if (s.aeN > 100) {
+    const double over = 100.0 * s.aeOver1 / s.aeN;
+    Log("\n  Error de animacion: media %.2f ms | %.1f %% de fotogramas con mas de 1 ms", s.aeSum / s.aeN, over);
+    // Comparacion con la partida sin limite (como la variacion): el limite mejora el movimiento?
+    const bool noLimit = !s.appliedAtStart && s.expectedFps <= 0;
+    if (noLimit && !FrameGenInvolved(s) && !s.exe.empty() && s.gameSecs >= 60.0) {
+      WriteKv(L"equipo.txt", "movimiento-antes|" + s.exe, Fmt("%.1f", over));
+      Log(" (guardado como referencia sin limite)");
+    } else if (!noLimit && s.baseMotion >= 0) {
+      Log(" (sin limite: %.1f %%)", s.baseMotion);
+    }
+    Log(" | maximo %.1f ms", s.aeMax);
+    // Movimiento descompasado aunque el ritmo sea plano (la grafica no lo muestra): error de animacion
+    // mayor que el 13 % del fotograma. En las grabaciones: Greylock a 130 y Megabonk a 225, ~2 %;
+    // Greylock sin limite, 16 %; Space Marine 2 y Control Resonant con generacion de fotogramas, 17-18 %.
+    if (s.flatN > 1000)
+      Log("\n  Movimiento con ritmo plano: %.1f %% de fotogramas descompasados de forma perceptible"
+          " (error de animacion mayor que el 13 %% del fotograma)",
+          100.0 * s.flatOverRel / s.flatN);
+  } else {
     Log("\n  Error de animacion: no disponible para este juego");
+  }
   Log("\n  Pausas largas ignoradas: %d\n", s.pauseTotal);
   if (s.engTicks > 0) {
     const double wall = std::max(1.0, NowSec() - s.start);
@@ -2250,6 +2272,13 @@ static void ProcessSession(Session& ss, std::vector<FrameSample>& fresh, double 
       auto& v = ss.verified && ss.expectedFps > 0 ? ss.pcLatLimited : ss.pcLatOther;
       if (v.size() < 400000) v.push_back(static_cast<float>(s.pcLatencyMs));
     }
+    if (now >= ss.phaseStart && !std::isnan(s.animErrMs) && !s.generated && s.realMs > 0 &&
+        s.realMs <= cfg::kSpikeMs && ss.aePrevReal > 0 && std::fabs(s.realMs - ss.aePrevReal) < 0.3) {
+      const double a = std::fabs(s.animErrMs);
+      ++ss.flatN;
+      if (a > cfg::kJnd * s.realMs) ++ss.flatOverRel;  // descompasado de forma perceptible
+    }
+    if (!s.generated && s.realMs > 0) ss.aePrevReal = s.realMs;
     if (now >= ss.phaseStart && s.presentMs > 0 && s.presentMs <= cfg::kSpikeMs) {
       if (ss.sPrev > 0) {
         double d = std::fabs(s.presentMs - ss.sPrev);
@@ -4819,6 +4848,8 @@ static void RunEngine(std::wstring presentMonPath) {
         {
           std::string b = ReadKv(L"equipo.txt", "ritmo-antes2|" + foundExe);
           if (!b.empty()) session.baseSwing = std::atof(b.c_str());
+          std::string bm = ReadKv(L"equipo.txt", "movimiento-antes|" + foundExe);
+          if (!bm.empty()) session.baseMotion = std::atof(bm.c_str());
           std::string bl = ReadKv(L"equipo.txt", "latencia-antes|" + foundExe);
           if (!bl.empty()) session.baseLat = std::atof(bl.c_str());
           {

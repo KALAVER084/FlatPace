@@ -1,4 +1,4 @@
-# FlatPace 0.50.2 technical documentation
+# FlatPace 0.50.3 technical documentation
 
 This document explains how FlatPace works inside: architecture, algorithms, formulas, data formats and the sources behind its decisions. Some names (log lines, data files and keys) are in Spanish, as they appear in the program.
 
