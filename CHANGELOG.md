@@ -2,6 +2,11 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). La versión más reciente va primero.
 
+## 0.42.1
+Con las mediciones de la 0.42 en Space Marine 2: el proceso de FlatPace bajó del 15,9 % al 8,5 % de un núcleo y el overlay de 3,04 a 1,43 ms por dibujo; al principio de cada tanda de datos seguía habiendo 1,5 veces más imágenes lentas que en el resto (2,0 en la 0.40, 1,7 en la 0.41.1).
+- **Cambiado:** PresentMon se lanza **sin seguimiento de entrada** (`--no_track_input`): FlatPace no usa esos datos, y un ratón de juego genera cientos o miles de eventos por segundo que PresentMon tenía que procesar.
+- **Cambiado:** PresentMon también funciona con **prioridad baja y modo de eficiencia**. Windows le entrega los eventos en ráfagas cada ~1 s, y procesarlas con prioridad normal competía con el juego justo en ese instante. Mientras espera, los eventos quedan en los búferes de Windows; si se perdieran, PresentMon lo avisaría en el registro.
+
 ## 0.42
 Con las mediciones de la 0.41.1 en Space Marine 2: el overlay era lo que más gastaba (3 ms por dibujo, ~13 % de un núcleo); PresentMon, solo un 1,2 %; el motor, ~2,5 % de CPU real.
 - **Mejorado (overlay, unas 5 veces más rápido sin cambiar lo que se ve):** los fondos fijos (tarjeta y área de la gráfica) se dibujan una sola vez y se copian en cada fotograma; los textos se dibujan con Windows solo la primera vez y después se reutilizan; la mezcla de píxeles usa enteros en lugar de coma flotante (diferencia de color de como mucho 2 niveles sobre 255); y las esquinas redondeadas solo calculan distancias en los bordes. En una réplica del dibujo, de 5,4 a 1,1 ms por fotograma, sin contar el ahorro de los textos.

@@ -124,7 +124,7 @@ static std::atomic<bool> g_quit{false};
 static std::atomic<int> g_lang{0};
 static const char* T(const char* es, const char* en) { return g_lang == 1 ? en : es; }
 
-static constexpr const char* kVersion = "0.42";
+static constexpr const char* kVersion = "0.42.1";
 
 // Carpeta donde esta este .exe.
 static std::wstring ExeDirectory() {
@@ -387,6 +387,14 @@ static void LowerProcess() {
   if (fn) fn(GetCurrentProcess(), 4 /*ProcessPowerThrottling*/, &st, sizeof(st));
 }
 
+// Otro proceso (PresentMon): modo de eficiencia (la prioridad baja se da al crearlo).
+static void LowerOtherProcess(HANDLE proc) {
+  auto fn = reinterpret_cast<SetProcInfoFn>(
+      reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "SetProcessInformation")));
+  PowerThrottlingState st{1, kExecutionSpeed, kExecutionSpeed};
+  if (fn) fn(proc, 4 /*ProcessPowerThrottling*/, &st, sizeof(st));
+}
+
 // El hilo actual no se frena: sin modo de eficiencia y, si raise, con prioridad alta dentro de la
 // clase baja (equivale a la prioridad normal de los hilos del juego). El hilo que dibuja la ventana y
 // el overlay queda sin modo de eficiencia (para que el overlay no vaya a tirones) pero con prioridad
@@ -453,7 +461,10 @@ class PresentMonReader {
     std::wstring cmd = L"\"" + exe + L"\"";
     if (!processName.empty()) cmd += L" --process_name \"" + processName + L"\"";
     cmd += L" --output_stdout --stop_existing_session"
-           L" --session_name FlatPace --track_frame_type --track_pc_latency";
+           L" --session_name FlatPace --track_frame_type --track_pc_latency"
+           // Sin seguimiento de entrada (raton y teclado): FlatPace no usa esos datos, y un raton de
+           // juego genera cientos o miles de eventos por segundo que PresentMon tendria que procesar.
+           L" --no_track_input";
 
     STARTUPINFOW si{};
     si.cb = sizeof(si);
@@ -462,7 +473,7 @@ class PresentMonReader {
     si.hStdError = writeEnd;
     PROCESS_INFORMATION pi{};
     BOOL ok = CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE,
-                             CREATE_NO_WINDOW | CREATE_SUSPENDED | NORMAL_PRIORITY_CLASS, nullptr, nullptr, &si, &pi);
+                             CREATE_NO_WINDOW | CREATE_SUSPENDED | BELOW_NORMAL_PRIORITY_CLASS, nullptr, nullptr, &si, &pi);
     CloseHandle(writeEnd);
     if (!ok) {
       CloseHandle(read_);
@@ -470,6 +481,11 @@ class PresentMonReader {
       return false;
     }
     AssignProcessToJobObject(job_, pi.hProcess);
+    // PresentMon tambien con prioridad baja y modo de eficiencia: Windows le entrega los eventos en
+    // rafagas cada ~1 s, y procesarlas con prioridad normal competia con el juego justo en ese
+    // instante. Mientras espera, los eventos quedan en los bufer de Windows (si se perdieran,
+    // PresentMon lo avisaria y el aviso aparece en el registro).
+    eco::LowerOtherProcess(pi.hProcess);
     ResumeThread(pi.hThread);
     CloseHandle(pi.hThread);
     process_ = pi.hProcess;
