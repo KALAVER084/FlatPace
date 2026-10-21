@@ -4,13 +4,13 @@
 
 **FlatPace measures your games and applies the frame-rate limit that makes them run as steadily as possible.** It does for Windows what the Steam Deck does in its own system: a steady pace feels smoother than higher but uneven FPS.
 
-Current version: **0.49.1** · Windows 10 (1803 or later) and Windows 11. [User guide](GUIDE.md) · [Technical documentation](TECHNICAL.md) · [License](LICENSE) · [Español](README.md). The changelog ([CHANGELOG.md](CHANGELOG.md)) is in Spanish; the app has an English interface (ES | EN selector).
+Current version: **0.50** · Windows 10 (1803 or later) and Windows 11. [User guide](GUIDE.md) · [Technical documentation](TECHNICAL.md) · [License](LICENSE) · [Español](README.md). The changelog ([CHANGELOG.md](CHANGELOG.md)) is in Spanish; the app has an English interface (ES | EN selector).
 
 ## What it does
 
 - **Measures each game** frame by frame while you play (with Intel's PresentMon), telling real frames apart from DLSS Frame Generation ones.
 - **Decides the limit using the whole session** when you close the game, based on your priority (smoothness or stability), your display, and whether G-SYNC/FreeSync is active.
-- **Applies it in the NVIDIA driver** (the game's profile, without touching the game), **checks that it works** next session and keeps it. Along with the limit it turns on **"GPU at max"**, which stops the GPU from lowering its clocks with the limit in place and greatly improves the 1 % low.
+- **Applies it in the NVIDIA driver** (the game's profile, without touching the game), **checks that it works** next session and keeps it. Along with the limit it turns on **"GPU at max"**, which stops the GPU from lowering its clocks with the limit in place and greatly improves the 1 % low, and **low latency mode**, which keeps frames from piling up when the game can't reach the limit.
 - **Adjusts it on its own:** if the game stops holding it for a sustained period, it lowers it (isolated dips don't count); if it has headroom, it raises it step by step to what the game really holds.
 - **Fully reversible:** each game can be undone on its own and goes back exactly to how it was.
 - **Diagnostics:** stutters, CPU/GPU bottleneck, frame generation, presentation mode, VRR state, an in-game overlay with the pacing graph, and optional per-frame recording to analyze sessions.

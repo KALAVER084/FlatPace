@@ -1,4 +1,4 @@
-# Documentación técnica de FlatPace 0.49.1
+# Documentación técnica de FlatPace 0.50
 
 Este documento explica cómo funciona FlatPace por dentro: arquitectura, algoritmos, fórmulas, formatos de datos y las fuentes en que se basan sus decisiones.
 
@@ -82,6 +82,7 @@ Si el monitor ofrece otras frecuencias en la resolución actual y alguna permite
   - `VSYNCMODE` (0x00A879CF): `FORCEON` con VRR; intervalos 1/2, 1/3 o 1/4 del refresco sin VRR cuando la presentación es directa y el equipo lo admite.
   - `PRERENDERLIMIT` (0x007BA09E) = 1, junto con el VSync por intervalos.
   - `PREFERRED_PSTATE` (0x1057EB71) = 1, *Preferir rendimiento máximo*, con cada límite: evita que el driver baje las frecuencias de la GPU hasta ir justa (en Greylock con 90 FPS, el trabajo por fotograma casi se duplicaba con el mismo 85 % de uso, y las escenas pesadas se pasaban del límite). Al abrir la app se añade a los cambios que no lo tenían. Desactivable con `rendimiento-maximo=no`.
+  - `PRERENDERLIMIT` (0x007BA09E) = 1, *Modo de baja latencia: Activado* (cola de render de un fotograma), con cada límite desde la 0.50 (antes solo con el VSync por intervalos): cuando el juego no llega al límite y la GPU se satura, los fotogramas no se acumulan en la cola. En una simulación con los tiempos de Greylock, la latencia del PC en esas zonas bajaba de 40 a 20 ms, sin coste en FPS; con el límite sostenido no cambia nada. En los juegos con Reflex, Reflex tiene prioridad. Se añade al arrancar a los límites que no lo tenían; desactivable con `baja-latencia=no`.
 - Antes de cambiar un ajuste se guarda su valor original; **deshacer** lo restaura o borra el perfil propio.
 - **Aprendizajes por equipo:** si el driver impone su VSync (comprobado al reabrir el juego) y si, con generación de fotogramas, el limitador actúa sobre lo que se ve en pantalla o sobre los fotogramas reales (comprobado con la generación estable al menos 8 s).
 
@@ -105,7 +106,7 @@ Si el monitor ofrece otras frecuencias en la resolución actual y alguna permite
 **Formato de `cambios-aplicados.txt` (v2), separado por tabuladores:**
 `v2  exe  creado(0/1)  método(0 límite / 1 VSync)  divisor  fps  n  [id_hex  tenía(0/1)  original_hex]×n` seguido de campos opcionales: `fg k frl`, `hz frecuencia`, `ok 1` (aceptado), `base fps_reales`, `vrr 1`, `manual 1` (puesto por el usuario: la app no lo cambia).
 
-**Formato de las grabaciones (CSV):** líneas de cabecera que empiezan por `#` (versión, juego, frecuencia real, rango VRR, prioridad y límite al empezar) y una fila por fotograma del juego con: `t_llegada_s` (cuándo llegó el dato, por tandas), `t_acumulado_s` (suma de presentaciones), `presentacion_ms`, `real_ms` (con marcadores de Reflex, intervalo de simulación), `real_presentacion_ms`, `generado` (0/1), `cpu_ms`, `gpu_ms`, `pantalla_ms`, `error_animacion_ms`, `vrr` y `limite_confirmado` (estado en ese momento) y, desde la 0.47, `latencia_pc_ms`: la latencia del PC según PresentMon (`MsPCLatency`, desde que el juego lee la entrada hasta que la imagen sale hacia la pantalla), solo en juegos con marcadores de Reflex/PC Latency. El resumen de cada partida da su mediana y su 1 % peor, por separado con el límite funcionando y sin él, para comparar el efecto del límite sobre la latencia (el ratón y el monitor añaden lo mismo en ambos casos). Los valores no disponibles quedan vacíos.
+**Formato de las grabaciones (CSV):** líneas de cabecera que empiezan por `#` (versión, juego, frecuencia real, rango VRR, prioridad y límite al empezar) y una fila por fotograma del juego con: `t_llegada_s` (cuándo llegó el dato, por tandas), `t_acumulado_s` (suma de presentaciones), `presentacion_ms`, `real_ms` (con marcadores de Reflex, intervalo de simulación), `real_presentacion_ms`, `generado` (0/1), `cpu_ms`, `gpu_ms`, `pantalla_ms`, `error_animacion_ms`, `vrr` y `limite_confirmado` (estado en ese momento) y, desde la 0.47, `latencia_pc_ms` y, desde la 0.50, `espera_gpu_ms` (`MsGPULatency`: desde que el juego entrega el fotograma hasta que la GPU lo empieza; crece si la cola de render se llena, y el resumen da su mediana y su 1 % peor con el límite). `latencia_pc_ms` es la latencia del PC según PresentMon (`MsPCLatency`, desde que el juego lee la entrada hasta que la imagen sale hacia la pantalla), solo en juegos con marcadores de Reflex/PC Latency. El resumen de cada partida da su mediana y su 1 % peor, por separado con el límite funcionando y sin él, para comparar el efecto del límite sobre la latencia (el ratón y el monitor añaden lo mismo en ambos casos). Los valores no disponibles quedan vacíos.
 
 ## 8. Ajustes avanzados
 
@@ -113,6 +114,7 @@ Sin interfaz, en `%LOCALAPPDATA%\FlatPace\equipo.txt` (una línea `clave=valor`)
 
 | Clave | Efecto |
 |---|---|
+| `baja-latencia=no` | No acompañar los límites del *Modo de baja latencia* (cola de render de un fotograma). |
 | `rendimiento-maximo=no` | No acompañar los límites de *Preferir rendimiento máximo* (los cambios ya aplicados lo pierden al reaplicarse o al deshacerlos). |
 | `prioridad-auto=no` | No pasar a *Estabilidad* los juegos inestables (cada juego usa siempre la prioridad global). |
 | `subir-solo=no` | Modo *Solo sugerir* (se elige también en *Juegos* → *Ajuste de límites*): las subidas se sugieren con un botón en lugar de aplicarse solas. |

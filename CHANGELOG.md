@@ -2,6 +2,10 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). La versión más reciente va primero.
 
+## 0.50
+- **Nuevo: modo de baja latencia con cada límite** (cola de render de un fotograma, *"Modo de baja latencia: Activado"* del panel de NVIDIA). Una simulación de la cadena de latencia con los tiempos de Greylock mostró que, mientras el juego sostiene el límite, FlatPace ya reduce mucho la latencia del PC (de 24 a 13,7 ms, porque vacía la cola de render), pero en las zonas donde el juego no llega al límite la GPU se satura, la cola se llena y la latencia se triplica (40 ms). Con la cola de un fotograma baja a 20 ms en esas zonas, sin coste en FPS. Hasta ahora FlatPace solo lo aplicaba con el VSync por intervalos. Se añade al arrancar a los límites existentes, se deshace con *Deshacer*, aparece en *Juegos* como *"· baja latencia"* y se desactiva con `baja-latencia=no`. En los juegos con Reflex, Reflex tiene prioridad (su limitador, dentro del juego, sigue siendo el de menor latencia).
+- **Nuevo: espera en la cola de la GPU** (`MsGPULatency` de PresentMon) en la grabación (`espera_gpu_ms`) y en el resumen de cada partida: mide cuánto espera cada fotograma antes de que la GPU lo empiece, también en juegos sin Reflex, para comprobar con datos reales el efecto del modo de baja latencia.
+
 ## 0.49.1
 - **Nuevo: prioridad por juego elegible en su fila de *Juegos*.** Un botón muestra la prioridad que se aplica (*"Auto · Fluidez"*, *"Auto · Estabilidad"*, *"Fluidez"* o *"Estabilidad"*) y despliega tres opciones: **Automática** (la global como punto de partida; la app puede pasar el juego a *Estabilidad* si resulta inestable), **Siempre Fluidez** y **Siempre Estabilidad** (la app no las cambia). Se aplica desde la siguiente partida y no recalcula el límite actual; *Deshacer* sigue sirviendo para empezar de cero (y conserva la elección fija). Los límites manuales no lo muestran.
 - **Corregido:** la descripción del límite de cada juego no se ajustaba al ancho disponible y, con varios botones en la fila, pasaba por debajo de ellos. Comprobado dibujando las filas reales con Dear ImGui en ambos idiomas.

@@ -1,4 +1,4 @@
-# FlatPace 0.49.1 technical documentation
+# FlatPace 0.50 technical documentation
 
 This document explains how FlatPace works inside: architecture, algorithms, formulas, data formats and the sources behind its decisions. Some names (log lines, data files and keys) are in Spanish, as they appear in the program.
 
@@ -82,6 +82,7 @@ If the monitor offers other refresh rates at the current resolution and one of t
   - `VSYNCMODE` (0x00A879CF): `FORCEON` with VRR; 1/2, 1/3 or 1/4 refresh intervals without VRR when presentation is direct and the system supports it.
   - `PRERENDERLIMIT` (0x007BA09E) = 1, together with interval VSync.
   - `PREFERRED_PSTATE` (0x1057EB71) = 1, *Prefer maximum performance*, with every limit: it keeps the driver from lowering the GPU clocks until it barely keeps up (in Greylock at 90 FPS, work per frame almost doubled at the same 85 % utilization, and heavy scenes went over the limit). When the app opens it's added to changes that lacked it. Can be disabled with `rendimiento-maximo=no`.
+  - `PRERENDERLIMIT` (0x007BA09E) = 1, *Low Latency Mode: On* (a one-frame render queue), with every limit since 0.50 (before, only with interval VSync): when the game can't reach the limit and the GPU saturates, frames don't pile up in the queue. In a simulation with Greylock's timings, PC latency in those areas dropped from 40 to 20 ms with no FPS cost; with the limit held nothing changes. In games with Reflex, Reflex takes precedence. It's added at startup to limits that lacked it; it can be disabled with `baja-latencia=no`.
 - Before changing a setting its original value is saved; **undo** restores it or deletes the app's own profile.
 - **Per-system learning:** whether the driver enforces its VSync (checked when the game reopens) and whether, with frame generation, the limiter acts on what's shown on screen or on the real frames (checked with frame generation stable for at least 8 s).
 
@@ -105,7 +106,7 @@ If the monitor offers other refresh rates at the current resolution and one of t
 **`cambios-aplicados.txt` format (v2), tab-separated:**
 `v2  exe  created(0/1)  method(0 limit / 1 VSync)  divisor  fps  n  [id_hex  had(0/1)  original_hex]×n` followed by optional fields: `fg k frl`, `hz rate`, `ok 1` (accepted), `base real_fps`, `vrr 1`, `manual 1` (set by the user: the app doesn't change it).
 
-**Recording format (CSV):** header lines starting with `#` (version, game, real refresh rate, VRR range, priority and limit at start) and one row per game frame with: `t_llegada_s` (when the data arrived, in batches), `t_acumulado_s` (sum of presents), `presentacion_ms`, `real_ms` (with Reflex markers, the simulation interval), `real_presentacion_ms`, `generado` (0/1), `cpu_ms`, `gpu_ms`, `pantalla_ms`, `error_animacion_ms`, `vrr` and `limite_confirmado` (state at that moment) and, since 0.47, `latencia_pc_ms`: PC latency according to PresentMon (`MsPCLatency`, from when the game reads input until the image is sent to the display), only in games with Reflex/PC Latency markers. Each session summary gives its median and worst 1 %, separately with the limit working and without it, to compare the limit's effect on latency (the mouse and the monitor add the same in both cases). Unavailable values are left empty.
+**Recording format (CSV):** header lines starting with `#` (version, game, real refresh rate, VRR range, priority and limit at start) and one row per game frame with: `t_llegada_s` (when the data arrived, in batches), `t_acumulado_s` (sum of presents), `presentacion_ms`, `real_ms` (with Reflex markers, the simulation interval), `real_presentacion_ms`, `generado` (0/1), `cpu_ms`, `gpu_ms`, `pantalla_ms`, `error_animacion_ms`, `vrr` and `limite_confirmado` (state at that moment) and, since 0.47, `latencia_pc_ms` and, since 0.50, `espera_gpu_ms` (`MsGPULatency`: from when the game hands over the frame until the GPU starts it; it grows if the render queue fills up, and the summary gives its median and worst 1 % with the limit). `latencia_pc_ms` is PC latency according to PresentMon (`MsPCLatency`, from when the game reads input until the image is sent to the display), only in games with Reflex/PC Latency markers. Each session summary gives its median and worst 1 %, separately with the limit working and without it, to compare the limit's effect on latency (the mouse and the monitor add the same in both cases). Unavailable values are left empty.
 
 ## 8. Advanced settings
 
@@ -113,6 +114,7 @@ No interface; in `%LOCALAPPDATA%\FlatPace\equipo.txt` (one `key=value` line), wi
 
 | Key | Effect |
 |---|---|
+| `baja-latencia=no` | Don't pair limits with *Low Latency Mode* (a one-frame render queue). |
 | `rendimiento-maximo=no` | Don't pair limits with *Prefer maximum performance* (changes already applied lose it when reapplied or undone). |
 | `prioridad-auto=no` | Don't move unstable games to *Stability* (every game always uses the global priority). |
 | `subir-solo=no` | *Suggest only* mode (also chosen in *Games* → *Limit adjustment*): raises are suggested with a button instead of applied automatically. |

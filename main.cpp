@@ -127,7 +127,7 @@ static std::atomic<bool> g_quit{false};
 static std::atomic<int> g_lang{0};
 static const char* T(const char* es, const char* en) { return g_lang == 1 ? en : es; }
 
-static constexpr const char* kVersion = "0.49.1";
+static constexpr const char* kVersion = "0.50";
 
 // Carpeta donde esta este .exe.
 static std::wstring ExeDirectory() {
@@ -599,6 +599,7 @@ class PresentMonReader {
         colDisplay_ = FindColumn(cols, {"msbetweendisplaychange", "displayedtime"});
         colAnim_ = FindColumn(cols, {"msanimationerror", "animationerror"});
         colPcLat_ = FindColumn(cols, {"mspclatency", "pclatency"});
+        colGpuLat_ = FindColumn(cols, {"msgpulatency", "gpulatency"});
         headerParsed_ = true;
         auto name = [&](int c) { return c >= 0 ? Trim(cols[c]) : std::string("no disponible"); };
         Message("Columnas de PresentMon: fotograma=" +
@@ -625,6 +626,7 @@ class PresentMonReader {
     if (HasCol(colDisplay_, cols) && ParseNumber(cols[colDisplay_], v) && v > 0) s.displayMs = v;
     if (HasCol(colAnim_, cols) && ParseNumber(cols[colAnim_], v)) s.animErrMs = v;
     if (HasCol(colPcLat_, cols) && ParseNumber(cols[colPcLat_], v) && v > 0) s.pcLatencyMs = v;
+    if (HasCol(colGpuLat_, cols) && ParseNumber(cols[colGpuLat_], v) && v >= 0) s.gpuQueueMs = v;
     if (HasCol(colPid_, cols) && ParseNumber(cols[colPid_], v)) s.pid = static_cast<DWORD>(v);
     s.swapchain = std::to_string(s.pid) + ":" + (HasCol(colSwap_, cols) ? Trim(cols[colSwap_]) : "");
     if (HasCol(colType_, cols)) {
@@ -687,7 +689,7 @@ class PresentMonReader {
 
  private:
   int colFrame_ = -1, colCpu_ = -1, colGpu_ = -1, colSwap_ = -1, colType_ = -1, colDisplay_ = -1, colAnim_ = -1;
-  int colPcLat_ = -1;
+  int colPcLat_ = -1, colGpuLat_ = -1;
   int colApp_ = -1, colPid_ = -1, colSim_ = -1, colMode_ = -1;
   static constexpr int kSimTrustFrames = 60;
   std::map<DWORD, int> simSeen_;
@@ -748,6 +750,12 @@ static std::atomic<bool> g_useVrr{true};
 // Con cada limite, pedir al driver de NVIDIA que no baje las frecuencias de la GPU (avanzado:
 // rendimiento-maximo=no en equipo.txt lo desactiva).
 static std::atomic<bool> g_maxPerf{true};
+// Con cada limite, cola de render de un solo fotograma ("Modo de baja latencia: Activado" del panel de
+// NVIDIA): cuando el juego no llega al limite y la GPU se satura, los fotogramas ya no se acumulan en
+// la cola (en simulacion, la latencia del PC en esas zonas bajaba de 40 a 20 ms, sin coste en FPS; con
+// el limite sostenido no cambia nada). En los juegos con Reflex, Reflex tiene prioridad.
+// Avanzado: baja-latencia=no en equipo.txt lo desactiva.
+static std::atomic<bool> g_lowLatency{true};
 // Overlay clasico (dibujado con el procesador y UpdateLayeredWindow) en lugar del de la GPU
 // (DirectComposition): overlay=clasico en equipo.txt. La app tambien vuelve a el sola si el de la
 // GPU no se puede iniciar o falla durante la partida.
@@ -1204,6 +1212,12 @@ static std::string DescribeChange(const AppliedChange& c) {
   if (c.vrr) d += " · G-SYNC";
   if (c.manual) d += T(" · manual", " · manual");
   if (HasMaxPerf(c)) d += T(" · GPU al máximo", " · GPU at max");
+  if (c.method != Method::DriverVsync)  // con el VSync por intervalos la cola de 1 ya iba incluida
+    for (const auto& sv : c.saved)
+      if (sv.id == nv::PRERENDERLIMIT_ID) {
+        d += T(" · baja latencia", " · low latency");
+        break;
+      }
   if (c.displayHz > 0) d += std::string(T(" · pantalla a ", " · display at ")) + std::to_string(c.displayHz) + " Hz";
   return d;
 }
@@ -1655,6 +1669,7 @@ struct Session {
   int fgToggles = 0;  // cambios de estado de la generacion en esta partida
   // Latencia del PC por fotograma real (ms): con el limite funcionando y sin el (o antes de comprobarlo).
   std::vector<float> pcLatLimited, pcLatOther;
+  std::vector<float> gpuQueueLimited;  // espera en la cola de la GPU con el limite funcionando (ms)
   double baseLat = -1.0;  // latencia del PC de este juego sin limite (guardada)
   bool climbHandled = false;  // la subida automatica se ocupo de este limite al cerrar (sin sugerencia)
   bool fluid = true;          // prioridad de este juego: la global, o Estabilidad si la app la eligio
@@ -1827,7 +1842,8 @@ struct FrameRecorder {
     setvbuf(f, nullptr, _IOFBF, 1 << 16);
     for (const auto& h : header) std::fprintf(f, "# %s\n", h.c_str());
     std::fprintf(f, "t_llegada_s,t_acumulado_s,presentacion_ms,real_ms,real_presentacion_ms,generado,"
-                    "cpu_ms,gpu_ms,pantalla_ms,error_animacion_ms,vrr,limite_confirmado,latencia_pc_ms\n");
+                    "cpu_ms,gpu_ms,pantalla_ms,error_animacion_ms,vrr,limite_confirmado,latencia_pc_ms,"
+                    "espera_gpu_ms\n");
     rows = 0;
     tSum = 0.0;
     return true;
@@ -1837,13 +1853,13 @@ struct FrameRecorder {
     if (!f) return;
     if (s.presentMs > 0) tSum += s.presentMs / 1000.0;
     auto num = [](double v, const char* fmt) { return std::isnan(v) || v < -1e8 ? std::string() : Fmt(fmt, v); };
-    std::fprintf(f, "%.4f,%.4f,%.3f,%s,%s,%d,%s,%s,%s,%s,%d,%d,%s\n", s.t - sessionStart, tSum, s.presentMs,
+    std::fprintf(f, "%.4f,%.4f,%.3f,%s,%s,%d,%s,%s,%s,%s,%d,%d,%s,%s\n", s.t - sessionStart, tSum, s.presentMs,
                  num(s.realMs > 0 ? s.realMs : NAN, "%.3f").c_str(),
                  num(s.presentRealMs > 0 ? s.presentRealMs : NAN, "%.3f").c_str(), s.generated ? 1 : 0,
                  num(s.cpuBusyMs >= 0 ? s.cpuBusyMs : NAN, "%.3f").c_str(),
                  num(s.gpuBusyMs >= 0 ? s.gpuBusyMs : NAN, "%.3f").c_str(),
                  num(s.displayMs > 0 ? s.displayMs : NAN, "%.3f").c_str(), num(s.animErrMs, "%.3f").c_str(),
-                 vrr ? 1 : 0, verified ? 1 : 0, num(s.pcLatencyMs, "%.3f").c_str());
+                 vrr ? 1 : 0, verified ? 1 : 0, num(s.pcLatencyMs, "%.3f").c_str(), num(s.gpuQueueMs, "%.3f").c_str());
     ++rows;
   }
 
@@ -1899,6 +1915,14 @@ static void PrintSessionSummary(const Session& s, double hz) {
         PercentileSorted(d, 50),
         PercentileSorted(d, 99), d.size());
   };
+  if (s.gpuQueueLimited.size() >= 300) {
+    // Espera de cada fotograma entre que el juego lo entrega y la GPU lo empieza: crece si la cola de
+    // render se llena (la GPU no da abasto). Mide el efecto de la cola de un fotograma en juegos sin Reflex.
+    std::vector<double> d(s.gpuQueueLimited.begin(), s.gpuQueueLimited.end());
+    std::sort(d.begin(), d.end());
+    Log("\n  Espera en la cola de la GPU con el limite: mediana %.1f ms | 1 %% peor %.1f ms", PercentileSorted(d, 50),
+        PercentileSorted(d, 99));
+  }
   if (s.pcLatLimited.size() >= 300 || s.pcLatOther.size() >= 300) {
     latLine(s.pcLatLimited, "con el limite");
     latLine(s.pcLatOther, s.pcLatLimited.size() >= 300 ? "sin limite o antes de comprobarlo" : "");
@@ -2199,6 +2223,9 @@ static void ProcessSession(Session& ss, std::vector<FrameSample>& fresh, double 
       if (a > 1.0) ss.aeOver1++;
       ss.aeMax = std::max(ss.aeMax, a);
     }
+    if (now >= ss.phaseStart && !s.generated && !std::isnan(s.gpuQueueMs) && s.gpuQueueMs < 1000.0 && ss.verified &&
+        ss.expectedFps > 0 && ss.gpuQueueLimited.size() < 400000)
+      ss.gpuQueueLimited.push_back(static_cast<float>(s.gpuQueueMs));
     if (now >= ss.phaseStart && !s.generated && !std::isnan(s.pcLatencyMs) && s.pcLatencyMs < 1000.0) {
       auto& v = ss.verified && ss.expectedFps > 0 ? ss.pcLatLimited : ss.pcLatOther;
       if (v.size() < 400000) v.push_back(static_cast<float>(s.pcLatencyMs));
@@ -3824,6 +3851,7 @@ static void RunEngine(std::wstring presentMonPath) {
   if (int moved = store.Migrate(ExeDirectory() + L"\\cambios-aplicados.txt"))
     Log("Cambios de una version anterior movidos a la carpeta de datos: %d\n", moved);
   if (ReadKv(L"equipo.txt", "rendimiento-maximo") == "no") g_maxPerf = false;
+  if (ReadKv(L"equipo.txt", "baja-latencia") == "no") g_lowLatency = false;
   if (ReadKv(L"equipo.txt", "subir-solo") == "no") g_autoRaise = false;
   if (ReadKv(L"equipo.txt", "prioridad-auto") == "no") g_autoPriority = false;
   {
@@ -3831,6 +3859,19 @@ static void RunEngine(std::wstring presentMonPath) {
     for (const auto& [exe, c] : store.items) {
       const std::string sv = ReadKv(L"equipo.txt", "sugerencia|" + exe);
       if (!sv.empty() && !c.manual) g_ui.suggestions[exe] = std::atof(sv.c_str());
+    }
+  }
+  if (nvOk && g_lowLatency) {
+    int added = 0;
+    for (auto& [exe, c] : store.items) {
+      bool has = false;
+      for (const auto& sv : c.saved) has = has || sv.id == nv::PRERENDERLIMIT_ID;
+      if (!has && nvd.AddSetting(c, nv::PRERENDERLIMIT_ID, 1)) ++added;
+    }
+    if (added > 0) {
+      store.Save();
+      Log("Modo de baja latencia (cola de un fotograma) anadido a %d juego%s con limite (actua al abrir el juego).\n",
+          added, added == 1 ? "" : "s");
     }
   }
   if (nvOk && g_maxPerf) {
@@ -4091,6 +4132,9 @@ static void RunEngine(std::wstring presentMonPath) {
         desired = {{nv::FRL_FPS_ID, intFps}};
       }
       if (g_maxPerf && !desired.empty()) desired.push_back({nv::PREFERRED_PSTATE_ID, nv::PSTATE_PREFER_MAX});
+      if (g_lowLatency && !desired.empty() &&
+          std::none_of(desired.begin(), desired.end(), [](const auto& d) { return d.first == nv::PRERENDERLIMIT_ID; }))
+        desired.push_back({nv::PRERENDERLIMIT_ID, 1});
       uint32_t frlWanted = 0;
       for (const auto& d : desired)
         if (d.first == nv::FRL_FPS_ID) frlWanted = d.second;
@@ -4443,6 +4487,7 @@ static void RunEngine(std::wstring presentMonPath) {
         std::vector<std::pair<uint32_t, uint32_t>> desired = {{nv::FRL_FPS_ID, frl}};
         if (vrrNow) desired.push_back({nv::VSYNCMODE_ID, nv::VSYNC_FORCEON});
         if (g_maxPerf) desired.push_back({nv::PREFERRED_PSTATE_ID, nv::PSTATE_PREFER_MAX});
+        if (g_lowLatency) desired.push_back({nv::PRERENDERLIMIT_ID, 1});
         bool ok = nvOk;
         const double previousReal = known != store.items.end() && known->second.fgFactor <= 1 ? known->second.newValue : 0.0;
         // Se parte de cero: se deshace lo anterior (puede incluir otros ajustes, como el VSync por intervalos).

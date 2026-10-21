@@ -24,4 +24,7 @@ struct FrameSample {
   // Latencia del PC (PresentMon, MsPCLatency): desde que el juego lee la entrada hasta que la imagen
   // sale hacia la pantalla. Solo en juegos con marcadores de Reflex/PC Latency; NAN si no esta disponible.
   double pcLatencyMs = std::numeric_limits<double>::quiet_NaN();
+  // Espera en la cola de la GPU (PresentMon, MsGPULatency): desde que el juego entrega el fotograma
+  // hasta que la GPU lo empieza. Crece si la cola de render se llena. NAN si no esta disponible.
+  double gpuQueueMs = std::numeric_limits<double>::quiet_NaN();
 };
