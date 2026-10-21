@@ -1,4 +1,4 @@
-# FlatPace 0.42.1 user guide
+# FlatPace 0.43 user guide
 
 This guide describes the current version. Changes between versions are listed in the [changelog](CHANGELOG.md) (in Spanish). The app has an English interface: switch it with **ES | EN** at the bottom of the sidebar.
 

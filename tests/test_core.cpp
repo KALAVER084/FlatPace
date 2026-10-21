@@ -811,6 +811,35 @@ TEST(FailureCycleLowersOnceThenHolds) {
   CHECK(limit >= 90 && limit <= 95);  // el ritmo superado el 90 % del tiempo (~94), no la mediana (~98)
 }
 
+TEST(ScreenModeAveragesGeneratedImages) {
+  // Imagenes en pantalla con generacion a 112 fps (8,93 ms de media), alternando 6 y 12 ms con alguna
+  // imagen de 14 ms (> 1,5 x): en pantalla la linea queda recta y sin tirones; un tiron real (40 ms,
+  // > 2,5 x) si se marca. Con las reglas de los fotogramas reales, esas imagenes se marcaban.
+  const double ref = 1000.0 / 112.0;
+  std::vector<std::pair<double, double>> tl;
+  double t = 0.0;
+  for (int i = 0; i < 1000; ++i) {
+    double ms = (i % 2 == 0) ? 6.0 : 11.86;
+    if (i % 37 == 0) ms = 14.0;
+    if (i == 700) ms = 40.0;
+    t += ms / 1000.0;
+    tl.push_back({t, ms});
+  }
+  const double display = t;
+  overlay::PaceClassCache cs, cr;
+  auto screen = overlay::BuildTimeSeries(tl, display, overlay::kPaceSpanSec, 133, ref, cs, 1, true);
+  auto real = overlay::BuildTimeSeries(tl, display, overlay::kPaceSpanSec, 133, ref, cr, 1, false);
+  int sSpikes = 0, sFlat = 0, rSpikes = 0;
+  for (auto& p : screen) {
+    sSpikes += p.spike;
+    sFlat += !p.spike && std::fabs(p.ms - ref) < 1e-4;
+  }
+  for (auto& p : real) rSpikes += p.spike;
+  CHECK(sSpikes == 1);                                 // solo el tiron real
+  CHECK(sFlat >= static_cast<int>(screen.size()) - 8); // casi todo recto (el tiron y sus vecinos)
+  CHECK(rSpikes > 10);                                 // con las reglas de fotogramas reales, muchas marcas
+}
+
 int main() {
   std::printf("Pruebas de FlatPace (src/core)\n");
   RUN(Percentiles);
@@ -851,6 +880,7 @@ int main() {
   RUN(MemorySerializes);
   RUN(PhaseTrackerConfirmsRealChanges);
   RUN(SuggestRaiseRules);
+  RUN(ScreenModeAveragesGeneratedImages);
   RUN(VerifyDirectMatch);
   RUN(VerifyWithFrameGeneration);
   RUN(VerifyByDetectedCap);

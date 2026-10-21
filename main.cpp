@@ -124,7 +124,7 @@ static std::atomic<bool> g_quit{false};
 static std::atomic<int> g_lang{0};
 static const char* T(const char* es, const char* en) { return g_lang == 1 ? en : es; }
 
-static constexpr const char* kVersion = "0.42.1";
+static constexpr const char* kVersion = "0.43";
 
 // Carpeta donde esta este .exe.
 static std::wstring ExeDirectory() {
@@ -2678,7 +2678,11 @@ static void Push(const FrameSample& s) {
     if (s.t - feed.lastArrival > 0.01) {
       double gap = feed.lastArrival > 0 ? s.t - feed.lastArrival : 1.0;
       double decayed = feed.lagSec - 0.05 * std::max(0.0, s.t - feed.lagUpdated);  // baja despacio
-      feed.lagSec = std::clamp(std::max(gap + 0.35, decayed), 0.4, 4.0);
+      // Margen de 0,6 s sobre el intervalo entre tandas (antes 0,35): con poco margen, el reloj de
+      // reproduccion llegaba casi al ultimo dato antes de cada tanda, frenaba y luego aceleraba: un
+      // pequeno tiron del desplazamiento en cada refresco (simulado: avance por dibujo de 12,4 a
+      // 20,8 ms en vez de 16,7 constantes; con este margen y la correccion suave, de 15,8 a 17,5).
+      feed.lagSec = std::clamp(std::max(gap + 0.6, decayed), 0.4, 4.0);
       feed.lagUpdated = s.t;
     }
     feed.lastArrival = s.t;
@@ -2711,11 +2715,12 @@ static double GraphPlaybackLocked(double now) {
     feed.playInit = true;
   } else if (now > feed.playNow) {
     const double dt = std::min(now - feed.playNow, 0.25);
-    double rate = std::clamp(1.0 + 0.5 * (target - feed.playT), 0.8, 1.25);
+    // Correccion suave (entre 0,95 y 1,05 x): el desplazamiento se ve uniforme.
+    double rate = std::clamp(1.0 + 0.2 * (target - feed.playT), 0.95, 1.05);
     // Si una tanda se retrasa, frenar suavemente al acercarse al ultimo dato (en vez de pararse
     // en seco al alcanzarlo).
     const double ahead = head - feed.playT;
-    if (ahead < 0.4) rate *= std::max(0.0, ahead / 0.4);
+    if (ahead < 0.25) rate *= std::max(0.0, ahead / 0.25);
     feed.playT += dt * rate;
   }
   feed.playNow = std::max(feed.playNow, now);
@@ -3113,7 +3118,7 @@ class Window {
     // Curva: mediana de cada tramo (los tramos con tiron, en ambar), relleno degradado bajo ella
     // y banda de tolerancia si el limite esta confirmado.
     const int cols = std::max(2, static_cast<int>((gx1 - gx0) / (3.0f * s)));
-    std::vector<PacePoint> pts = BuildTimeSeries(real, display, span, cols, ref, classCache_, generation);
+    std::vector<PacePoint> pts = BuildTimeSeries(real, display, span, cols, ref, classCache_, generation, screenMode_);
     for (size_t k = 1; k < pts.size(); ++k)
       FillUnder(X(pts[k - 1].x), Y(pts[k - 1].ms), X(pts[k].x), Y(pts[k].ms), gy0, gy1, sr, sg, sb);
     if (locked) {
@@ -4837,6 +4842,7 @@ static void KV(const char* label, const std::string& value, float col, const ImV
 
 // La grafica de ritmo: linea objetivo y tiempos reales de los ultimos 10 s.
 static void PacingGraph(ImVec2 size) {
+  bool graphScreen = false;
   std::vector<std::pair<double, double>> real;
   double target = 0.0;
   overlay::LimitState state;
@@ -4852,6 +4858,7 @@ static void PacingGraph(ImVec2 size) {
     target = overlay::feed.targetMs;
     state = overlay::feed.limitState;
     baseSwing = overlay::feed.baseSwingMs;
+    graphScreen = overlay::feed.screenMode;
   }
   ImVec2 p = ImGui::GetCursorScreenPos();
   ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -4888,7 +4895,8 @@ static void PacingGraph(ImVec2 size) {
     dl->AddLine(ImVec2(x, ry), ImVec2(std::min(x + 5 * scale, x1), ry), Col(kText, 0.25f), 1.0f * scale);
   const int cols = std::max(2, static_cast<int>((x1 - x0) / (3.0f * scale)));
   static overlay::PaceClassCache classCache;
-  std::vector<overlay::PacePoint> pts = overlay::BuildTimeSeries(real, display, span, cols, ref, classCache, generation);
+  std::vector<overlay::PacePoint> pts =
+      overlay::BuildTimeSeries(real, display, span, cols, ref, classCache, generation, graphScreen);
   const float fillBottom = y1 + padY * 0.6f;
   auto FillAlpha = [&](float y) { return 0.04f + 0.30f * std::clamp((fillBottom - y) / (fillBottom - y0), 0.0f, 1.0f); };
   for (size_t k = 1; k < pts.size(); ++k) {

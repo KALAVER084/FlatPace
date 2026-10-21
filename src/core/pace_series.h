@@ -21,9 +21,17 @@ struct PaceClassCache {
 // Grafica de desviaciones: cada tramo vale la mediana de sus fotogramas (o su maximo si contiene
 // un tiron); los que quedan dentro de la tolerancia se dibujan sobre la referencia, como una linea
 // recta. Misma regla con y sin limite; las metricas siguen contando todos los fotogramas.
+// Modo en pantalla (generacion de fotogramas): cada tramo (~25 ms) tiene solo ~3 imagenes, y con
+// generacion es normal que alguna imagen dure algo mas o algo menos que otra. Con las reglas de los
+// fotogramas reales, un 11 % de los tramos se marcaban como tiron (una sola imagen > 1,5 x) y un 27 %
+// se salian de la linea (simulacion del overlay con una partida real de Space Marine 2). En pantalla,
+// un tramo vale la duracion media de las imagenes en ~125 ms (5 tramos), mas cercana a lo que percibe
+// el ojo, y solo es tiron una imagen de mas de 2,5 x (como los TIRONES del registro): linea recta un
+// 94 % del tiempo, sin esconder caidas reales (si la generacion se apaga, la media tambien cambia).
+constexpr int kScreenAvgBins = 5;
 static std::vector<PacePoint> BuildTimeSeries(const std::vector<std::pair<double, double>>& timeline,
                                               double display, double span, int cols, double ref,
-                                              PaceClassCache& cache, unsigned generation) {
+                                              PaceClassCache& cache, unsigned generation, bool screen = false) {
   std::vector<PacePoint> out;
   if (cols < 2 || timeline.empty()) return out;
   const double colDur = span / cols;
@@ -38,13 +46,30 @@ static std::vector<PacePoint> BuildTimeSeries(const std::vector<std::pair<double
     bins[static_cast<long long>(std::floor(r.first / colDur))].push_back(static_cast<float>(r.second));
   }
   const double tol = PaceTolerance(ref);
+  const double spikeAt = ref * (screen ? 2.5 : 1.5);
+  const int half = screen ? kScreenAvgBins / 2 : 0;
   for (auto& [k, v] : bins) {
     const double center = (k + 0.5) * colDur;
     const float mx = *std::max_element(v.begin(), v.end());
-    std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end());
-    const float med = v[v.size() / 2];
-    PaceClass c{!(mx > ref * 1.5) && std::fabs(med - ref) <= tol, mx > ref * 1.5};
-    const bool complete = (k + 1) * colDur <= display;
+    float med;
+    if (screen) {  // media de las imagenes de los tramos vecinos
+      double sum = 0.0;
+      int n = 0;
+      for (long long j = k - half; j <= k + half; ++j) {
+        auto it = bins.find(j);
+        if (it == bins.end()) continue;
+        for (float x : it->second) {
+          sum += x;
+          ++n;
+        }
+      }
+      med = static_cast<float>(sum / std::max(1, n));
+    } else {
+      std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end());
+      med = v[v.size() / 2];
+    }
+    PaceClass c{!(mx > spikeAt) && std::fabs(med - ref) <= tol, mx > spikeAt};
+    const bool complete = (k + 1 + half) * colDur <= display;  // con los vecinos ya completos
     if (complete) {
       auto it = cache.bins.find(k);
       if (it != cache.bins.end()) c = it->second;

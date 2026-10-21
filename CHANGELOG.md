@@ -2,6 +2,11 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). La versión más reciente va primero.
 
+## 0.43
+Los picos que se veían en la gráfica con generación de fotogramas, al ritmo de los refrescos, venían del propio dibujo, no del juego. Se encontraron simulando el overlay completo con su código real y las horas de llegada de una partida grabada de Space Marine 2.
+- **Corregido (desplazamiento):** el reloj de reproducción dejaba muy poco margen: antes de cada tanda de datos llegaba casi al último dato, frenaba, y al llegar la tanda aceleraba. El avance por dibujo variaba entre 12,4 y 20,8 ms (debería ser constante: 16,7 ms a 60 dibujos por segundo). Ahora deja 0,6 s de margen (antes 0,35; la gráfica va ~0,25 s más retrasada) y corrige con suavidad (entre 0,95 y 1,05×): de 15,8 a 17,5 ms.
+- **Corregido (modo en pantalla):** con generación, cada tramo de la gráfica (~25 ms) tiene solo ~3 imágenes, y es normal que alguna dure algo más que otra. Con las reglas de los fotogramas reales, un 11 % de los tramos se marcaban como tirón (una sola imagen de más de 1,5×) y la línea solo era recta un 73 % del tiempo. Ahora, en pantalla, cada tramo vale la duración media de las imágenes en ~125 ms, y solo es tirón una imagen de más de 2,5× (como los TIRONES del registro): línea recta un 94 % del tiempo y un 0,2 % de tirones, sin esconder caídas reales.
+
 ## 0.42.1
 Con las mediciones de la 0.42 en Space Marine 2: el proceso de FlatPace bajó del 15,9 % al 8,5 % de un núcleo y el overlay de 3,04 a 1,43 ms por dibujo; al principio de cada tanda de datos seguía habiendo 1,5 veces más imágenes lentas que en el resto (2,0 en la 0.40, 1,7 en la 0.41.1).
 - **Cambiado:** PresentMon se lanza **sin seguimiento de entrada** (`--no_track_input`): FlatPace no usa esos datos, y un ratón de juego genera cientos o miles de eventos por segundo que PresentMon tenía que procesar.
