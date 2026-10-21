@@ -124,7 +124,7 @@ static std::atomic<bool> g_quit{false};
 static std::atomic<int> g_lang{0};
 static const char* T(const char* es, const char* en) { return g_lang == 1 ? en : es; }
 
-static constexpr const char* kVersion = "0.41";
+static constexpr const char* kVersion = "0.41.1";
 
 // Carpeta donde esta este .exe.
 static std::wstring ExeDirectory() {
@@ -399,10 +399,15 @@ static void ExemptCurrentThread(bool raise = true) {
   if (raise) SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
 }
 
-// Tiempo de CPU (s) consumido por todo el proceso de FlatPace.
-static double ProcessCpuSec() {
+// Proceso de PresentMon (para medir su coste) y tiempo de dibujo del overlay (suma y fotogramas).
+static std::atomic<HANDLE> presentMonProcess{nullptr};
+static std::atomic<double> overlayDrawMsSum{0.0};
+static std::atomic<long long> overlayDraws{0};
+
+// Tiempo de CPU (s) consumido por un proceso (por defecto, todo FlatPace).
+static double ProcessCpuSec(HANDLE proc = GetCurrentProcess()) {
   FILETIME c, e, k, u;
-  if (!GetProcessTimes(GetCurrentProcess(), &c, &e, &k, &u)) return 0.0;
+  if (!proc || !GetProcessTimes(proc, &c, &e, &k, &u)) return 0.0;
   auto toSec = [](const FILETIME& f) {
     return (static_cast<double>(f.dwHighDateTime) * 4294967296.0 + f.dwLowDateTime) * 1e-7;
   };
@@ -467,6 +472,7 @@ class PresentMonReader {
     ResumeThread(pi.hThread);
     CloseHandle(pi.hThread);
     process_ = pi.hProcess;
+    eco::presentMonProcess = pi.hProcess;
     running_ = true;
     thread_ = std::thread([this] {
       eco::ExemptCurrentThread();
@@ -1723,7 +1729,9 @@ struct Session {
   bool haveRec = false, fgActive = false, fgEverSeen = false, paused = false;
   int fgToggles = 0;  // cambios de estado de la generacion en esta partida
   // Coste de FlatPace durante la partida
-  double engMsSum = 0.0, engMsMax = 0.0, cpuAtStart = -1.0;
+  double engMsSum = 0.0, engMsMax = 0.0, cpuAtStart = -1.0, pmCpuAtStart = -1.0;
+  double ovMsAtStart = 0.0;
+  long long ovDrawsAtStart = 0;
   int engTicks = 0;
   // Ultimos minutos ordenados, recalculados como mucho cada 5 s (era cada segundo)
   std::vector<double> longSortedCache;
@@ -1957,6 +1965,12 @@ static void PrintSessionSummary(const Session& s, double hz) {
     const double cpu = s.cpuAtStart >= 0 ? eco::ProcessCpuSec() - s.cpuAtStart : -1.0;
     Log("  Coste de FlatPace: motor %.1f ms por segundo de media (maximo %.0f ms)", s.engMsSum / s.engTicks, s.engMsMax);
     if (cpu >= 0) Log(" | proceso completo (con la ventana y el overlay): %.1f %% de un nucleo", 100.0 * cpu / wall);
+    const double pmCpu = s.pmCpuAtStart >= 0 ? eco::ProcessCpuSec(eco::presentMonProcess.load()) - s.pmCpuAtStart : -1.0;
+    if (pmCpu >= 0) Log("\n                     PresentMon: %.1f %% de un nucleo", 100.0 * pmCpu / wall);
+    const long long draws = eco::overlayDraws.load() - s.ovDrawsAtStart;
+    if (draws > 0)
+      Log(" | overlay: %.2f ms por dibujo (%.0f dibujos por segundo)", (eco::overlayDrawMsSum.load() - s.ovMsAtStart) / draws,
+          draws / wall);
     Log("\n");
   }
   Log("  Generacion de fotogramas: %s\n", s.fgEverSeen ? "detectada" : "no detectada");
@@ -2858,6 +2872,14 @@ class Window {
     bool fg2 = screenFps > fps * 1.4;
 
     double swing = RecentSwing(real);
+    const double drawT0 = NowSec();
+    struct DrawTimer {
+      double t0;
+      ~DrawTimer() {
+        eco::overlayDrawMsSum = eco::overlayDrawMsSum.load() + (NowSec() - t0) * 1000.0;
+        ++eco::overlayDraws;
+      }
+    } drawTimer{drawT0};
     Draw(display, fps, low, fg2 ? screenFps : 0.0, limitLabel, limitState, targetMs > 0 ? targetMs : refAuto, targetMs > 0,
          real, swing, baseSwing);
 
@@ -4091,6 +4113,9 @@ static void RunEngine(std::wstring presentMonPath) {
         PublishChanges(store);
         session.start = now;
         session.cpuAtStart = eco::ProcessCpuSec();
+        session.pmCpuAtStart = eco::ProcessCpuSec(eco::presentMonProcess.load());
+        session.ovMsAtStart = eco::overlayDrawMsSum.load();
+        session.ovDrawsAtStart = eco::overlayDraws.load();
         session.phaseStart = now;
         session.lastFrameArrival = now;
         gamesSeen++;
@@ -4162,6 +4187,9 @@ static void RunEngine(std::wstring presentMonPath) {
       Log("[%5.0f s] El juego esta en primer plano: empiezo a medir.\n", session.T(now));
       session.start = now;
       session.cpuAtStart = eco::ProcessCpuSec();
+      session.pmCpuAtStart = eco::ProcessCpuSec(eco::presentMonProcess.load());
+      session.ovMsAtStart = eco::overlayDrawMsSum.load();
+      session.ovDrawsAtStart = eco::overlayDraws.load();
       session.ResetPhase(now);
     }
     // G-SYNC actuando con el juego (se consulta cada 2 s; cambia tras 3 lecturas iguales).

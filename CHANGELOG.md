@@ -2,6 +2,9 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). La versión más reciente va primero.
 
+## 0.41.1
+- **Añadido:** el resumen de cada partida mide también el coste de **PresentMon** (uso de CPU de su proceso) y el del **overlay** (tiempo por dibujo y dibujos por segundo), además del motor y del proceso de FlatPace. Sirve para saber dónde está realmente el coste antes de optimizar.
+
 ## 0.41
 - **Mejorado: FlatPace ya no compite con el juego por el procesador.** Las grabaciones mostraron que los fotogramas que el juego calcula justo después de cada tanda de datos de PresentMon (cada ~1 s) salían más lentos (Greylock y Megabonk: 1,6-2 veces más fotogramas lentos; en Space Marine 2, limitado por la CPU, la generación de fotogramas se saltaba imágenes: un 44 % de generadas frente al 48 %, lo que se veía como picos al actualizarse la gráfica). Ahora:
   - FlatPace funciona con **prioridad baja** y en el **modo de eficiencia de Windows 11** (núcleos de eficiencia, frecuencias bajas), salvo el hilo que lee PresentMon (no puede retrasarse) y el que dibuja la ventana y el overlay (sin modo de eficiencia, para que no vaya a tirones). PresentMon se lanza con prioridad normal.
