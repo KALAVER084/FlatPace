@@ -24,9 +24,9 @@ Nothing needs to be installed and no Windows settings need to change. To uninsta
 The sidebar has four sections:
 
 - **Now:** the current game and the status tag of its limit (*LOCKED* in blue; *UNCONFIRMED* or *NO LIMIT* in red); a card with the real FPS, four metrics (1 % low, consistency, stutters and pace swing) and the **pacing graph**; and two cards: *Limit* (applied, recommended and status, with *Apply now*, *Manual limit…* and *Undo*) and *Details* (VRR, presentation, the game's own limit, bottleneck and display). The graph stays visible when you switch to the app.
-- **Games:** the priority, the games with a limit (each with *Set…* and *Undo* buttons), *Undo all changes* and *Choose game…*.
+- **Games:** the global priority, *Limit adjustment* (*Automatic* or *Suggest only*, section 4), the games with a limit, *Undo all changes* and *Choose game…*. Each game shows its limit and its buttons: its **priority** (section 5), *Set…*, *Undo* and, if a raise is suggested, *Apply suggestion*.
 - **System:** GPU, display, driver and VRR status with the monitor's refresh range.
-- **Log:** everything the app does and measures, with a button to open the log file and the **Record per-frame data** checkbox, which saves a CSV file per session in the `grabaciones` folder (*Open recordings* button), useful for analyzing the pace in detail. In games with Reflex, each session summary also includes **PC latency** (from when the game reads your input until the image is sent to the display), with and without the limit, so you can see whether the limit improves or worsens it. The summary also says **what limits the slow moments** (the CPU or the GPU), with the matching advice: if it's the CPU, lowering graphics won't help, but the settings that load it will (population, physics, view distance). And it warns if the CPU lowers its frequency right in those moments, common on laptops due to heat or power.
+- **Log:** everything the app does and measures, with a button to open the log file and the **Record per-frame data** checkbox, which saves a CSV file per session in the `grabaciones` folder (*Open recordings* button), useful for analyzing the pace in detail. If the game provides the necessary data (some games with Reflex), each session summary also includes **PC latency** (from when the game reads your input until the image is sent to the display), with and without the limit. In the games tested so far it hasn't appeared yet. The summary also says **what limits the slow moments** (the CPU or the GPU), with the matching advice: if it's the CPU, lowering graphics won't help, but the settings that load it will (population, physics, view distance). And it warns if the CPU lowers its frequency right in those moments, common on laptops due to heat or power.
 
 At the bottom of the sidebar: **Apply limits** (when off, the app only measures), **In-game overlay** (the app remembers your choice) and the language (**ES | EN**).
 
@@ -70,7 +70,8 @@ The app **never changes** a manual limit: it only checks that it works (the over
 
 ## 7. G-SYNC, FreeSync and displays without VRR
 
-- **With NVIDIA, every limit comes with "GPU at max"** (*Prefer maximum performance* in the game's profile): with a limit, the driver would lower the GPU clocks until it barely keeps up, and it wouldn't make it in time in heavy scenes, worsening the 1 % low. The GPU still protects itself against temperature and power. It's undone together with the limit.
+- **With NVIDIA, every limit comes with "GPU at max"** (*Prefer maximum performance* in the game's profile): with a limit, the driver would lower the GPU clocks until it barely keeps up, and it wouldn't make it in time in heavy scenes, worsening the 1 % low. The GPU still protects itself against temperature and power. On laptops it takes some power away from the CPU, but in testing it paid off. It's undone together with the limit.
+- **And low latency mode** (*Low Latency Mode: On*): if the game can't reach the limit and the GPU can't keep up, it stops frames from piling up and adding delay. When the limit holds, nothing changes.
 - **With VRR active**, the limit matches the exact pace the game holds (for example 116 or 122), always below your display's ceiling (225 on a 240 Hz display, 138 on a 144 Hz one). The app also turns on the driver's VSync, the recommended combination with G-SYNC.
 - **The monitor's VRR range** (read from its EDID) is taken into account: if its VRR range ends below its refresh rate, the limit stays below the end of the range; and if a game runs below the bottom of the range on a monitor that can't double frames (no LFC), the app uses a divisor of the refresh rate instead. *System* shows the range and whether LFC is available.
 - **Without VRR**, the limit divides the real refresh rate exactly (240, 120, 80, 60…), so every image stays on screen for the same time.
@@ -84,13 +85,14 @@ The app **never changes** a manual limit: it only checks that it works (the over
 - If frame generation turns on or off (many games do this in menus), the app measures again. If the game turns it on and off by itself frequently (a dynamic or automatic mode), the app warns once on *Games* and stops logging each change: setting that mode in the game gives a steadier pace.
 - With frame generation, the graph shows the images **on screen** (section 9), and the app doesn't estimate the game's capacity or suggest raising the limit, because real frames change pace with frame generation.
 - The first time, it learns what the driver's limiter acts on in your PC (what you see on screen or the real frames).
+- **Frame generation can make motion uneven even when the graph is flat:** in Space Marine 2, more than a third of the frames with a perfect pace had uneven motion with frame generation, and almost none without it. No limit fixes it. Each session summary measures it (*"Motion with a flat pace"*) and, if it's high, explains it; if motion looks uneven to you, try the game without frame generation.
 
 ## 9. In-game overlay
 
 In a corner of the game: FPS, 1 % low, a tag with the limit status and the pacing graph of the last 3 seconds.
 
 - **Blue ("LOCKED 225 fps"):** the limit is confirmed; the game runs at its pace.
-- In games with Reflex, the numbers row includes **PC latency** (*"latency 24 ms"*). With a locked limit and no frame generation, it compares it with the game's latency without a limit: *"latency 18 ms (before 22)"*. If the row doesn't fit, secondary data is dropped first.
+- If the game provides the necessary data (some games with Reflex; none of those tested so far), the numbers row includes **PC latency** (*"latency 24 ms"*). With a locked limit and no frame generation, it compares it with the game's latency without a limit: *"latency 18 ms (before 22)"*. If the row doesn't fit, secondary data is dropped first.
 - **Red ("UNCONFIRMED" or "NO LIMIT"):** the game has no limit yet, or has one that hasn't been checked yet.
 - The graph shows pace **deviations**: while frame times stay within the tolerance (±13 % of the target, shown in the label: *"target 8.3 ms ±1.1"*), the line is straight; only what goes outside is drawn. The same rule applies with and without a limit, so the difference you see is real. **Stutters** appear in amber.
 - **With frame generation**, the graph draws the images **on screen** (what you see), and the label says so (*"on screen 13.9 ms ±1.8"*). If the game turns frame generation on and off by itself, the app warns about it on *Games*.
@@ -99,7 +101,7 @@ In a corner of the game: FPS, 1 % low, a tag with the limit status and the pacin
 - With an active limit, the **1 % low** discounts the limiter's own delays (frames that come out slightly late even though the game had them ready): it shows what the game causes. Each session summary in *Log* shows both values. If the line sits above the target, the game isn't quite reaching the limit: a slightly lower limit gives the limiter room to flatten it.
 - It refreshes up to 60 times per second and scrolls continuously, with a small delay that adapts on its own (PresentMon delivers data in batches; with frame generation the delay can reach about 2 seconds).
 
-It's a separate, transparent window: it doesn't touch the game. Since 0.44 the GPU draws it, at almost no CPU cost; if it didn't work on your PC, the app falls back to the classic overlay on its own (and with `overlay=clasico` in `equipo.txt`, inside `%LOCALAPPDATA%\FlatPace`, the classic one is always used).
+It's a separate, transparent window: it doesn't touch the game. The GPU draws it, at almost no CPU cost; if it didn't work on your PC, the app falls back to the classic overlay on its own (and with `overlay=clasico` in `equipo.txt`, inside `%LOCALAPPDATA%\FlatPace`, the classic one is always used; see the advanced settings in the [technical documentation](TECHNICAL.md#8-advanced-settings)).
 
 ## 10. Warnings and undo
 
@@ -133,3 +135,5 @@ To find which limit gives the steadiest pace in a game, compare sessions of a fe
 **Why isn't the limit equal to my FPS?** The app picks the pace the game holds in its demanding moments, not in the quiet ones, so the pace stays constant.
 
 **Where are the logs?** Next to the program, as `registro-date-time.txt`, and in the *Log* section.
+
+**I'm going to update the NVIDIA driver.** A normal update keeps game profiles, and the limits with them. A *clean install* erases them: press *Undo all changes* first, and the app will measure each game again.

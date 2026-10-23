@@ -10,10 +10,11 @@ Current version: **0.51.3** · Windows 10 (1803 or later) and Windows 11. [User 
 
 - **Measures each game** frame by frame while you play (with Intel's PresentMon), telling real frames apart from DLSS Frame Generation ones.
 - **Decides the limit using the whole session** when you close the game, based on your priority (smoothness or stability), your display, and whether G-SYNC/FreeSync is active.
-- **Applies it in the NVIDIA driver** (the game's profile, without touching the game), **checks that it works** next session and keeps it. Along with the limit it turns on **"GPU at max"**, which stops the GPU from lowering its clocks with the limit in place and greatly improves the 1 % low, and **low latency mode**, which keeps frames from piling up when the game can't reach the limit.
+- **Applies it in the NVIDIA driver** (the game's profile, without touching the game), **checks that it works** next session and keeps it. Along with the limit it turns on **"GPU at max"**, which stops the GPU from lowering its clocks with the limit in place and improves the 1 % low, and **low latency mode**, which keeps frames from piling up when the game can't reach the limit.
 - **Adjusts it on its own:** if the game stops holding it for a sustained period, it lowers it (isolated dips don't count); if it has headroom, it raises it step by step to what the game really holds.
+- **A priority per game:** it starts with yours (*Smoothness* or *Stability*), moves games that turn out to be unstable with their limit to *Stability*, and you can set it by hand for each one.
 - **Fully reversible:** each game can be undone on its own and goes back exactly to how it was.
-- **Diagnostics:** stutters, CPU/GPU bottleneck, frame generation, presentation mode, VRR state, an in-game overlay with the pacing graph, and optional per-frame recording to analyze sessions.
+- **Diagnostics:** stutters, what limits the slow moments (CPU or GPU) with the matching advice, CPU performance, motion judder caused by frame generation, presentation mode, VRR state, an in-game overlay with the pacing graph, and optional per-frame recording to analyze sessions.
 - **Lightweight:** it runs at low priority and in Windows 11 efficiency mode, so it doesn't compete with the game.
 
 ## Quick start
@@ -41,7 +42,10 @@ If "Windows protected your PC" appears, click *More info* → *Run anyway*: the 
 
 - The driver applies the limit **when the game starts**: changes show up in the next session.
 - It doesn't fix the game's own stutters (shader compilation, loading); it detects and reports them.
-- Tested mostly on a laptop with an RTX 4080 and a 240 Hz display, with a few games.
+- Frame generation can make motion uneven even when the pace is steady: FlatPace measures and explains it, but no limit fixes it.
+- PC latency only appears if the game provides the necessary data; it hasn't in the games tested so far.
+- It uses PresentMon 2.6.0, which has known bugs; if it stops sending data mid-session, FlatPace restarts it.
+- Tested mostly on a laptop with an RTX 4080 and a 240 Hz G-SYNC display, with a few games (Greylock, Megabonk, Space Marine 2 and Control Resonant). Reports from other PCs are welcome.
 
 ## Privacy
 

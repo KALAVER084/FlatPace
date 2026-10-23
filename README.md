@@ -10,10 +10,11 @@ Versión actual: **0.51.3** · Windows 10 (1803 o posterior) y Windows 11 · [Gu
 
 - **Mide cada juego** mientras juegas, fotograma a fotograma (con PresentMon de Intel), separando los fotogramas reales de los generados por DLSS Frame Generation.
 - **Decide el límite con toda la partida** al cerrar el juego, según tu prioridad (fluidez o estabilidad), tu pantalla y si hay G-SYNC/FreeSync.
-- **Lo aplica en el driver de NVIDIA** (perfil del juego, sin tocar el juego), **comprueba que funciona** en la siguiente partida y lo mantiene. Junto al límite activa **"GPU al máximo"**, que evita que la GPU baje frecuencias con el límite puesto y mejora mucho el 1 % bajo, y el **modo de baja latencia**, que evita que los fotogramas se acumulen cuando el juego no llega al límite.
+- **Lo aplica en el driver de NVIDIA** (perfil del juego, sin tocar el juego), **comprueba que funciona** en la siguiente partida y lo mantiene. Junto al límite activa **"GPU al máximo"**, que evita que la GPU baje frecuencias con el límite puesto y mejora el 1 % bajo, y el **modo de baja latencia**, que evita que los fotogramas se acumulen cuando el juego no llega al límite.
 - **Lo ajusta solo:** si un día el juego deja de sostenerlo de forma continuada, lo baja (los tropiezos aislados no cuentan); si va sobrado, lo sube poco a poco hasta lo que el juego sostiene de verdad.
+- **Una prioridad por juego:** empieza con la tuya (*Fluidez* o *Estabilidad*), pasa a *Estabilidad* los juegos que resultan inestables con su límite, y puedes fijarla a mano en cada uno.
 - **Todo es reversible:** cada juego se puede deshacer por separado, y vuelve exactamente a como estaba.
-- **Diagnóstico:** tirones, cuello de botella (CPU o GPU), generación de fotogramas, modo de presentación, VRR activo, overlay en el juego con la gráfica de ritmo y grabación opcional de cada fotograma para analizar partidas.
+- **Diagnóstico:** tirones, qué limita los momentos lentos (la CPU o la GPU) con el consejo que corresponde, rendimiento de la CPU, movimiento descompasado por la generación de fotogramas, modo de presentación, VRR activo, overlay en el juego con la gráfica de ritmo y grabación opcional de cada fotograma para analizar partidas.
 - **Ligero:** funciona con prioridad baja y en el modo de eficiencia de Windows 11, para no competir con el juego.
 
 ## Inicio rápido
@@ -41,7 +42,10 @@ Si Windows muestra "Windows protegió su PC", pulsa *Más información* → *Eje
 
 - El driver aplica el límite **al abrir el juego**: los cambios se notan en la partida siguiente.
 - No elimina los tirones propios del juego (compilación de shaders, cargas): los detecta y los muestra.
-- Probado sobre todo en un portátil con RTX 4080 y pantalla de 240 Hz, con unos pocos juegos.
+- La generación de fotogramas puede descompasar el movimiento aunque el ritmo sea constante: FlatPace lo mide y lo explica, pero ningún límite lo corrige.
+- La latencia del PC solo aparece si el juego entrega los datos necesarios; en los juegos probados aún no lo ha hecho.
+- Usa PresentMon 2.6.0, que tiene fallos conocidos; si deja de enviar datos a mitad de partida, FlatPace lo reinicia.
+- Probado sobre todo en un portátil con RTX 4080 y pantalla de 240 Hz con G-SYNC, con unos pocos juegos (Greylock, Megabonk, Space Marine 2 y Control Resonant). Se agradecen informes de otros equipos.
 
 ## Privacidad
 

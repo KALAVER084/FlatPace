@@ -24,9 +24,9 @@ No hace falta instalar nada ni cambiar ajustes de Windows. Para desinstalar, bor
 La barra lateral tiene cuatro secciones:
 
 - **Ahora:** el juego actual y la etiqueta de estado de su límite (*FIJADO* en azul; *SIN CONFIRMAR* o *SIN LÍMITE* en rojo); una tarjeta con los FPS reales, cuatro métricas (1 % bajo, consistencia, tirones y variación del ritmo) y la **gráfica de ritmo**; y dos tarjetas: *Límite* (aplicado, recomendado y estado, con *Aplicar ya*, *Límite manual…* y *Deshacer*) y *Detalles* (VRR, presentación, límite del juego, cuello de botella y pantalla). La gráfica se conserva cuando cambias a la app.
-- **Juegos:** la prioridad, los juegos con límite (cada uno con sus botones *Fijar…* y *Deshacer*), *Deshacer todos los cambios* y *Elegir juego*.
+- **Juegos:** la prioridad global, el *Ajuste de límites* (*Automático* o *Solo sugerir*, sección 4), los juegos con límite y *Deshacer todos los cambios* y *Elegir juego*. Cada juego muestra su límite y sus botones: el de su **prioridad** (sección 5), *Fijar…*, *Deshacer* y, si hay una subida sugerida, *Aplicar sugerencia*.
 - **Equipo:** gráfica, pantalla, driver y estado del VRR con el rango de frecuencias del monitor.
-- **Registro:** todo lo que la app hace y mide, con el botón para abrir el archivo de registro y la casilla **Grabar los datos de cada fotograma**, que guarda un archivo CSV por partida en la carpeta `grabaciones` (botón *Abrir grabaciones*), útil para analizar el ritmo con detalle. En los juegos con Reflex, el resumen de cada partida incluye además la **latencia del PC** (desde que el juego lee tu acción hasta que la imagen sale hacia la pantalla), con el límite y sin él, para que veas si el límite la mejora o la empeora. El resumen también dice **qué limita los momentos lentos** (la CPU o la GPU), con el consejo que corresponde: si es la CPU, bajar los gráficos no ayudará, pero sí los ajustes que la cargan (población, física, distancia de visión). Y avisa si la CPU baja de frecuencia justo en esos momentos, algo frecuente en portátiles por calor o energía.
+- **Registro:** todo lo que la app hace y mide, con el botón para abrir el archivo de registro y la casilla **Grabar los datos de cada fotograma**, que guarda un archivo CSV por partida en la carpeta `grabaciones` (botón *Abrir grabaciones*), útil para analizar el ritmo con detalle. Si el juego entrega los datos necesarios (algunos juegos con Reflex), el resumen de cada partida incluye además la **latencia del PC** (desde que el juego lee tu acción hasta que la imagen sale hacia la pantalla), con el límite y sin él. En los juegos probados hasta ahora todavía no ha aparecido. El resumen también dice **qué limita los momentos lentos** (la CPU o la GPU), con el consejo que corresponde: si es la CPU, bajar los gráficos no ayudará, pero sí los ajustes que la cargan (población, física, distancia de visión). Y avisa si la CPU baja de frecuencia justo en esos momentos, algo frecuente en portátiles por calor o energía.
 
 Al pie de la barra: **Aplicar límites** (si está apagado, la app solo mide), **Overlay en el juego** (la app recuerda tu elección) e idioma (**ES | EN**).
 
@@ -70,7 +70,8 @@ La app **no cambiará nunca** un límite manual: solo comprobará que funciona (
 
 ## 7. G-SYNC, FreeSync y pantallas sin VRR
 
-- **Con NVIDIA, cada límite va acompañado de "GPU al máximo"** (*Preferir rendimiento máximo* en el perfil del juego): con un límite, el driver bajaría las frecuencias de la GPU hasta ir justa y no llegaría a tiempo en las escenas pesadas, que empeorarían el 1 % bajo. La GPU sigue protegiéndose sola por temperatura y potencia. Se deshace junto con el límite.
+- **Con NVIDIA, cada límite va acompañado de "GPU al máximo"** (*Preferir rendimiento máximo* en el perfil del juego): con un límite, el driver bajaría las frecuencias de la GPU hasta ir justa y no llegaría a tiempo en las escenas pesadas, que empeorarían el 1 % bajo. La GPU sigue protegiéndose sola por temperatura y potencia. En los portátiles le resta algo de energía a la CPU, pero en las pruebas compensó. Se deshace junto con el límite.
+- **Y del modo de baja latencia** (*Modo de baja latencia: Activado*): si el juego no llega al límite y la GPU no da abasto, evita que los fotogramas se acumulen esperando y añadan retraso. Cuando el límite se sostiene no cambia nada.
 - **Con VRR actuando**, el límite se ajusta al ritmo exacto que el juego sostiene (por ejemplo 116 o 122), siempre por debajo del techo de tu pantalla (225 en una de 240 Hz, 138 en una de 144 Hz). La app activa además el VSync del driver, la combinación recomendada con G-SYNC.
 - **Se tiene en cuenta el rango de VRR del monitor** (leído de su EDID): si su rango VRR acaba por debajo de su frecuencia, el límite queda por debajo del final del rango; y si un juego va por debajo del mínimo del rango en un monitor que no puede duplicar fotogramas (sin LFC), la app usa un divisor de los Hz. *Equipo* muestra el rango y si hay LFC.
 - **Sin VRR**, el límite divide exactamente los Hz reales (240, 120, 80, 60…), para que cada imagen dure lo mismo en pantalla.
@@ -84,13 +85,14 @@ La app **no cambiará nunca** un límite manual: solo comprobará que funciona (
 - Si la generación se activa o desactiva (muchos juegos lo hacen en menús), la app vuelve a medir. Si el juego la activa y desactiva solo con frecuencia (un modo dinámico o automático), la app lo avisa una vez en *Juegos* y deja de anotar cada cambio: fijar ese modo en el juego da un ritmo más constante.
 - Con generación, la gráfica muestra las imágenes **en pantalla** (sección 9), y la app no calcula la capacidad del juego ni sugiere subir el límite, porque los fotogramas reales cambian de ritmo con la generación.
 - La primera vez, aprende sobre qué actúa el limitador del driver en tu equipo (lo que se ve en pantalla o los fotogramas reales).
+- **La generación puede descompasar el movimiento aunque la gráfica esté plana:** en Space Marine 2, más de un tercio de los fotogramas con ritmo perfecto tenían el movimiento descompasado con generación, y casi ninguno sin ella. Ningún límite lo corrige. El resumen de cada partida lo mide (*"Movimiento con ritmo plano"*) y, si es alto, lo explica; si notas el movimiento irregular, prueba el juego sin generación.
 
 ## 9. Overlay en el juego
 
 En una esquina del juego: FPS, 1 % bajo, una etiqueta con el estado del límite y la gráfica de ritmo de los últimos 3 segundos.
 
 - **Azul ("FIJADO 225 fps"):** el límite está confirmado; el juego va a su ritmo.
-- En los juegos con Reflex, la fila de cifras incluye la **latencia del PC** (*"latencia 24 ms"*). Con un límite fijado y sin generación de fotogramas, la compara con la del juego sin límite: *"latencia 18 ms (antes 22)"*. Si la fila no cabe, se quitan primero los datos secundarios.
+- Si el juego entrega los datos necesarios (algunos juegos con Reflex; en los probados hasta ahora, todavía no), la fila de cifras incluye la **latencia del PC** (*"latencia 24 ms"*). Con un límite fijado y sin generación de fotogramas, la compara con la del juego sin límite: *"latencia 18 ms (antes 22)"*. Si la fila no cabe, se quitan primero los datos secundarios.
 - **Rojo ("SIN CONFIRMAR" o "SIN LÍMITE"):** el juego aún no tiene límite, o lo tiene pero todavía no se ha comprobado.
 - La gráfica muestra las **desviaciones** del ritmo: mientras el tiempo de los fotogramas está dentro de la tolerancia (±13 % del objetivo, indicada en la etiqueta: *"objetivo 8,3 ms ±1,1"*), la línea es recta; solo se dibuja lo que se sale. Se aplica igual con y sin límite, así que la diferencia que ves es real. Los **tirones** aparecen en ámbar.
 - **Con generación de fotogramas**, la gráfica dibuja las imágenes **en pantalla** (lo que ves), y la etiqueta lo indica (*"en pantalla 13,9 ms ±1,8"*). Si el juego activa y desactiva la generación por su cuenta, la app lo avisa en *Juegos*.
@@ -99,7 +101,7 @@ En una esquina del juego: FPS, 1 % bajo, una etiqueta con el estado del límite 
 - Con un límite activo, el **1 % bajo** descuenta los retrasos del propio limitador (fotogramas que salen algo tarde aunque el juego ya los tenía listos): muestra lo que causa el juego. El resumen de cada partida en *Registro* muestra los dos valores. Si la línea queda por encima del objetivo, el juego no llega del todo al límite: un límite algo más bajo dará al limitador margen para aplanarla.
 - Se actualiza hasta 60 veces por segundo y se desplaza de forma continua, con un pequeño retraso que se adapta solo (los datos de PresentMon llegan por tandas; con generación de fotogramas, el retraso puede llegar a unos 2 segundos).
 
-Es una ventana propia y transparente: no toca el juego. Desde la 0.44 la dibuja la GPU, con un coste casi nulo para el procesador; si en tu equipo no funcionara, la app vuelve sola al overlay clásico (y con `overlay=clasico` en `equipo.txt`, dentro de `%LOCALAPPDATA%\FlatPace`, se usa siempre el clásico).
+Es una ventana propia y transparente: no toca el juego. La dibuja la GPU, con un coste casi nulo para el procesador; si en tu equipo no funcionara, la app vuelve sola al overlay clásico (y con `overlay=clasico` en `equipo.txt`, dentro de `%LOCALAPPDATA%\FlatPace`, se usa siempre el clásico; ver los ajustes avanzados en la [documentación técnica](TECNICO.md#8-ajustes-avanzados)).
 
 ## 10. Avisos y deshacer
 
@@ -133,3 +135,5 @@ Para saber qué límite da el ritmo más regular en un juego, compara partidas d
 **¿Por qué el límite no es igual a mis FPS?** La app elige el ritmo que el juego sostiene en sus momentos exigentes, no en los tranquilos, para que el ritmo sea constante.
 
 **¿Dónde están los registros?** Junto al programa, como `registro-fecha-hora.txt`, y en la sección *Registro*.
+
+**Voy a actualizar el driver de NVIDIA.** Una actualización normal conserva los perfiles de los juegos, y con ellos los límites. Una *instalación limpia* los borra: pulsa antes *Deshacer todos los cambios*, y la app volverá a medir cada juego.
