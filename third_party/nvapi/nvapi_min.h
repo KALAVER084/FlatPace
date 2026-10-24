@@ -13,6 +13,11 @@
 #include <cstddef>
 #include <cstdint>
 
+// Fuera de Windows (pruebas automaticas) no existe la convencion de llamada __cdecl: no tiene efecto ahi.
+#if !defined(_WIN32) && !defined(__cdecl)
+#define __cdecl
+#endif
+
 namespace nv {
 using NvU32 = uint32_t;
 using NvU16 = uint16_t;

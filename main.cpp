@@ -40,8 +40,11 @@
 #include <deque>
 #include <limits>
 #include <map>
+#include <string_view>
+#include <unordered_map>
 #include <mutex>
 #include <pdh.h>
+#include <tlhelp32.h>
 #include <set>
 #include <string>
 #include <thread>
@@ -129,7 +132,7 @@ static std::atomic<bool> g_quit{false};
 static std::atomic<int> g_lang{0};
 static const char* T(const char* es, const char* en) { return g_lang == 1 ? en : es; }
 
-static constexpr const char* kVersion = "0.51.3";
+static constexpr const char* kVersion = "0.62.2";
 
 // Carpeta donde esta este .exe.
 static std::wstring ExeDirectory() {
@@ -603,12 +606,12 @@ class PresentMonReader {
         colPcLat_ = FindColumn(cols, {"mspclatency", "pclatency"});
         colGpuLat_ = FindColumn(cols, {"msgpulatency", "gpulatency"});
         headerParsed_ = true;
-        auto name = [&](int c) { return c >= 0 ? Trim(cols[c]) : std::string("no disponible"); };
-        Message("Columnas de PresentMon: fotograma=" +
-                (colFrame_ >= 0 ? Trim(cols[colFrame_]) : std::string("NO ENCONTRADA")) +
+        auto name = [&](int c) { return c >= 0 ? Trim(cols[c]) : std::string(T("no disponible", "not available")); };
+        Message(T("Columnas de PresentMon: fotograma=", "PresentMon columns: frame=") +
+                (colFrame_ >= 0 ? Trim(cols[colFrame_]) : std::string(T("NO ENCONTRADA", "NOT FOUND"))) +
                 ", CPU=" + name(colCpu_) + ", GPU=" + name(colGpu_) +
-                ", tipo=" + name(colType_) + ", simulacion=" + name(colSim_) +
-                ", animacion=" + name(colAnim_) + ", latencia=" + name(colPcLat_));
+                T(", tipo=", ", type=") + name(colType_) + T(", simulacion=", ", simulation=") + name(colSim_) +
+                T(", animacion=", ", animation=") + name(colAnim_) + T(", latencia=", ", latency=") + name(colPcLat_));
       } else if (line.find("already running") == std::string::npos &&
                  line.find("--session_name") == std::string::npos) {
         Message("[PresentMon] " + line);
@@ -635,8 +638,8 @@ class PresentMonReader {
       std::string type = Lower(Trim(cols[colType_]));
       s.generated = !IsRealFrameType(type);
       if (seenTypes_.insert(type).second && !type.empty())
-        Message("Tipo de fotograma visto: " + Trim(cols[colType_]) +
-                (s.generated ? " (generado)" : " (real)"));
+        Message(T("Tipo de fotograma visto: ", "Frame type seen: ") + Trim(cols[colType_]) +
+                (s.generated ? T(" (generado)", " (generated)") : T(" (real)", " (real)")));
     }
 
     // Marcadores de simulacion (NVIDIA Reflex / PC Latency): cada fotograma real
@@ -646,8 +649,10 @@ class PresentMonReader {
     int& simCount = simSeen_[s.pid];
     if (simValid) {
       if (++simCount == kSimTrustFrames)
-        Message("Marcadores de simulacion (Reflex) disponibles en este juego: los uso para\n"
-                "  separar fotogramas reales y generados.");
+        Message(T("Marcadores de simulacion (Reflex) disponibles en este juego: los uso para\n"
+                  "  separar fotogramas reales y generados.",
+                  "Simulation markers (Reflex) available in this game: I use them to\n"
+                  "  separate real and generated frames."));
     }
     bool simTrusted = simCount >= kSimTrustFrames;
     // Si los marcadores desaparecen, dejar de confiar en ellos: con generacion de fotogramas nunca hay
@@ -662,8 +667,10 @@ class PresentMonReader {
       simTrusted = false;
       accum_[s.swapchain] = 0.0;  // lo acumulado de la racha era de fotogramas reales mal contados
       accumGpu_[s.swapchain] = 0.0;
-      Message("Marcadores de simulacion (Reflex) desaparecidos (el juego dejo de emitirlos, por ejemplo al\n"
-              "  desactivar la generacion de fotogramas): cuento los fotogramas como reales hasta que vuelvan.");
+      Message(T("Marcadores de simulacion (Reflex) desaparecidos (el juego dejo de emitirlos, por ejemplo al\n"
+                "  desactivar la generacion de fotogramas): cuento los fotogramas como reales hasta que vuelvan.",
+                "Simulation markers (Reflex) gone (the game stopped sending them, for example when\n"
+                "  frame generation was turned off): I count frames as real until they come back."));
     }
     if (simTrusted && !simValid) s.generated = true;
 
@@ -727,7 +734,10 @@ struct UiChange {
   int value = 0;    // fps en pantalla
   int fg = 1;       // factor de generacion de fotogramas
   bool manual = false;
-  double suggestFps = 0;  // modo "Solo sugerir": limite sugerido (fps reales), 0 si no hay
+  double suggestFps = 0;  // limite recomendado (fps), 0 si no hay
+  int suggestKind = 0;     // 0 subir, 1 bajar, 2 bajar (urgente)
+  bool prioSuggest = false;  // se recomienda pasar el juego a "Ritmo constante"
+  bool guidedPending = false;  // modo guiado: limite aun sin comprobar (la fila muestra la instruccion)
   int prioMode = 0;        // 0 = automatica, 1 = siempre Fluidez, 2 = siempre Estabilidad
   bool usesFluid = true;   // prioridad que se aplica a este juego
   bool autoStability = false;  // la app paso este juego a Estabilidad
@@ -738,15 +748,25 @@ struct UiState {
   UiStatus status = UiStatus::Starting;
   std::string statusText = "Iniciando…", statusDetail;
   std::string gpu, monitor, tip, driver;
+  // G-SYNC no se esta usando: 0 = sin aviso, 1 = portatil en modo hibrido, 2 = desactivado en el panel
+  // (la pantalla lo tenia antes). Se muestra en Ahora y en Juegos, con los pasos para activarlo.
+  int vrrAlert = 0;
   bool driverOk = false;
   bool haveGame = false;
+  // Ultima partida terminada (para "Ahora" sin juego abierto).
+  std::string lastGame;
+  double lastEnd = 0, lastMinutes = 0, lastFps = 0;
+  int lastHitches = 0;
+  bool lastLocked = false;
   std::string game, exe;
   double realFps = 0, lowFps = 0, screenFps = 0, steadyPct = 0, jitterMs = 0;
   int hitches = 0;
   std::string capText, bottleneck, recText, appliedText, notice, presentText;
   std::vector<UiChange> changes;
   std::map<std::string, std::string> warnings;  // .exe -> motivo para revisar su limite
-  std::map<std::string, double> suggestions;    // .exe -> subida sugerida (fps reales), modo "Solo sugerir"
+  std::map<std::string, double> suggestions;    // .exe -> limite recomendado (fps), con prioridad elegida a mano
+  std::map<std::string, int> suggestKind;       // .exe -> 0 subir, 1 bajar, 2 bajar (urgente: empeora el juego)
+  std::set<std::string> prioSuggest;            // .exe -> se recomienda pasarlo a "Ritmo constante"
   std::string vrrRange;     // rango de frecuencias declarado por el monitor
   bool vrrPossible = false, vrrNvKnown = false;
   int vrrState = 0;         // 0 sin datos, 1 no actua, 2 actua, 3 actua pero desactivado por el usuario
@@ -757,10 +777,19 @@ struct UiState {
 };
 static UiState g_ui;
 static std::atomic<bool> g_applyMode{true};
-static std::atomic<int> g_priority{1};  // 0 = estabilidad, 1 = fluidez (por defecto desde la 0.48.3)
+// Prioridad global (desde la 0.54): 0 = automatica (empieza con "Mas FPS" y pasa a "Ritmo constante" los
+// juegos inestables), 1 = siempre "Ritmo constante", 2 = siempre "Mas FPS". Se guarda como "prioridad":
+// auto, estabilidad o fluidez (los nombres internos de siempre). De el se derivan los dos de abajo.
+static std::atomic<int> g_prioMode{0};
+static std::atomic<int> g_priority{1};  // prioridad de partida: 0 = ritmo constante, 1 = mas FPS
 // Prioridad por juego: con Fluidez, un juego inestable con su limite pasa a Estabilidad
 // (prioridad-auto=no en equipo.txt lo desactiva). La prioridad global es el punto de partida.
-static std::atomic<bool> g_autoPriority{true};
+static std::atomic<bool> g_autoPriority{true};  // solo en modo automatico
+static void SetPrioMode(int mode) {
+  g_prioMode = mode;
+  g_priority = mode == 1 ? 0 : 1;
+  g_autoPriority = mode == 0;
+}
 // Usar G-SYNC / FreeSync cuando actuen (automatico). Ajuste avanzado, sin interfaz:
 // "divisores-siempre=si" en equipo.txt fuerza los divisores de los Hz aunque haya VRR, para
 // pantallas que parpadean con VRR (algunas OLED y VA).
@@ -774,6 +803,24 @@ static std::atomic<bool> g_maxPerf{true};
 // el limite sostenido no cambia nada). En los juegos con Reflex, Reflex tiene prioridad.
 // Avanzado: baja-latencia=no en equipo.txt lo desactiva.
 static std::atomic<bool> g_lowLatency{true};
+// Modo guiado (AMD e Intel, desde la 0.56): la app mide, decide y comprueba el limite, pero lo aplica el
+// usuario en el software de su grafica. 0 = no (NVIDIA o sin limitador), 1 = AMD, 2 = Intel.
+// El modo automatico solo existe con NVIDIA: los kits de AMD (ADLX) e Intel (IGCL) tienen licencias que
+// no encajan con un proyecto MIT de codigo abierto (ver README).
+static std::atomic<int> g_guidedVendor{0};
+// Limitador en uso: 0 = driver de NVIDIA, 1 = guiado, 2 = RivaTuner (RTSS). Solo el de NVIDIA lleva
+// "GPU al maximo"; sin el, la regla del 1 % bajo no baja limites (ver tailRuleOk).
+static std::atomic<int> g_limiterKind{0};
+// Desde la 0.58, el limitador es una eleccion del usuario en Juegos ("limitador" en equipo.txt: driver,
+// recomendar o rtss). Con AMD o Intel se empieza en "Solo recomendar": RTSS nunca se usa sin elegirlo.
+static std::atomic<bool> g_nvidiaAvailable{false}, g_rtssAvailable{false};
+static std::atomic<int> g_limiterReq{-1};  // cambio de limitador pedido desde la ventana (lo hace el motor)
+static const char* GuidedSoftware() {
+  return g_guidedVendor == 1 ? "AMD Software" : g_guidedVendor == 2 ? "Intel Graphics Software" : "";
+}
+// G-SYNC no disponible ahora (modo hibrido o desactivado): los limites decididos con el pueden empeorar
+// el movimiento, y cada juego afectado lo indica en su fila.
+static std::atomic<bool> g_vrrMissing{false};
 // Ultimo rendimiento de la CPU medido (% de su frecuencia nominal; -1 si no hay), para la grabacion.
 static std::atomic<double> g_cpuPerfPct{-1.0};
 // Overlay clasico (dibujado con el procesador y UpdateLayeredWindow) en lugar del de la GPU
@@ -783,7 +830,8 @@ static std::atomic<bool> g_overlayClassic{false};
 // Ajuste de limites: automatico (sube solo cuando el juego va sobrado) o "Solo sugerir" (muestra la
 // sugerencia con un boton para aplicarla). Se elige en Juegos (subir-solo en equipo.txt). Las bajadas
 // por la regla de fallos son automaticas en ambos modos.
-static std::atomic<bool> g_autoRaise{true};
+// Desde la 0.55, la app solo cambia los limites por su cuenta con la prioridad automatica y en los juegos
+// sin prioridad propia; si no, solo los recomienda (ver AppActsAlone).
 // Rango de VRR del monitor segun su EDID (0 = desconocido): el rango FreeSync si lo declara, si no
 // el rango de frecuencias. Por encima del maximo el VRR deja de actuar; por debajo del minimo, el
 // monitor solo sigue el ritmo si puede duplicar fotogramas (LFC, cuando maximo >= 2 x minimo).
@@ -819,10 +867,13 @@ static FILE* g_log = nullptr;
 
 static void UiAppendLog(const std::string& text);
 
+#include "src/core/log_text.h"
+
 static void Log(const char* fmt, ...) {
   char buf[2048];
   va_list a;
   va_start(a, fmt);
+  if (g_lang == 1) fmt = LogEnglish(fmt);
   int n = std::vsnprintf(buf, sizeof(buf), fmt, a);
   va_end(a);
   if (n < 0) return;
@@ -861,8 +912,19 @@ static std::wstring OpenLog() {
 #include "src/core/suggest.h"
 #include "src/core/decision.h"
 
+// Cuello de botella en el idioma de la app (el modulo compartido con las pruebas lo describe en espanol).
+static std::string BottleneckText(const WindowStats& st) {
+  const std::string b = st.Bottleneck();
+  if (b == "ninguno: hay un limite activo (el margen de CPU no se puede medir)")
+    return T("ninguno: hay un limite activo (el margen de CPU no se puede medir)",
+             "none: there is an active limit (the CPU headroom can't be measured)");
+  if (b == "desconocido") return T("desconocido", "unknown");
+  if (b == "mixto") return T("mixto", "mixed");
+  return b;
+}
+
 static void PrintAdvice(const WindowStats& st) {
-  std::string b = st.Bottleneck();
+  std::string b = BottleneckText(st);
   if (b == "GPU")
     Log("  Sugerencia: el freno es la GPU. Baja la resolucion o los ajustes mas\n"
         "  pesados (trazado de rayos, sombras) o usa DLSS/FSR en un modo mas agresivo.\n");
@@ -919,7 +981,7 @@ static void PrintCap(const WindowStats& st, double hz) {
     Log("  Limite activo detectado: ~%.0f fps. Encaja: G-SYNC/FreeSync actua dentro de su rango.\n", st.capFps);
   else if (st.capFits)
     Log("  Limite activo detectado: ~%.0f fps. Encaja con tu monitor (%.3f Hz / %d)%s.\n",
-        st.capFps, hz, st.capDivisor, st.capDivisor == 1 ? ", probablemente VSync" : "");
+        st.capFps, hz, st.capDivisor, st.capDivisor == 1 ? T(", probablemente VSync", ", probably VSync") : "");
   else
     Log("  Limite activo detectado: ~%.0f fps. NO encaja con tu monitor de %.0f Hz:\n"
         "  el ritmo sera irregular (y con tearing si el VSync esta apagado).\n"
@@ -941,9 +1003,9 @@ static void PrintStats(const WindowStats& st, double hz) {
   }
   if (st.HasBusy())
     Log("  Trabajo real p99: CPU %.2f ms%s | GPU %.2f ms\n", std::max(0.0, st.cpuBusyP99),
-        st.UseGpuOnly() ? " (no fiable con limite activo)" : "", std::max(0.0, st.gpuBusyP99));
+        st.UseGpuOnly() ? T(" (no fiable con limite activo)", " (not reliable with an active limit)") : "", std::max(0.0, st.gpuBusyP99));
   PrintCap(st, hz);
-  Log("  Cuello de botella: %s\n", st.Bottleneck().c_str());
+  Log("  Cuello de botella: %s\n", BottleneckText(st).c_str());
 }
 
 // ---------------------------------------------------------------------------
@@ -956,6 +1018,34 @@ static DWORD ForegroundPid(HWND* outWnd) {
   DWORD pid = 0;
   if (h) GetWindowThreadProcessId(h, &pid);
   return pid;
+}
+
+// Herramientas de captura de pantalla: al abrirlas pasan a primer plano, pero el usuario no ha salido del
+// juego (quiere capturarlo, overlay incluido). Se reconocen por el ejecutable; se recuerda por proceso.
+static bool IsCaptureTool(DWORD pid) {
+  if (pid == 0) return false;
+  static std::mutex m;
+  static std::map<DWORD, bool> cache;
+  std::lock_guard<std::mutex> lock(m);
+  auto it = cache.find(pid);
+  if (it != cache.end()) return it->second;
+  bool tool = false;
+  if (HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid)) {
+    wchar_t path[MAX_PATH];
+    DWORD n = MAX_PATH;
+    if (QueryFullProcessImageNameW(h, 0, path, &n)) {
+      std::wstring name(path, n);
+      name = name.substr(name.find_last_of(L"\\/") + 1);
+      std::transform(name.begin(), name.end(), name.begin(), ::towlower);
+      for (const wchar_t* t : {L"screenclippinghost.exe", L"snippingtool.exe", L"screensketch.exe", L"sharex.exe",
+                               L"greenshot.exe", L"lightshot.exe", L"gamebar.exe"})
+        tool = tool || name == t;
+    }
+    CloseHandle(h);
+  }
+  if (cache.size() > 256) cache.clear();
+  cache[pid] = tool;
+  return tool;
 }
 
 static bool WindowCoversMonitor(HWND h) {
@@ -1163,7 +1253,7 @@ static std::string GameLabel(HWND wnd, const std::wstring& path, const std::stri
   }
   std::string name = exe;
   if (name.size() > 4 && name.substr(name.size() - 4) == ".exe") name.resize(name.size() - 4);
-  return name.empty() ? std::string("(juego sin nombre)") : name;
+  return name.empty() ? std::string(T("(juego sin nombre)", "(unnamed game)")) : name;
 }
 
 // ---------------------------------------------------------------------------
@@ -1172,14 +1262,9 @@ static std::string GameLabel(HWND wnd, const std::wstring& path, const std::stri
 // Las funciones se obtienen de nvapi64.dll, que instala el propio driver.
 // ---------------------------------------------------------------------------
 #include "third_party/nvapi/nvapi_min.h"
+#include "src/core/limit_request.h"
 
 namespace nv {
-inline NvU32 VsyncForDivisor(int n) {
-  return n == 1 ? VSYNC_FORCEON : n == 2 ? VSYNC_FLIP2 : n == 3 ? VSYNC_FLIP3 : VSYNC_FLIP4;
-}
-inline int DivisorForVsync(NvU32 v) {
-  return v == VSYNC_FORCEON ? 1 : v == VSYNC_FLIP2 ? 2 : v == VSYNC_FLIP3 ? 3 : v == VSYNC_FLIP4 ? 4 : 0;
-}
 static void Copy(NvU16* dst, const std::wstring& s) {
   std::memset(dst, 0, sizeof(NvU16) * kStringMax);
   size_t n = std::min<size_t>(s.size(), kStringMax - 1);
@@ -1221,6 +1306,7 @@ struct AppliedChange {
 };
 
 static std::string DescribeChangeBase(const AppliedChange& c);
+static std::string GuidedInstruction(const std::string& label, uint32_t fps, bool vrr);  // modo guiado (AMD e Intel)
 static bool HasMaxPerf(const AppliedChange& c) {
   for (const auto& sv : c.saved)
     if (sv.id == nv::PREFERRED_PSTATE_ID) return true;
@@ -1228,28 +1314,38 @@ static bool HasMaxPerf(const AppliedChange& c) {
 }
 
 static std::string DescribeChange(const AppliedChange& c) {
-  std::string d = DescribeChangeBase(c);
-  if (c.vrr) d += " · G-SYNC";
-  if (c.manual) d += T(" · manual", " · manual");
-  if (HasMaxPerf(c)) d += T(" · GPU al máximo", " · GPU at max");
+  std::vector<std::string> extras;
+  if (c.vrr) extras.push_back("G-SYNC");
+  if (HasMaxPerf(c)) extras.push_back(T("GPU al máximo", "GPU at max"));
   if (c.method != Method::DriverVsync)  // con el VSync por intervalos la cola de 1 ya iba incluida
     for (const auto& sv : c.saved)
       if (sv.id == nv::PRERENDERLIMIT_ID) {
-        d += T(" · baja latencia", " · low latency");
+        extras.push_back(T("baja latencia", "low latency"));
         break;
       }
-  if (c.displayHz > 0) d += std::string(T(" · pantalla a ", " · display at ")) + std::to_string(c.displayHz) + " Hz";
+  if (c.displayHz > 0) extras.push_back(T("la pantalla a ", "the display at ") + std::to_string(c.displayHz) + " Hz");
+  std::string d = DescribeChangeBase(c);
+  for (size_t k = 0; k < extras.size(); ++k)
+    d += (k == 0 ? T(", con ", ", with ") : k + 1 == extras.size() ? T(" y ", " and ") : ", ") + extras[k];
+  if (c.manual) d += T(" (puesto a mano)", " (set by hand)");
   return d;
 }
+// Descripcion del limite con palabras (desde la 0.61; antes, una cadena con puntos medios):
+// "114 FPS en el driver de NVIDIA", y los extras en DescribeChange.
 static std::string DescribeChangeBase(const AppliedChange& c) {
+  const std::string fps = std::to_string(c.newValue) + " FPS";
   if (c.fgFactor > 1)
-    return std::to_string(c.newValue) + T(" fps en pantalla (", " fps on screen (") +
-           std::to_string(c.newValue / static_cast<uint32_t>(c.fgFactor)) +
-           T(" reales) · límite del driver", " real) · driver limit");
+    return fps + T(" en pantalla (", " on screen (") + std::to_string(c.newValue / static_cast<uint32_t>(c.fgFactor)) +
+           T(" reales)", " real)") +
+           (g_limiterKind == 2   ? T(" en RTSS", " in RTSS")
+            : g_limiterKind == 1 ? std::string(T(" en ", " in ")) + GuidedSoftware()
+                                 : std::string(T(" en el driver de NVIDIA", " in the NVIDIA driver")));
   if (c.method == Method::DriverVsync)
-    return std::to_string(c.newValue) + T(" fps · VSync del driver (1/", " fps · driver VSync (1/") +
-           std::to_string(c.divisor) + T(" del refresco)", " of refresh)");
-  return std::to_string(c.newValue) + T(" fps · límite del driver", " fps · driver limit");
+    return fps + T(" con el VSync del driver (1/", " with the driver's VSync (1/") + std::to_string(c.divisor) +
+           T(" del refresco)", " of refresh)");
+  if (g_limiterKind == 2) return fps + T(" en RTSS", " in RTSS");
+  if (g_limiterKind == 1) return fps + T(" en ", " in ") + GuidedSoftware();
+  return fps + T(" en el driver de NVIDIA", " in the NVIDIA driver");
 }
 
 class NvDriver {
@@ -1464,11 +1560,11 @@ class NvDriver {
  private:
   static std::string Describe(nv::Status st) {
     switch (st) {
-      case nv::INVALID_USER_PRIVILEGE: return "faltan permisos de administrador";
-      case nv::NVIDIA_DEVICE_NOT_FOUND: return "no se encontro una GPU NVIDIA";
-      case nv::PROFILE_NOT_FOUND: return "perfil no encontrado";
-      case nv::EXECUTABLE_NOT_FOUND: return "juego no encontrado en los perfiles";
-      default: return "error de NVAPI " + std::to_string(st);
+      case nv::INVALID_USER_PRIVILEGE: return T("faltan permisos de administrador", "administrator rights are missing");
+      case nv::NVIDIA_DEVICE_NOT_FOUND: return T("no se encontro una GPU NVIDIA", "no NVIDIA GPU found");
+      case nv::PROFILE_NOT_FOUND: return T("perfil no encontrado", "profile not found");
+      case nv::EXECUTABLE_NOT_FOUND: return T("juego no encontrado en los perfiles", "game not found in the profiles");
+      default: return T("error de NVAPI ", "NVAPI error ") + std::to_string(st);
     }
   }
 
@@ -1547,6 +1643,57 @@ class NvDriver {
   nv::SetSettingFn setSetting_ = nullptr;
   nv::DeleteSettingFn deleteSetting_ = nullptr;
   nv::DeleteProfileFn deleteProfile_ = nullptr;
+};
+
+// ---------------------------------------------------------------------------
+// Limitador del driver, comun a los fabricantes. El motor pide lo que quiere (LimitRequest) y cada
+// fabricante lo traduce a su driver. Hoy solo NVIDIA; Intel (IGCL) y AMD (ADLX) en preparacion.
+// ---------------------------------------------------------------------------
+enum class LimitExtra { MaxPerf, LowLatency };
+
+class LimitBackend {
+ public:
+  virtual ~LimitBackend() = default;
+  virtual const char* Vendor() const = 0;
+  // Deja en el driver exactamente lo pedido para el juego (guardando lo que hubiera para deshacerlo).
+  virtual bool Apply(const std::string& exe, const LimitRequest& req, AppliedChange& change) = 0;
+  virtual bool Revert(const AppliedChange& change) = 0;
+  // Un ajuste propio que quedo en el driver sin registro (por ejemplo, tras borrar los datos de la app).
+  virtual bool FindOwn(const std::string& exe, AppliedChange& out) = 0;
+  virtual bool HasExtra(const AppliedChange& c, LimitExtra e) const = 0;
+  virtual bool AddExtra(AppliedChange& c, LimitExtra e) = 0;
+  virtual bool RemoveExtra(AppliedChange& c, LimitExtra e) = 0;
+  virtual bool Vrr(const std::string& gdiName, bool& possible, bool& active) = 0;
+  virtual std::string Error() const = 0;
+};
+
+class NvidiaBackend final : public LimitBackend {
+ public:
+  explicit NvidiaBackend(NvDriver& d) : d_(d) {}
+  const char* Vendor() const override { return "NVIDIA"; }
+  bool Apply(const std::string& exe, const LimitRequest& req, AppliedChange& change) override {
+    return d_.ApplySettings(exe, NvDesired(req), change);
+  }
+  bool Revert(const AppliedChange& change) override { return d_.Revert(change); }
+  bool FindOwn(const std::string& exe, AppliedChange& out) override { return d_.FindOwnProfile(exe, out); }
+  bool HasExtra(const AppliedChange& c, LimitExtra e) const override {
+    const uint32_t id = Id(e);
+    return std::any_of(c.saved.begin(), c.saved.end(), [&](const SavedSetting& sv) { return sv.id == id; });
+  }
+  bool AddExtra(AppliedChange& c, LimitExtra e) override {
+    return d_.AddSetting(c, Id(e), e == LimitExtra::MaxPerf ? nv::PSTATE_PREFER_MAX : 1u);
+  }
+  bool RemoveExtra(AppliedChange& c, LimitExtra e) override { return d_.RemoveSetting(c, Id(e)); }
+  bool Vrr(const std::string& gdiName, bool& possible, bool& active) override {
+    return d_.Vrr(gdiName, possible, active);
+  }
+  std::string Error() const override { return d_.error; }
+
+ private:
+  static uint32_t Id(LimitExtra e) {
+    return e == LimitExtra::MaxPerf ? nv::PREFERRED_PSTATE_ID : nv::PRERENDERLIMIT_ID;
+  }
+  NvDriver& d_;
 };
 
 // Registro persistente de cambios, para poder deshacerlos aunque la app se cierre.
@@ -1974,8 +2121,8 @@ static void PrintSessionSummary(const Session& s, double hz) {
         PercentileSorted(d, 99));
   }
   if (s.pcLatLimited.size() >= 300 || s.pcLatOther.size() >= 300) {
-    latLine(s.pcLatLimited, "con el limite");
-    latLine(s.pcLatOther, s.pcLatLimited.size() >= 300 ? "sin limite o antes de comprobarlo" : "");
+    latLine(s.pcLatLimited, T("con el limite", "with the limit"));
+    latLine(s.pcLatOther, s.pcLatLimited.size() >= 300 ? T("sin limite o antes de comprobarlo", "without a limit or before checking it") : "");
   }
   // Partida sin limite de la app y sin generacion de fotogramas: su latencia es la referencia "antes".
   if (!s.appliedAtStart && s.expectedFps <= 0 && !FrameGenInvolved(s) && s.pcLatOther.size() >= 1000 &&
@@ -2089,7 +2236,7 @@ static void PrintSessionSummary(const Session& s, double hz) {
           draws / wall);
     Log("\n");
   }
-  Log("  Generacion de fotogramas: %s\n", s.fgEverSeen ? "detectada" : "no detectada");
+  Log("  Generacion de fotogramas: %s\n", s.fgEverSeen ? T("detectada", "detected") : T("no detectada", "not detected"));
   if (!s.MainPresentMode().empty())
     Log("  Presentacion: %s\n", s.MainPresentMode().c_str());
 
@@ -2209,6 +2356,45 @@ static void PrintSessionSummary(const Session& s, double hz) {
 // Prioridad de un juego: elegida por el usuario en su fila ("prioridad-fija|exe": fluidez o
 // estabilidad), o automatica: la global, salvo que la app haya pasado el juego a Estabilidad.
 // mode: 0 = automatica, 1 = siempre Fluidez, 2 = siempre Estabilidad. Devuelve si usa Fluidez.
+// El limite que detecta la medicion es el que aplico FlatPace (con un margen del 5 %: el detector lo ve
+// redondeado, y en las zonas pesadas aparece y desaparece). Ese no es un limite ajeno: no se anuncia.
+static bool IsOwnCap(double capFps, double expectedFps) {
+  return expectedFps > 0 && capFps > 0 && std::fabs(capFps - expectedFps) <= 0.05 * expectedFps;
+}
+
+// La app solo cambia limites y prioridades por su cuenta con la prioridad automatica y en los juegos sin
+// prioridad propia. Con una prioridad elegida a mano, el usuario decide: la app solo recomienda.
+static bool AppActsAlone(bool gamePrioFixed) { return g_prioMode == 0 && !gamePrioFixed; }
+
+// Recomendacion de limite guardada en equipo.txt ("sugerencia|exe" = limite;tipo;limite actual) y su texto.
+static std::string RecommendationText(int kind, double from, double to) {
+  if (kind == 0)
+    return Fmt(T("Va sobrado: podría subir de %.0f a %.0f FPS.", "It has headroom: it could go from %.0f to %.0f FPS."), from, to);
+  if (kind == 2)
+    return Fmt(T("No sostiene %.0f FPS y, sin G-SYNC, eso empeora el movimiento: te recomiendo bajarlo a %.0f.",
+                 "It can't hold %.0f FPS and, without G-SYNC, that makes motion worse: I recommend lowering it to %.0f."),
+               from, to);
+  return Fmt(T("No sostiene %.0f FPS en buena parte de la partida: te recomiendo bajarlo a %.0f.",
+               "It can't hold %.0f FPS for a good part of the session: I recommend lowering it to %.0f."),
+             from, to);
+}
+static void SetRecommendation(const std::string& exe, int kind, double from, double to) {
+  WriteKv(L"equipo.txt", "sugerencia|" + exe, Fmt("%.0f;%d;%.0f", to, kind, from));
+  std::lock_guard<std::mutex> lock(g_ui.m);
+  g_ui.suggestions[exe] = to;
+  g_ui.suggestKind[exe] = kind;
+  g_ui.warnings[exe] = RecommendationText(kind, from, to);
+}
+static void ClearRecommendation(const std::string& exe) {
+  WriteKv(L"equipo.txt", "sugerencia|" + exe, "");
+  std::lock_guard<std::mutex> lock(g_ui.m);
+  g_ui.suggestions.erase(exe);
+  g_ui.suggestKind.erase(exe);
+  g_ui.warnings.erase(exe);
+}
+static const char* kPrioSuggestText_es = "Es inestable con «Más FPS» (sus fotogramas más lentos se hunden): te recomiendo «Ritmo constante».";
+static const char* kPrioSuggestText_en = "It's unstable with “More FPS” (its slowest frames sink): I recommend “Steady pace”.";
+
 static bool GameUsesFluid(const std::string& exe, int* mode = nullptr, bool* autoStability = nullptr) {
   const std::string fixed = ReadKv(L"equipo.txt", "prioridad-fija|" + exe);
   const bool autoSt = g_autoPriority && AutoPriority::Parse(ReadKv(L"equipo.txt", "prioridad|" + exe)).stability;
@@ -2339,7 +2525,7 @@ static void ProcessSession(Session& ss, std::vector<FrameSample>& fresh, double 
       ss.hitchTotal += events;
       ss.worstHitch = std::max(ss.worstHitch, worst);
       Log("[%5.0f s] TIRON%s: %d, el peor de %.0f ms (normal ~%.0f ms)\n", ss.T(now),
-          events > 1 ? "ES" : "", events, worst, ss.lastStats.medianMs);
+          events > 1 ? T("ES", "S") : "", events, worst, ss.lastStats.medianMs);
     }
     if (pauses > 0) {
       ss.pauseTotal += pauses;
@@ -2412,8 +2598,8 @@ static void ProcessSession(Session& ss, std::vector<FrameSample>& fresh, double 
     if (!mode.empty() && mode != ss.announcedMode && ss.presentModes[mode] > 200) {
       ss.announcedMode = mode;
       Log("[%5.0f s] Presentacion del juego: %s (%s)\n", ss.T(now), mode.c_str(),
-          ss.IsComposed() ? "pasa por el compositor: sin tearing posible"
-                          : "directa: puede haber tearing si el VSync esta apagado");
+          ss.IsComposed() ? T("pasa por el compositor: sin tearing posible", "goes through the compositor: no tearing possible")
+                          : T("directa: puede haber tearing si el VSync esta apagado", "direct: tearing possible if VSync is off"));
     }
   }
   for (auto& s : fresh) ss.samples.push_back(std::move(s));
@@ -2546,7 +2732,7 @@ static void ProcessSession(Session& ss, std::vector<FrameSample>& fresh, double 
     ss.hasPrevRec = false;
     ss.haveRec = true;
     ss.lastStatus = now;
-    ss.announcedCapped = st.capped;
+    ss.announcedCapped = st.capped && !IsOwnCap(st.capFps, ss.expectedFps);
     ss.announcedCapFps = st.capFps;
     Log("\n=== Recomendacion para %s (%.0f s, %zu fotogramas reales) ===\n", ss.label.c_str(),
         elapsedPhase, st.frames);
@@ -2556,15 +2742,17 @@ static void ProcessSession(Session& ss, std::vector<FrameSample>& fresh, double 
     return;
   }
 
-  // Cambios en el limite activo (confirmados durante varios segundos).
-  bool capDiffers = st.capped != ss.announcedCapped ||
-                    (st.capped && std::fabs(st.capFps - ss.announcedCapFps) > 0.5);
+  // Cambios en el limite activo (confirmados durante varios segundos). El de la propia app no cuenta como
+  // limite ajeno: hasta la 0.55 se anunciaba una y otra vez, segun la zona del juego.
+  const bool foreignCap = st.capped && !IsOwnCap(st.capFps, ss.expectedFps);
+  bool capDiffers = foreignCap != ss.announcedCapped ||
+                    (foreignCap && std::fabs(st.capFps - ss.announcedCapFps) > 0.5);
   ss.capChangeCount = capDiffers ? ss.capChangeCount + 1 : 0;
   if (ss.capChangeCount >= cfg::kCapChangeChecks) {
     Log("\n[%5.0f s] %s\n", ss.T(now),
-        st.capped ? "Nuevo limite activo:" : "Ya no hay un limite activo.");
-    PrintCap(st, hz);
-    ss.announcedCapped = st.capped;
+        foreignCap ? T("Nuevo limite activo:", "New active limit:") : T("Ya no hay un limite activo.", "There is no active limit anymore."));
+    if (foreignCap) PrintCap(st, hz);
+    ss.announcedCapped = foreignCap;
     ss.announcedCapFps = st.capFps;
     ss.capChangeCount = 0;
   }
@@ -2594,13 +2782,13 @@ static void ProcessSession(Session& ss, std::vector<FrameSample>& fresh, double 
     ss.downCount = nxt < cur - minStep ? ss.downCount + 1 : 0;
     if (ss.upCount >= cfg::kUpChecks || ss.downCount >= 10) {
       if (ss.fluid)
-        Log("\n[%5.0f s] %s (prioridad: fluidez).\n", ss.T(now),
-            nxt > cur ? "SUBIR limite: el juego alcanza un ritmo mas alto la mayor parte del tiempo"
-                      : "BAJAR limite: el juego ya no alcanza este ritmo la mayor parte del tiempo");
+        Log("\n[%5.0f s] %s (prioridad: mas FPS).\n", ss.T(now),
+            nxt > cur ? T("SUBIR limite: el juego alcanza un ritmo mas alto la mayor parte del tiempo", "RAISE limit: the game reaches a higher pace most of the time")
+                      : T("BAJAR limite: el juego ya no alcanza este ritmo la mayor parte del tiempo", "LOWER limit: the game no longer reaches this pace most of the time"));
       else
-        Log("\n[%5.0f s] %s (prioridad: estabilidad).\n", ss.T(now),
-            nxt > cur ? "SUBIR limite: el juego sostiene un ritmo mas alto incluso en sus peores momentos"
-                      : "BAJAR limite: en sus peores momentos el juego ya no sostiene este ritmo");
+        Log("\n[%5.0f s] %s (prioridad: ritmo constante).\n", ss.T(now),
+            nxt > cur ? T("SUBIR limite: el juego sostiene un ritmo mas alto incluso en sus peores momentos", "RAISE limit: the game holds a higher pace even in its worst moments")
+                      : T("BAJAR limite: en sus peores momentos el juego ya no sostiene este ritmo", "LOWER limit: in its worst moments the game no longer holds this pace"));
       ss.ChangeRec(fr, st, now);
       PrintRecommendation(ss.current, hz, st);
       ss.upCount = ss.downCount = 0;
@@ -2628,7 +2816,7 @@ static void ProcessSession(Session& ss, std::vector<FrameSample>& fresh, double 
     ss.downCount = ss.upCount = 0;
   } else if (ss.upCount >= cfg::kUpChecks) {
     Log("\n[%5.0f s] %s: hay margen estable desde hace %d s.\n", ss.T(now),
-        ss.current.valid ? "SUBIR limite" : "Ahora si hay un limite sostenible", cfg::kUpChecks);
+        ss.current.valid ? T("SUBIR limite", "RAISE limit") : T("Ahora si hay un limite sostenible", "Now there is a sustainable limit"), cfg::kUpChecks);
     ss.ChangeRec(higher, st, now);
     PrintRecommendation(ss.current, hz, st);
     ss.downCount = ss.upCount = 0;
@@ -2639,17 +2827,17 @@ static void ProcessSession(Session& ss, std::vector<FrameSample>& fresh, double 
     std::string extra;
     char buf[96];
     if (st.GeneratedFraction() > cfg::kFgOnFraction) {
-      std::snprintf(buf, sizeof(buf), " | en pantalla ~%.0f fps", st.presentedFps);
+      std::snprintf(buf, sizeof(buf), T(" | en pantalla ~%.0f fps", " | on screen ~%.0f fps"), st.presentedFps);
       extra += buf;
     }
-    if (st.capped) {
-      std::snprintf(buf, sizeof(buf), " | limite activo ~%.0f%s", st.capFps,
-                    st.capFits ? "" : " (no encaja)");
+    if (st.capped && !IsOwnCap(st.capFps, ss.expectedFps)) {
+      std::snprintf(buf, sizeof(buf), T(" | limite activo ~%.0f%s", " | active limit ~%.0f%s"), st.capFps,
+                    st.capFits ? "" : T(" (no encaja)", " (doesn't fit)"));
       extra += buf;
     }
     // El modelo de capacidad (datos censurados) solo se calcula en el resumen de la partida: cada
     // 5 s mientras se juega anadia un pico de trabajo que coincidia con fotogramas lentos.
-    if (const double gl = GameLowFps(ss); gl > 0) extra += Fmt(" | 1%% bajo del juego ~%.0f fps", gl);
+    if (const double gl = GameLowFps(ss); gl > 0) extra += Fmt(T(" | 1%% bajo del juego ~%.0f fps", " | game's 1%% low ~%.0f fps"), gl);
     std::string rec = ss.current.valid
                           ? std::to_string(static_cast<int>(ss.current.capFps + 0.5)) + " fps"
                           : std::string("ninguno");
@@ -2657,7 +2845,7 @@ static void ProcessSession(Session& ss, std::vector<FrameSample>& fresh, double 
         " | consistencia %.0f%% (var %.2f ms)%s | recomendado %s | tirones %d\n",
         ss.T(now), st.medianMs, 1000.0 / st.medianMs, extra.c_str(), st.p99Ms, st.WorkP99(),
         100.0 * st.steady2, st.jitterMs,
-        st.animErrMs >= 0 ? Fmt(" | animacion %.2f ms", st.animErrMs).c_str() : "", rec.c_str(),
+        st.animErrMs >= 0 ? Fmt(T(" | animacion %.2f ms", " | animation %.2f ms"), st.animErrMs).c_str() : "", rec.c_str(),
         ss.hitchTotal);
     ss.lastStatus = now;
   }
@@ -2828,7 +3016,7 @@ static double ReliableRefresh(IDXGIOutput* out, const std::string& key, double n
     bool clean = rr.ok && rr.missed <= 2 && rr.jitterUs < 500.0;
     bool coherent = ref <= 0 || (rr.ok && std::fabs(rr.hz - ref) / ref < 0.002);
     Log("  Intento %d: %.3f Hz | perdidos: %d | dispersion: %.0f us%s\n", attempt, rr.hz, rr.missed,
-        rr.jitterUs, clean && coherent ? "  -> valida" : "  -> ruidosa, repito");
+        rr.jitterUs, clean && coherent ? T("  -> valida", "  -> valid") : T("  -> ruidosa, repito", "  -> noisy, retrying"));
     if (clean && coherent) {
       WriteCachedHz(key, rr.hz);
       if (cleanOut) *cleanOut = true;
@@ -3070,10 +3258,12 @@ class Window {
     if (!g_overlayClassic) {
       std::string why;
       gpu_ = InitGpu(why);
-      pendingNote_ = gpu_ ? std::string("Overlay: dibujado con la GPU (DirectComposition).\n")
-                          : "Overlay: no pude usar la GPU (" + why + "); uso el overlay clasico.\n";
+      pendingNote_ = gpu_ ? std::string(T("Overlay: dibujado con la GPU (DirectComposition).\n",
+                                          "Overlay: drawn with the GPU (DirectComposition).\n"))
+                          : T("Overlay: no pude usar la GPU (", "Overlay: couldn't use the GPU (") + why +
+                                T("); uso el overlay clasico.\n", "); using the classic overlay.\n");
     } else {
-      pendingNote_ = "Overlay: clasico (overlay=clasico en equipo.txt).\n";
+      pendingNote_ = T("Overlay: clasico (overlay=clasico en equipo.txt).\n", "Overlay: classic (overlay=clasico in equipo.txt).\n");
     }
   }
 
@@ -3147,8 +3337,10 @@ class Window {
     HWND fg = GetForegroundWindow();
     DWORD fgPid = 0;
     if (fg) GetWindowThreadProcessId(fg, &fgPid);
-    bool show = enabled && pid != 0 && fgPid == pid && real.size() >= 10;
-    state = !enabled ? 1 : pid == 0 ? 2 : fgPid != pid ? 3 : real.size() < 10 ? 4 : 0;
+    // Con una herramienta de captura delante, el overlay sigue visible si lo estaba (para poder capturarlo).
+    const bool front = fgPid == pid || (visible_ && IsCaptureTool(fgPid));
+    bool show = enabled && pid != 0 && front && real.size() >= 10;
+    state = !enabled ? 1 : pid == 0 ? 2 : !front ? 3 : real.size() < 10 ? 4 : 0;
     if (!show) {
       if (visible_) { ShowWindow(ActiveHwnd(), SW_HIDE); visible_ = false; }
       return;
@@ -3911,9 +4103,23 @@ static void PublishChanges(const ChangeStore& store) {
     u.fg = std::max(1, c.fgFactor);
     u.manual = c.manual;
     auto sg = g_ui.suggestions.find(exe);
-    if (sg != g_ui.suggestions.end() && !c.manual) u.suggestFps = sg->second;
+    if (sg != g_ui.suggestions.end() && !c.manual) {
+      u.suggestFps = sg->second;
+      auto sk = g_ui.suggestKind.find(exe);
+      u.suggestKind = sk != g_ui.suggestKind.end() ? sk->second : 0;
+    }
+    u.prioSuggest = !c.manual && g_ui.prioSuggest.count(exe) > 0;
     auto w = g_ui.warnings.find(exe);
     if (w != g_ui.warnings.end()) u.warning = w->second;
+    if (g_limiterKind == 1 && !c.verified && u.warning.empty()) {
+      u.warning = GuidedInstruction(u.label, c.newValue, c.vrr);
+      u.guidedPending = true;
+    }
+    if (g_vrrMissing && c.vrr && u.warning.empty())
+      u.warning = T("Decidido con G-SYNC, que ahora no está activo: este límite puede empeorar el movimiento. "
+                    "Activa G-SYNC (aviso de arriba) o pulsa «Deshacer» para recalcularlo.",
+                    "Decided with G-SYNC, which isn't active now: this limit can make motion worse. Turn "
+                    "G-SYNC on (notice above) or press “Undo” to recalculate it.");
     g_ui.changes.push_back(u);
   }
 }
@@ -3931,9 +4137,251 @@ static void SetWarning(const ChangeStore& store, const std::string& exe, const s
 
 
 // Deshace todos los cambios. Devuelve un resumen legible.
-static std::string UndoAll(NvDriver& nvd, ChangeStore& store, bool nvOk) {
+// Modo guiado: no toca ningun driver. "Aplicar" registra el limite; la instruccion para el usuario y la
+// comprobacion de que funciona (midiendo el juego) las hacen la ventana y el motor.
+class GuidedBackend final : public LimitBackend {
+ public:
+  const char* Vendor() const override { return GuidedSoftware(); }
+  bool Apply(const std::string& exe, const LimitRequest& req, AppliedChange& change) override {
+    if (req.frl == 0) return false;  // el VSync por intervalos es exclusivo del driver de NVIDIA
+    if (change.exe.empty()) {
+      change = AppliedChange{};
+      change.exe = exe;
+    }
+    return true;
+  }
+  bool Revert(const AppliedChange&) override { return true; }
+  bool FindOwn(const std::string&, AppliedChange&) override { return false; }
+  bool HasExtra(const AppliedChange&, LimitExtra) const override { return false; }
+  bool AddExtra(AppliedChange&, LimitExtra) override { return false; }
+  bool RemoveExtra(AppliedChange&, LimitExtra) override { return false; }
+  bool Vrr(const std::string&, bool&, bool&) override { return false; }
+  std::string Error() const override { return ""; }
+};
+
+// RivaTuner Statistics Server (RTSS): limite automatico con cualquier grafica, si esta instalado. Se usa su
+// propia biblioteca (RTSSHooks64.dll, en la carpeta de RTSS), como hacen otras herramientas: se carga el
+// perfil del juego ("juego.exe"), se cambia FramerateLimit (fps enteros, hasta 1000), se guarda y se pide a
+// RTSS que recargue los perfiles. Solo se declaran sus funciones; no se incluye ningun archivo de RTSS.
+// Para deshacer, se guarda el limite que tenia el perfil (si existia) o se borra el perfil creado.
+constexpr uint32_t kRtssLimitId = 0x52545353u;  // "RTSS": entrada en AppliedChange::saved
+class RtssBackend final : public LimitBackend {
+ public:
+  ~RtssBackend() override {
+    if (dll_) FreeLibrary(dll_);
+  }
+  bool Init() {
+    wchar_t dir[MAX_PATH] = {};
+    DWORD size = sizeof(dir), type = 0;
+    HKEY key = nullptr;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"Software\\WOW6432Node\\Unwinder\\RTSS", 0, KEY_READ, &key) == ERROR_SUCCESS) {
+      if (RegQueryValueExW(key, L"InstallDir", nullptr, &type, reinterpret_cast<LPBYTE>(dir), &size) != ERROR_SUCCESS ||
+          type != REG_SZ)
+        dir[0] = 0;
+      RegCloseKey(key);
+    }
+    dir_ = dir[0] ? dir : L"C:\\Program Files (x86)\\RivaTuner Statistics Server";
+    dll_ = LoadLibraryW((dir_ + L"\\RTSSHooks64.dll").c_str());
+    if (!dll_) {
+      error_ = "RTSS no instalado";
+      return false;
+    }
+    load_ = Proc<ProfileFn>("LoadProfile");
+    save_ = Proc<ProfileFn>("SaveProfile");
+    del_ = Proc<ProfileFn>("DeleteProfile");
+    get_ = Proc<PropFn>("GetProfileProperty");
+    set_ = Proc<PropFn>("SetProfileProperty");
+    update_ = Proc<UpdateFn>("UpdateProfiles");
+    if (!load_ || !save_ || !del_ || !get_ || !set_ || !update_) {
+      error_ = "RTSSHooks64.dll sin las funciones de perfiles";
+      FreeLibrary(dll_);
+      dll_ = nullptr;
+      return false;
+    }
+    return true;
+  }
+  const std::wstring& Dir() const { return dir_; }
+  const char* Vendor() const override { return "RTSS"; }
+  bool Apply(const std::string& exe, const LimitRequest& req, AppliedChange& change) override {
+    if (!dll_ || req.frl == 0 || req.frl > 1000) {
+      error_ = req.frl == 0 ? "RTSS no hace VSync por intervalos" : "limite fuera del rango de RTSS";
+      return false;
+    }
+    if (change.exe.empty()) {
+      change = AppliedChange{};
+      change.exe = exe;
+    }
+    const bool known = std::any_of(change.saved.begin(), change.saved.end(),
+                                   [](const SavedSetting& sv) { return sv.id == kRtssLimitId; });
+    if (!known) {
+      // Lo que habia antes, para deshacerlo: el limite del perfil, si el juego ya tenia uno en RTSS.
+      SavedSetting sv;
+      sv.id = kRtssLimitId;
+      sv.had = GetFileAttributesW((dir_ + L"\\Profiles\\" + Widen(exe) + L".cfg").c_str()) != INVALID_FILE_ATTRIBUTES;
+      if (sv.had) {
+        DWORD old = 0;
+        load_(exe.c_str());
+        if (get_("FramerateLimit", reinterpret_cast<BYTE*>(&old), sizeof(old))) sv.old = old;
+      }
+      change.saved.push_back(sv);
+    }
+    DWORD den = 1, fps = req.frl;
+    load_(exe.c_str());
+    set_("FramerateLimitDenominator", reinterpret_cast<BYTE*>(&den), sizeof(den));  // fps enteros
+    if (!set_("FramerateLimit", reinterpret_cast<BYTE*>(&fps), sizeof(fps))) {
+      error_ = "RTSS no acepto el limite";
+      return false;
+    }
+    save_(exe.c_str());
+    update_();
+    return true;
+  }
+  bool Revert(const AppliedChange& change) override {
+    if (!dll_) {
+      error_ = "RTSS no disponible";
+      return false;
+    }
+    for (const auto& sv : change.saved)
+      if (sv.id == kRtssLimitId) {
+        if (sv.had) {
+          DWORD old = sv.old;
+          load_(change.exe.c_str());
+          set_("FramerateLimit", reinterpret_cast<BYTE*>(&old), sizeof(old));
+          save_(change.exe.c_str());
+        } else {
+          del_(change.exe.c_str());
+        }
+        update_();
+      }
+    return true;
+  }
+  bool FindOwn(const std::string&, AppliedChange&) override { return false; }
+  bool HasExtra(const AppliedChange&, LimitExtra) const override { return false; }
+  bool AddExtra(AppliedChange&, LimitExtra) override { return false; }
+  bool RemoveExtra(AppliedChange&, LimitExtra) override { return false; }
+  bool Vrr(const std::string&, bool&, bool&) override { return false; }
+  std::string Error() const override { return error_; }
+
+ private:
+  template <typename F>
+  F Proc(const char* name) const {
+    return reinterpret_cast<F>(reinterpret_cast<void*>(GetProcAddress(dll_, name)));
+  }
+  using ProfileFn = void (*)(const char*);
+  using PropFn = BOOL (*)(const char*, BYTE*, DWORD);
+  using UpdateFn = void (*)();
+  HMODULE dll_ = nullptr;
+  std::wstring dir_;
+  std::string error_;
+  ProfileFn load_ = nullptr, save_ = nullptr, del_ = nullptr;
+  PropFn get_ = nullptr, set_ = nullptr;
+  UpdateFn update_ = nullptr;
+};
+
+static bool ProcessRunning(const wchar_t* name) {
+  HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+  if (snap == INVALID_HANDLE_VALUE) return false;
+  PROCESSENTRY32W pe{};
+  pe.dwSize = sizeof(pe);
+  bool found = false;
+  for (BOOL ok = Process32FirstW(snap, &pe); ok && !found; ok = Process32NextW(snap, &pe))
+    found = _wcsicmp(pe.szExeFile, name) == 0;
+  CloseHandle(snap);
+  return found;
+}
+
+// El limitador en uso: NVIDIA (automatico), RTSS o el guiado; se elige al detectar las graficas.
+class BackendSelector final : public LimitBackend {
+ public:
+  explicit BackendSelector(LimitBackend* nv) : b_(nv), nv_(nv) {}
+  void Use(LimitBackend* b) { b_ = b; }
+  void SetRtss(LimitBackend* r) { rtss_ = r; }
+  const char* Vendor() const override { return b_->Vendor(); }
+  bool Apply(const std::string& e, const LimitRequest& r, AppliedChange& c) override { return b_->Apply(e, r, c); }
+  bool Revert(const AppliedChange& c) override {
+    // Cada cambio se deshace con la pieza que lo aplico, aunque ahora se use otra: RTSS si guardo su
+    // entrada; el driver de NVIDIA si guardo ajustes del driver; si no (modo guiado), la actual.
+    const bool viaRtss = std::any_of(c.saved.begin(), c.saved.end(), [](const SavedSetting& sv) { return sv.id == kRtssLimitId; });
+    if (viaRtss) return rtss_ && rtss_->Revert(c);
+    if (!c.saved.empty() || c.createdProfile) return nv_->Revert(c);
+    return b_->Revert(c);
+  }
+  bool FindOwn(const std::string& e, AppliedChange& o) override { return b_->FindOwn(e, o); }
+  bool HasExtra(const AppliedChange& c, LimitExtra x) const override { return b_->HasExtra(c, x); }
+  bool AddExtra(AppliedChange& c, LimitExtra x) override { return b_->AddExtra(c, x); }
+  bool RemoveExtra(AppliedChange& c, LimitExtra x) override { return b_->RemoveExtra(c, x); }
+  bool Vrr(const std::string& g, bool& p, bool& a) override { return b_->Vrr(g, p, a); }
+  std::string Error() const override { return b_->Error(); }
+
+ private:
+  LimitBackend* b_;
+  LimitBackend* nv_;
+  LimitBackend* rtss_ = nullptr;
+};
+
+// Instruccion para aplicar a mano un limite en el software de la grafica (modo guiado). Con VRR, se
+// recuerda tambien el VSync del driver (con NVIDIA lo activa la app: con el limite, evita salirse del
+// rango del VRR); y siempre, la opcion de baja latencia del fabricante, en lugar de la de NVIDIA.
+static std::string GuidedInstruction(const std::string& label, uint32_t fps, bool vrr) {
+  if (g_guidedVendor == 1)
+    return Fmt(T("Aplícalo tú: en AMD Software, Juegos → %s → Radeon Chill, con mínimo y máximo a %u FPS (o usa el "
+                 "limitador del propio juego).%s Para menos retraso, activa también Radeon Anti-Lag. Al abrir el "
+                 "juego, la app comprobará que funciona. Con RivaTuner (RTSS) instalado, lo aplicaría yo.",
+                 "Apply it yourself: in AMD Software, Gaming → %s → Radeon Chill, with minimum and maximum at %u FPS "
+                 "(or use the game's own limiter).%s For less delay, also turn on Radeon Anti-Lag. When you open the "
+                 "game, the app will check that it works. With RivaTuner (RTSS) installed, I'd apply it myself."),
+               label.c_str(), fps,
+               vrr ? T(" Con FreeSync, pon también «Esperar a la actualización vertical» en «Siempre activado», "
+                       "para no salirte de su rango.",
+                       " With FreeSync, also set “Wait for Vertical Refresh” to “Always On”, so you stay within "
+                       "its range.")
+                   : "");
+  return Fmt(T("Aplícalo tú: en Intel Graphics Software, en la configuración de %s, pon el limitador de FPS a %u (o usa "
+               "el limitador del propio juego).%s Si tu versión tiene una opción de baja latencia, actívala también. "
+               "Al abrir el juego, la app comprobará que funciona. Con RivaTuner (RTSS) instalado, lo aplicaría yo.",
+               "Apply it yourself: in Intel Graphics Software, in %s's settings, set the FPS limiter to %u (or use the "
+               "game's own limiter).%s If your version has a low latency option, turn it on too. When you open the "
+               "game, the app will check that it works. With RivaTuner (RTSS) installed, I'd apply it myself."),
+             label.c_str(), fps,
+             vrr ? T(" Con Adaptive-Sync, activa también la sincronización vertical (VSync), para no salirte de su "
+                     "rango.",
+                     " With Adaptive-Sync, also turn on vertical sync (VSync), so you stay within its range.")
+                 : "");
+}
+
+// Texto del limitador en uso para la ventana (seccion Equipo).
+static std::string LimiterUiText(const std::string& nvError) {
+  if (g_limiterKind == 2) return T("RTSS: límites automáticos con RivaTuner", "RTSS: automatic limits with RivaTuner");
+  if (g_limiterKind == 1)
+    return std::string(g_guidedVendor == 1 ? "AMD" : "Intel") +
+           T(": solo recomendar (tú aplicas los límites; la app los comprueba)",
+             ": recommend only (you apply the limits; the app checks them)");
+  if (g_nvidiaAvailable) return T("NVIDIA: disponible", "NVIDIA: available");
+  return std::string(T("NVIDIA: no disponible (", "NVIDIA: not available (")) + nvError + ")";
+}
+
+static void LogLimiter(const std::string& rtssDir) {
+  if (g_limiterKind == 2) {
+    Log("  Limitador: RivaTuner Statistics Server (RTSS, %s): aplico los limites en su perfil de cada juego.\n",
+        rtssDir.c_str());
+    if (!ProcessRunning(L"RTSS.exe"))
+      Log("  Aviso: RTSS no esta abierto. Su limitador solo actua mientras esta en marcha: abrelo antes de jugar.\n");
+    Log("  Con G-SYNC/FreeSync, activa tambien el VSync del driver (no lo hace RTSS): con el limite, evita\n"
+        "  salirse del rango del VRR.\n");
+    if (g_nvidiaAvailable) Log("  (Con NVIDIA: sin \"GPU al maximo\" ni baja latencia del driver.)\n");
+  } else if (g_limiterKind == 1) {
+    Log("  Limitador: solo recomendar (%s): mido, decido y compruebo los limites; tu los aplicas en %s.\n"
+        "  Con RivaTuner (RTSS) instalado, puedes elegirlo como limitador en Juegos. (El modo automatico con el\n"
+        "  driver solo existe con NVIDIA: ver el README.)\n",
+        g_guidedVendor == 1 ? "AMD" : "Intel", GuidedSoftware());
+  } else if (g_nvidiaAvailable) {
+    Log("  Limitador: driver de NVIDIA.\n");
+  }
+}
+
+static std::string UndoAll(LimitBackend& nvd, ChangeStore& store, bool nvOk) {
   if (store.items.empty()) return T("No hay cambios de FlatPace que deshacer.", "There are no FlatPace changes to undo.");
-  if (!nvOk) return T("No puedo acceder al driver de NVIDIA (", "I can't access the NVIDIA driver (") + nvd.error + ").";
+  if (!nvOk) return T("No puedo acceder al driver de NVIDIA (", "I can't access the NVIDIA driver (") + nvd.Error() + ").";
   int done = 0, fails = 0;
   for (auto it = store.items.begin(); it != store.items.end();) {
     if (nvd.Revert(it->second)) {
@@ -3941,7 +4389,7 @@ static std::string UndoAll(NvDriver& nvd, ChangeStore& store, bool nvOk) {
       it = store.items.erase(it);
       ++done;
     } else {
-      Log("  No pude deshacer %s: %s\n", it->first.c_str(), nvd.error.c_str());
+      Log("  No pude deshacer %s: %s\n", it->first.c_str(), nvd.Error().c_str());
       ++fails;
       ++it;
     }
@@ -3984,7 +4432,7 @@ static void PublishSession(const Session& ss, const ChangeStore& store, bool app
   g_ui.hitches = ss.hitchTotal;
   g_ui.capText = st.capped ? Fmt(T("~%.0f fps (%s)", "~%.0f fps (%s)"), st.capFps, st.capFits ? T("encaja", "fits") : T("no encaja", "does not fit"))
                            : std::string(T("ninguno", "none"));
-  g_ui.bottleneck = st.frames ? st.Bottleneck() : std::string("—");
+  g_ui.bottleneck = st.frames ? BottleneckText(st) : std::string("—");
   if (ss.accepted || (ss.expectedFps > 0 && ss.verified))
     g_ui.recText = T("— (límite aceptado; se recalcula si lo deshaces)", "— (limit accepted; recalculated if you undo it)");
   else if (ss.haveRec)
@@ -4070,8 +4518,16 @@ static void RunEngine(std::wstring presentMonPath) {
   if (g_log) std::fprintf(g_log, "FlatPace %s\n\n", kVersion);
   SetStatus(UiStatus::Starting, T("Iniciando…", "Starting…"), T("Revisando tu equipo y midiendo la pantalla.", "Checking your system and measuring the display."));
 
-  NvDriver nvd;
-  bool nvOk = nvd.Init();
+  NvDriver nvDriver;
+  bool nvOk = nvDriver.Init();
+  NvidiaBackend nvBackend(nvDriver);
+  GuidedBackend guidedBackend;
+  RtssBackend rtssBackend;
+  const bool rtssOk = rtssBackend.Init();
+  BackendSelector backend(&nvBackend);
+  if (rtssOk) backend.SetRtss(&rtssBackend);
+  LimitBackend& nvd = backend;  // el limitador en uso, comun a los fabricantes
+  bool limiterOk = nvOk;        // hay forma de aplicar limites (NVIDIA, o el modo guiado)
   ChangeStore store(DataDirectory() + L"\\cambios-aplicados.txt");
   store.Load();
   if (int moved = store.Migrate(ExeDirectory() + L"\\cambios-aplicados.txt"))
@@ -4081,13 +4537,25 @@ static void RunEngine(std::wstring presentMonPath) {
         cleaned == 1 ? "" : "s", cleaned == 1 ? "" : "s", cleaned == 1 ? "" : "s");
   if (ReadKv(L"equipo.txt", "rendimiento-maximo") == "no") g_maxPerf = false;
   if (ReadKv(L"equipo.txt", "baja-latencia") == "no") g_lowLatency = false;
-  if (ReadKv(L"equipo.txt", "subir-solo") == "no") g_autoRaise = false;
-  if (ReadKv(L"equipo.txt", "prioridad-auto") == "no") g_autoPriority = false;
+  WriteKv(L"equipo.txt", "subir-solo", "");  // ajuste de la 0.46-0.54, sustituido por la prioridad automatica
   {
     std::lock_guard<std::mutex> lock(g_ui.m);
     for (const auto& [exe, c] : store.items) {
       const std::string sv = ReadKv(L"equipo.txt", "sugerencia|" + exe);
-      if (!sv.empty() && !c.manual) g_ui.suggestions[exe] = std::atof(sv.c_str());
+      if (!sv.empty() && !c.manual) {
+        double to = 0, from = c.newValue;
+        int kind = 0;
+        std::sscanf(sv.c_str(), "%lf;%d;%lf", &to, &kind, &from);
+        if (to > 0) {
+          g_ui.suggestions[exe] = to;
+          g_ui.suggestKind[exe] = kind;
+          g_ui.warnings[exe] = RecommendationText(kind, from, to);
+        }
+      }
+      if (!c.manual && ReadKv(L"equipo.txt", "prioridad-sugerida|" + exe) == "si") {
+        g_ui.prioSuggest.insert(exe);
+        if (!g_ui.warnings.count(exe)) g_ui.warnings[exe] = T(kPrioSuggestText_es, kPrioSuggestText_en);
+      }
     }
   }
   // Desactivados en equipo.txt: quitarlos tambien de los limites que ya los tenian (hasta la 0.50.1
@@ -4100,9 +4568,9 @@ static void RunEngine(std::wstring presentMonPath) {
         return std::any_of(c.saved.begin(), c.saved.end(), [&](const SavedSetting& sv) { return sv.id == id; });
       };
       if (!g_lowLatency && c.method != Method::DriverVsync && has(nv::PRERENDERLIMIT_ID) &&
-          nvd.RemoveSetting(c, nv::PRERENDERLIMIT_ID))
+          nvd.RemoveExtra(c, LimitExtra::LowLatency))
         ++removedLl;
-      if (!g_maxPerf && has(nv::PREFERRED_PSTATE_ID) && nvd.RemoveSetting(c, nv::PREFERRED_PSTATE_ID)) ++removedPerf;
+      if (!g_maxPerf && has(nv::PREFERRED_PSTATE_ID) && nvd.RemoveExtra(c, LimitExtra::MaxPerf)) ++removedPerf;
     }
     if (removedLl + removedPerf > 0) {
       store.Save();
@@ -4119,7 +4587,7 @@ static void RunEngine(std::wstring presentMonPath) {
     for (auto& [exe, c] : store.items) {
       bool has = false;
       for (const auto& sv : c.saved) has = has || sv.id == nv::PRERENDERLIMIT_ID;
-      if (!has && nvd.AddSetting(c, nv::PRERENDERLIMIT_ID, 1)) ++added;
+      if (!has && nvd.AddExtra(c, LimitExtra::LowLatency)) ++added;
     }
     if (added > 0) {
       store.Save();
@@ -4132,7 +4600,7 @@ static void RunEngine(std::wstring presentMonPath) {
     for (auto& [exe, c] : store.items) {
       bool has = false;
       for (const auto& sv : c.saved) has = has || sv.id == nv::PREFERRED_PSTATE_ID;
-      if (!has && nvd.AddSetting(c, nv::PREFERRED_PSTATE_ID, nv::PSTATE_PREFER_MAX)) ++added;
+      if (!has && nvd.AddExtra(c, LimitExtra::MaxPerf)) ++added;
     }
     if (added > 0) {
       store.Save();
@@ -4149,14 +4617,59 @@ static void RunEngine(std::wstring presentMonPath) {
   EnumerateDxgi(adapters, outputs);
   bool laptop = HasSystemBattery();
 
-  Log("=== Equipo ===\n  Tipo: %s\n", laptop ? "portatil (bateria detectada)" : "sobremesa");
+  Log("=== Equipo ===\n  Tipo: %s\n", laptop ? T("portatil (bateria detectada)", "laptop (battery detected)") : T("sobremesa", "desktop"));
+  // Sin NVIDIA, con una grafica AMD o Intel: modo guiado (se prefiere la dedicada).
+  if (!nvOk) {
+    int vendor = 0;
+    for (int pass = 0; pass < 2 && vendor == 0; ++pass)
+      for (const auto& a : adapters) {
+        if (pass == 0 && a.integrated) continue;
+        std::wstring n = a.name;
+        std::transform(n.begin(), n.end(), n.begin(), ::towlower);
+        if (n.find(L"radeon") != std::wstring::npos || n.find(L"amd") != std::wstring::npos) vendor = 1;
+        else if (n.find(L"intel") != std::wstring::npos) vendor = 2;
+        if (vendor) break;
+      }
+    g_guidedVendor = vendor;
+  }
+  // Limitador elegido: RTSS solo si el usuario lo eligio (y esta instalado); si no, el driver de NVIDIA o,
+  // con AMD o Intel, "Solo recomendar" (modo guiado).
+  g_nvidiaAvailable = nvOk;
+  g_rtssAvailable = rtssOk;
+  {
+    const int byDefault = nvOk ? 0 : g_guidedVendor != 0 ? 1 : -1;
+    const std::string chosen = ReadKv(L"equipo.txt", "limitador");
+    // Con NVIDIA, siempre el driver (desde la 0.59: RTSS solo se ofrece con AMD o Intel).
+    int kind = chosen == "rtss" && rtssOk && !nvOk ? 2 : byDefault;
+    if (chosen == "rtss" && !rtssOk) Log("  Elegiste RTSS como limitador, pero no lo encuentro instalado: uso el habitual.\n");
+    if (kind < 0 && rtssOk && chosen == "rtss") kind = 2;
+    // Limites que quedaron en RTSS con NVIDIA (se podia elegir en la 0.58): se devuelven al driver con el
+    // mismo mecanismo que el cambio de limitador desde la ventana.
+    if (nvOk && rtssOk) {
+      const bool inRtss = std::any_of(store.items.begin(), store.items.end(), [](const auto& kv) {
+        return std::any_of(kv.second.saved.begin(), kv.second.saved.end(),
+                           [](const SavedSetting& sv) { return sv.id == kRtssLimitId; });
+      });
+      if (inRtss) {
+        kind = 2;          // se empieza como si se usara RTSS...
+        g_limiterReq = 0;  // ...y el motor los mueve al driver en cuanto arranca
+        Log("  Hay limites en RTSS de una version anterior: los devuelvo al driver de NVIDIA.\n");
+      }
+    }
+    if (nvOk && chosen == "rtss") WriteKv(L"equipo.txt", "limitador", "driver");
+    g_limiterKind = std::max(kind, 0);
+    backend.Use(kind == 2 ? static_cast<LimitBackend*>(&rtssBackend)
+                : kind == 1 ? static_cast<LimitBackend*>(&guidedBackend)
+                            : static_cast<LimitBackend*>(&nvBackend));
+    limiterOk = kind >= 0;
+  }
   bool anyIntegrated = false, dedicatedWithoutOutputs = false;
   std::string gpuText;
   for (const auto& a : adapters) {
     anyIntegrated |= a.integrated;
     if (!a.integrated && a.outputs == 0) dedicatedWithoutOutputs = true;
     Log("  GPU: %s | %zu MB | %s | monitores conectados: %d\n", Narrow(a.name).c_str(), a.vramMB,
-        a.integrated ? "integrada (estimado)" : "dedicada", a.outputs);
+        a.integrated ? T("integrada (estimado)", "integrated (estimated)") : T("dedicada", "dedicated"), a.outputs);
     if (!a.integrated) gpuText += (gpuText.empty() ? "" : " + ") + Narrow(a.name);
   }
   if (gpuText.empty() && !adapters.empty()) gpuText = Narrow(adapters[0].name);
@@ -4176,8 +4689,8 @@ static void RunEngine(std::wstring presentMonPath) {
       }
     Log("  %s \"%s\" %ldx%ld | %.3f Hz (Windows) | senal %.4f Hz | HDR: %s | en: %s%s\n",
         Narrow(o.gdiName).c_str(), Narrow(friendly).c_str(), o.width, o.height, hzNom, hzSig,
-        o.hdrOn ? "activado" : "no", Narrow(adapters[o.adapterIndex].name).c_str(),
-        o.primary ? " [principal]" : "");
+        o.hdrOn ? T("activado", "on") : "no", Narrow(adapters[o.adapterIndex].name).c_str(),
+        o.primary ? T(" [principal]", " [primary]") : "");
     if (!target || o.primary) { target = &o; nominalHz = hzNom; signalHz = hzSig; }
   }
   if (!target) {
@@ -4188,9 +4701,10 @@ static void RunEngine(std::wstring presentMonPath) {
   std::string tip;
   const AdapterInfo& shownOn = adapters[target->adapterIndex];
   if (laptop && shownOn.integrated && dedicatedWithoutOutputs) {
-    tip = T("Portátil en modo híbrido: la gráfica integrada muestra la imagen. Si tu portátil "
-          "tiene un modo «solo GPU dedicada» (MUX, dGPU o Ultimate), actívalo para mejor pacing.", "Hybrid-mode laptop: the integrated GPU drives the display. If your laptop "
-          "has a “dedicated GPU only” mode (MUX, dGPU or Ultimate), enable it for better pacing.");
+    tip = T("Portátil en modo híbrido: la gráfica integrada muestra la imagen, así que G-SYNC no puede "
+          "funcionar. Actívalo eligiendo «Solo GPU NVIDIA» en el panel de NVIDIA o en la app de tu portátil.",
+          "Hybrid-mode laptop: the integrated GPU drives the display, so G-SYNC can't work. Enable it by "
+          "choosing “NVIDIA GPU only” in the NVIDIA panel or in your laptop's app.");
     Log("\n  Portatil en modo hibrido (la integrada muestra la imagen).\n");
   }
 
@@ -4202,6 +4716,8 @@ static void RunEngine(std::wstring presentMonPath) {
   const std::string machineKey = "vsync-driver|" + Narrow(shownOn.name) + "|" +
                                  (laptop && shownOn.integrated && dedicatedWithoutOutputs ? "hibrido" : "directo");
   std::string vsyncCap = ReadKv(L"equipo.txt", machineKey);  // "", "si" o "no"
+  const std::string vsyncCapLearned = vsyncCap;
+  if (g_limiterKind != 0) vsyncCap = "no";  // el VSync por intervalos es exclusivo del driver de NVIDIA
   // Con generacion de fotogramas: el limitador del driver actua sobre lo que se ve en
   // pantalla ("salida") o sobre los fotogramas reales ("reales"). Se aprende una vez.
   const std::string frlFgKey = "limite-con-generacion|" + gpuText;
@@ -4221,9 +4737,33 @@ static void RunEngine(std::wstring presentMonPath) {
     bool vrrNow = false;
     nvVrrKnown = nvOk && nvd.Vrr(Narrow(target->gdiName), vrrPossible, vrrNow);
     if (nvVrrKnown)
-      Log("  G-SYNC (driver de NVIDIA): %s\n", vrrPossible ? "disponible en esta pantalla" : "no disponible en esta pantalla");
+      Log("  G-SYNC (driver de NVIDIA): %s\n", vrrPossible ? T("disponible en esta pantalla", "available on this display") : T("no disponible en esta pantalla", "not available on this display"));
     else
       Log("  VRR: lo detecto por los tiempos de pantalla (sirve para G-SYNC, FreeSync y Adaptive-Sync)\n");
+    // G-SYNC no se esta usando? Se recuerda si alguna vez funciono en esta pantalla (por su nombre: en
+    // modo hibrido Windows le da otro nombre interno), para avisar sin falsas alarmas en monitores que
+    // no lo admiten.
+    std::string panelName;
+    for (const auto& pth : paths)
+      if (pth.gdiName == target->gdiName)
+        panelName = Narrow(!pth.edidName.empty() ? pth.edidName : pth.friendlyName);
+    const std::string seenKey = "gsync-visto|" + (panelName.empty() ? Narrow(target->gdiName) : panelName);
+    if (nvVrrKnown && vrrPossible) WriteKv(L"equipo.txt", seenKey, "si");
+    const bool seenBefore = ReadKv(L"equipo.txt", seenKey) == "si";
+    const bool hybridNow = laptop && shownOn.integrated && dedicatedWithoutOutputs;
+    const int alert = hybridNow && nvOk ? 1 : (nvVrrKnown && !vrrPossible && seenBefore) ? 2 : 0;
+    g_vrrMissing = alert != 0;
+    if (alert == 1)
+      Log("  AVISO: G-SYNC no puede funcionar en modo hibrido%s. Para activarlo: Panel de control de NVIDIA ->\n"
+          "  Administrar modo de pantalla -> Solo GPU NVIDIA (o el modo de GPU en la app del portatil), y reiniciar.\n",
+          seenBefore ? T(" (en esta pantalla funcionaba antes)", " (it worked on this display before)") : "");
+    else if (alert == 2)
+      Log("  AVISO: G-SYNC esta desactivado (en esta pantalla funcionaba antes). Para activarlo: Panel de control\n"
+          "  de NVIDIA -> Configurar G-SYNC -> Habilitar G-SYNC.\n");
+    {
+      std::lock_guard<std::mutex> lock(g_ui.m);
+      g_ui.vrrAlert = alert;
+    }
     for (const auto& pth : paths)
       if (pth.gdiName == target->gdiName) {
         if (pth.freeSyncMin > 0) Log("  Rango FreeSync declarado por el monitor: %d-%d Hz\n", pth.freeSyncMin, pth.freeSyncMax);
@@ -4235,13 +4775,13 @@ static void RunEngine(std::wstring presentMonPath) {
           g_vrrMaxHz = vmax;
           const bool lfc = vmax >= 2 * vmin;
           Log("  Rango VRR usado: %d-%d Hz%s\n", vmin, vmax,
-              lfc ? " (con LFC: por debajo del minimo, el monitor duplica fotogramas)"
-                  : " (sin LFC: por debajo del minimo, mejor un divisor)");
+              lfc ? T(" (con LFC: por debajo del minimo, el monitor duplica fotogramas)", " (with LFC: below the minimum, the display repeats frames)")
+                  : T(" (sin LFC: por debajo del minimo, mejor un divisor)", " (without LFC: below the minimum, a divisor is better)"));
         }
         std::lock_guard<std::mutex> lock(g_ui.m);
         g_ui.vrrRange = vmin > 0 && vmax > vmin
-                            ? Fmt("%d-%d Hz%s%s", vmin, vmax, pth.freeSyncMin > 0 ? " (FreeSync)" : "",
-                                  vmax >= 2 * vmin ? " · LFC" : "")
+                            ? Fmt("%d-%d Hz%s%s", vmin, vmax, pth.freeSyncMin > 0 ? ", FreeSync" : "",
+                                  vmax >= 2 * vmin ? T(", con LFC", ", with LFC") : "")
                             : std::string();
         g_ui.vrrPossible = vrrPossible;
         g_ui.vrrNvKnown = nvVrrKnown;
@@ -4260,7 +4800,7 @@ static void RunEngine(std::wstring presentMonPath) {
     switchedRate = 0;
     hz = baseHz;
     std::lock_guard<std::mutex> lock(g_ui.m);
-    g_ui.monitor = Fmt(T("%ldx%ld · %.3f Hz reales", "%ldx%ld · %.3f Hz measured"), target->width, target->height, hz);
+    g_ui.monitor = Fmt(T("%ld × %ld, %.3f Hz reales", "%ld × %ld, %.3f Hz measured"), target->width, target->height, hz);
     g_ui.hz = hz;
   };
   bool hzFromCache = !hzClean && ReadCachedHz(monitorKey) > 0;
@@ -4271,14 +4811,15 @@ static void RunEngine(std::wstring presentMonPath) {
   {
     std::lock_guard<std::mutex> lock(g_ui.m);
     g_ui.gpu = gpuText;
-    g_ui.monitor = Fmt(T("%ldx%ld · %.3f Hz reales", "%ldx%ld · %.3f Hz measured"), target->width, target->height, hz);
+    g_ui.monitor = Fmt(T("%ld × %ld, %.3f Hz reales", "%ld × %ld, %.3f Hz measured"), target->width, target->height, hz);
     g_ui.hz = hz;
     g_ui.tip = tip;
-    g_ui.driver = nvOk ? std::string(T("NVIDIA: disponible", "NVIDIA: available")) : std::string(T("NVIDIA: no disponible (", "NVIDIA: not available (")) + nvd.error + ")";
-    g_ui.driverOk = nvOk;
+    g_ui.driver = LimiterUiText(nvDriver.error);
+    g_ui.driverOk = limiterOk;
   }
-  Log("\n=== Driver ===\n  %s\n", nvOk ? "NVIDIA: disponible" : ("NVIDIA: no disponible (" + nvd.error + ")").c_str());
-  if (!nvOk) g_applyMode = false;
+  Log("\n=== Driver ===\n  %s\n", nvOk ? T("NVIDIA: disponible", "NVIDIA: available") : (T("NVIDIA: no disponible (", "NVIDIA: not available (") + nvDriver.error + ")").c_str());
+  LogLimiter(Narrow(rtssBackend.Dir()));
+  if (!limiterOk) g_applyMode = false;
   if (!IsElevated()) Log("  Aviso: sin permisos de administrador; PresentMon y el driver pueden fallar.\n");
 
   if (presentMonPath.empty()) {
@@ -4351,7 +4892,7 @@ static void RunEngine(std::wstring presentMonPath) {
       const bool vrrPlan = session.current.valid && session.current.vrr;
       if (vrrPlan) planRate = 0;
       bool useVsync = n >= 1 && n <= 4 && vsyncCap != "no" && vsyncAdds && fgK == 1 && !vrrPlan;
-      std::vector<std::pair<uint32_t, uint32_t>> desired;
+      LimitRequest req;  // lo que se pide al driver (cada fabricante lo traduce)
       Method method = Method::FpsLimit;
       double targetFps = 0.0;
       uint32_t shownFps = 0;
@@ -4363,12 +4904,13 @@ static void RunEngine(std::wstring presentMonPath) {
         targetFps = session.current.realFps;
         shownFps = screen;
         n = 0;
-        desired = {{nv::FRL_FPS_ID, frl}, {nv::VSYNCMODE_ID, nv::VSYNC_FORCEON}};
+        req.frl = frl;
+        req.vsyncOn = true;
       } else if (useVsync) {
         method = Method::DriverVsync;
         targetFps = hz / n;
         shownFps = static_cast<uint32_t>(std::lround(targetFps));
-        desired = {{nv::VSYNCMODE_ID, nv::VsyncForDivisor(n)}, {nv::PRERENDERLIMIT_ID, 1}};
+        req.vsyncDivisor = n;
       } else if (fgK > 1) {
         // Con generacion: el ritmo en pantalla debe encajar con los Hz. El valor del
         // limitador depende de sobre que actua el driver (aprendido en este equipo).
@@ -4381,21 +4923,17 @@ static void RunEngine(std::wstring presentMonPath) {
           targetFps = session.current.realFps;
           shownFps = static_cast<uint32_t>(std::lround(session.current.capFps));
           n = session.current.divisor;
-          desired = {{nv::FRL_FPS_ID, frl}};
+          req.frl = frl;
         }
       } else if (intFps > 0) {
         targetFps = intFps;
         shownFps = intFps;
         n = div;
-        desired = {{nv::FRL_FPS_ID, intFps}};
+        req.frl = intFps;
       }
-      if (g_maxPerf && !desired.empty()) desired.push_back({nv::PREFERRED_PSTATE_ID, nv::PSTATE_PREFER_MAX});
-      if (g_lowLatency && !desired.empty() &&
-          std::none_of(desired.begin(), desired.end(), [](const auto& d) { return d.first == nv::PRERENDERLIMIT_ID; }))
-        desired.push_back({nv::PRERENDERLIMIT_ID, 1});
-      uint32_t frlWanted = 0;
-      for (const auto& d : desired)
-        if (d.first == nv::FRL_FPS_ID) frlWanted = d.second;
+      req.maxPerf = g_maxPerf;
+      req.lowLatency = g_lowLatency;
+      const uint32_t frlWanted = req.vsyncDivisor > 0 ? 0 : req.frl;
       auto known = store.items.find(session.exe);
       // Un limite ya aplicado no se redecide de cero en cada partida:
       // - si se comprobo funcionando, solo cambia cuando la vigilancia decide bajarlo
@@ -4417,13 +4955,13 @@ static void RunEngine(std::wstring presentMonPath) {
         if (kc.verified && !session.lowerPending) keepKnown = true;
         else if (!kc.verified && session.appliedAtStart && now - session.start < 90.0) keepKnown = true;
         else if (fgDiffers) keepKnown = true;
-        if (keepKnown && !session.keepNoted && !desired.empty() && !session.appliedThisSession) {
+        if (keepKnown && !session.keepNoted && !req.Empty() && !session.appliedThisSession) {
           session.keepNoted = true;
           Log("[%5.0f s] Mantengo el limite ya aplicado (%s); no lo cambio por una medicion puntual.\n",
               session.T(now), DescribeChange(kc).c_str());
         }
       }
-      if (keepKnown) desired.clear();
+      if (keepKnown) req = LimitRequest{};
       bool same = known != store.items.end() && known->second.method == method &&
                   known->second.fgFactor == fgK && known->second.displayHz == planRate &&
                   known->second.vrr == vrrPlan &&
@@ -4440,14 +4978,14 @@ static void RunEngine(std::wstring presentMonPath) {
       std::string readyWhy = reason;
       bool stable = decideNow;
       bool spaced = decideNow;
-      if (desired.empty() && !keepKnown) {
+      if (req.Empty() && !keepKnown) {
         if (!session.noTargetNoted && stable) {
           session.noTargetNoted = true;
           Log("[%5.0f s] No aplico limite: %s\n", session.T(now),
-              session.current.valid ? "tus Hz no tienen un divisor entero y el VSync del driver no funciona aqui."
-                                    : "el juego no sostiene ni el limite mas bajo.");
+              session.current.valid ? T("tus Hz no tienen un divisor entero y el VSync del driver no funciona aqui.", "your Hz has no whole divisor and the driver's VSync doesn't work here.")
+                                    : T("el juego no sostiene ni el limite mas bajo.", "the game can't hold even the lowest limit."));
         }
-      } else if (!desired.empty() && !same && stable && spaced) {
+      } else if (!req.Empty() && !same && stable && spaced) {
         if (known == store.items.end() && st.capped && st.capFits && st.capFps <= targetFps + 0.5 &&
             method == Method::FpsLimit) {
           if (!session.ownCapNoted) {
@@ -4456,7 +4994,7 @@ static void RunEngine(std::wstring presentMonPath) {
           }
         } else {
           AppliedChange change = known != store.items.end() ? known->second : AppliedChange{};
-          if (nvd.ApplySettings(session.exe, desired, change)) {
+          if (nvd.Apply(session.exe, req, change)) {
             change.method = method;
             change.divisor = n;
             change.newValue = shownFps;
@@ -4501,7 +5039,7 @@ static void RunEngine(std::wstring presentMonPath) {
               Log("          Primera vez en este equipo: al reabrir el juego comprobare si el\n"
                   "          driver impone su VSync; si no, pasare solo al limite de FPS.\n");
           } else {
-            Log("[%5.0f s] No pude aplicar: %s\n", session.T(now), nvd.error.c_str());
+            Log("[%5.0f s] No pude aplicar: %s\n", session.T(now), nvd.Error().c_str());
             session.lastApply = now;
           }
         }
@@ -4528,7 +5066,7 @@ static void RunEngine(std::wstring presentMonPath) {
       }
       session.current = rec;
       session.haveRec = true;
-      std::string why = Fmt("toda la partida (%.1f min de juego)", session.gameSecs / 60.0);
+      std::string why = Fmt(T("toda la partida (%.1f min de juego)", "the whole session (%.1f min of play)"), session.gameSecs / 60.0);
       if (TryApply(now, st, true, why.c_str())) {
         auto c = store.items.find(session.exe);
         result = Fmt(T("Límite para la próxima partida de %s: %s.", "Limit for the next session of %s: %s."),
@@ -4555,25 +5093,44 @@ static void RunEngine(std::wstring presentMonPath) {
       // solo cuenta la mediana: acepta caidas en los momentos mas exigentes (en Greylock a 125, la
       // mediana se sostuvo el 100 % del tiempo y el 1 % bajo se hundio un 24-48 %).
       // Prioridad por juego: con Fluidez, el 1 % bajo hundido en dos partidas seguidas -> Estabilidad.
-      if (climbOk && g_autoPriority && session.fluid && !session.prioFixed) {
+      const bool actsAlone = AppActsAlone(session.prioFixed);
+      // En modo guiado (AMD e Intel) no hay "GPU al maximo": la GPU se relaja con el limite y el 1 % bajo
+      // puede parecer peor de lo que es (la espiral de las primeras versiones). Hasta tener datos de esas
+      // graficas, la regla del 1 % bajo no baja limites ni cambia la prioridad; la de la mediana, si.
+      const bool tailRuleOk = g_limiterKind == 0;
+      if (climbOk && tailRuleOk && session.fluid && (actsAlone || g_prioMode == 2 || session.prioFixed)) {
         const AutoPriority before = AutoPriority::Parse(ReadKv(L"equipo.txt", "prioridad|" + session.exe));
         const AutoPriority after = UpdateAutoPriority(before, true, tailT);
         WriteKv(L"equipo.txt", "prioridad|" + session.exe, after.Serialize());
-        if (after.stability) {
+        if (after.stability && !actsAlone) {
+          // Prioridad elegida a mano: no se cambia; se recomienda en la fila del juego.
+          if (!before.stability) {
+            WriteKv(L"equipo.txt", "prioridad-sugerida|" + session.exe, "si");
+            Log("\n  Al cerrar: el 1 %% bajo se hundio en %d partidas seguidas (en esta, %.0f %% del tiempo): %s es\n"
+                "  inestable con su limite. Te recomiendo Ritmo constante (prioridad elegida por ti: no la cambio).\n",
+                kUnstableSessions, tailT.Percent(), session.label.c_str());
+            std::lock_guard<std::mutex> lock(g_ui.m);
+            g_ui.prioSuggest.insert(session.exe);
+            if (!g_ui.warnings.count(session.exe)) g_ui.warnings[session.exe] = T(kPrioSuggestText_es, kPrioSuggestText_en);
+            g_ui.notice = Fmt(T("%s es inestable con «Más FPS»: te recomiendo «Ritmo constante» (en Juegos).",
+                                "%s is unstable with “More FPS”: I recommend “Steady pace” (in Games)."),
+                              session.label.c_str());
+          }
+        } else if (after.stability) {
           session.fluid = false;
           Log("\n  Al cerrar: el 1 %% bajo se hundio en %d partidas seguidas (en esta, %.0f %% del tiempo): %s es\n"
-              "  inestable con su limite. En adelante uso Estabilidad para este juego.\n",
+              "  inestable con su limite. En adelante uso Ritmo constante para este juego.\n",
               kUnstableSessions, tailT.Percent(), session.label.c_str());
           std::lock_guard<std::mutex> lock(g_ui.m);
-          g_ui.notice = Fmt(T("%s es inestable con su límite: desde ahora uso Estabilidad para este juego.",
-                              "%s is unstable with its limit: from now on I'll use Stability for this game."),
+          g_ui.notice = Fmt(T("%s es inestable con su límite: desde ahora uso «Ritmo constante» para este juego.",
+                              "%s is unstable with its limit: from now on I'll use “Steady pace” for this game."),
                             session.label.c_str());
         } else if (after.unstableStreak > 0) {
           Log("\n  Al cerrar: el 1 %% bajo se hundio el %.0f %% del tiempo (%d de %d partidas seguidas para pasar\n"
               "  este juego a Estabilidad).\n", tailT.Percent(), after.unstableStreak, kUnstableSessions);
         }
       }
-      const bool tailFailed = climbOk && !session.fluid && !failT.Failed() && tailT.Failed();
+      const bool tailFailed = climbOk && tailRuleOk && !session.fluid && !failT.Failed() && tailT.Failed();
       const bool failed = failT.Failed() || tailFailed;
       ClimbResult cr;
       const double limitBefore = session.expectedFps;
@@ -4593,12 +5150,8 @@ static void RunEngine(std::wstring presentMonPath) {
         return r;
       };
       if (failed) {
-        // Una sugerencia pendiente deja de tener sentido si el limite actual ya no se sostiene.
-        WriteKv(L"equipo.txt", "sugerencia|" + session.exe, "");
-        {
-          std::lock_guard<std::mutex> lock(g_ui.m);
-          g_ui.suggestions.erase(session.exe);
-        }
+        // Una recomendacion de subida pendiente deja de tener sentido si el limite actual ya no se sostiene.
+        ClearRecommendation(session.exe);
         const bool revert = climbOk && cr.action == ClimbAction::RevertToPrev;
         // Si solo se hundio el 1 % bajo (la mediana se mantuvo), el ritmo superado el 90 % del tiempo
         // seria el propio limite: se baja un escalon (un 13 %).
@@ -4614,12 +5167,27 @@ static void RunEngine(std::wstring presentMonPath) {
               failT.failSecs, failT.Percent());
         if (climbOk)
           Log("  No volvere a subir hasta %.0f fps durante 30 dias.\n", limitBefore);
-        if (lower.valid) {
+        if (lower.valid && !actsAlone) {
+          // Prioridad elegida a mano: no se baja; se recomienda (urgente si, sin G-SYNC, el VSync por intervalos
+          // hace que un limite que no se sostiene empeore el juego).
+          const double to = std::floor(lower.capFps + 1e-9);
+          const int kind = c.method == Method::DriverVsync ? 2 : 1;
+          if (to > 0 && to < limitBefore) {
+            SetRecommendation(session.exe, kind, limitBefore, to);
+            Log("  Te recomiendo bajarlo a %.0f fps%s (prioridad elegida por ti: no lo cambio).\n", to,
+                kind == 2 ? T(", y cuanto antes: sin G-SYNC, este limite empeora el movimiento", ", and soon: without G-SYNC, this limit makes motion worse") : "");
+            result = Fmt(T("%s no sostiene su límite: te recomiendo bajarlo a %.0f FPS (en Juegos).",
+                           "%s can't hold its limit: I recommend lowering it to %.0f FPS (in Games)."),
+                         session.label.c_str(), to);
+            PublishChanges(store);
+          }
+        } else if (lower.valid) {
           session.current = lower;
           session.lowerPending = true;  // permite cambiar un limite ya comprobado
           session.accepted = false;
-          if (TryApply(now, st, true, revert ? "la vuelta al limite anterior (la subida no se sostuvo)"
-                                             : "la regla de fallos al cerrar el juego")) {
+          if (TryApply(now, st, true, revert ? T("la vuelta al limite anterior (la subida no se sostuvo)",
+                                                 "going back to the previous limit (the raise didn't hold)")
+                                             : T("la regla de fallos al cerrar el juego", "the failure rule when the game closed"))) {
             auto nc = store.items.find(session.exe);
             result = revert
                 ? Fmt(T("%s no sostuvo %.0f FPS: vuelvo a %.0f, que sí sostenía.", "%s didn't hold %.0f FPS: back to %.0f, which it did hold."),
@@ -4631,31 +5199,37 @@ static void RunEngine(std::wstring presentMonPath) {
           }
         }
       } else {
+        // Una recomendacion de bajar pendiente se retira si esta vez el juego sostuvo su limite.
+        bool lowerPendingRec = false;
+        {
+          std::lock_guard<std::mutex> lock(g_ui.m);
+          auto k = g_ui.suggestKind.find(session.exe);
+          lowerPendingRec = g_ui.suggestions.count(session.exe) && k != g_ui.suggestKind.end() && k->second != 0;
+        }
+        if (lowerPendingRec && failT.limPlaySecs >= 180.0) {
+          ClearRecommendation(session.exe);
+          Log("\n  Al cerrar: esta vez sostuvo su limite: retiro la recomendacion de bajarlo.\n");
+          PublishChanges(store);
+        }
         if (failT.failSecs > 0)
           Log("\n  Al cerrar: bajadas aisladas del limite (%.0f s, %.0f %% de la partida): no cambio nada.\n",
               failT.failSecs, failT.Percent());
-        if (climbOk && cr.action == ClimbAction::Raise && !g_autoRaise) {
-          // Modo "Solo sugerir": no se aplica; la subida queda pendiente del boton de Juegos.
+        if (climbOk && cr.action == ClimbAction::Raise && !actsAlone) {
+          // Prioridad elegida a mano: no se aplica; la subida queda recomendada con un boton en Juegos.
           ClimbState kept = cr.state;
           kept.prevGood = 0.0;
           kept.plentyStreak = 0;
           WriteKv(L"equipo.txt", "escalada|" + session.exe, kept.Serialize());
-          WriteKv(L"equipo.txt", "sugerencia|" + session.exe, Fmt("%.0f", cr.newLimit));
-          Log("\n  Al cerrar: el juego fue sobrado toda la partida con %.0f fps: sugiero subirlo a %.0f\n"
-              "  (modo Solo sugerir: se aplica con el boton de Juegos).\n", limitBefore, cr.newLimit);
-          {
-            std::lock_guard<std::mutex> lock(g_ui.m);
-            g_ui.suggestions[session.exe] = cr.newLimit;
-            g_ui.warnings[session.exe] = Fmt(T("Va sobrado: podría subir de %.0f a %.0f FPS.", "It has headroom: it could go from %.0f to %.0f FPS."),
-                                             limitBefore, cr.newLimit);
-          }
+          SetRecommendation(session.exe, 0, limitBefore, cr.newLimit);
+          Log("\n  Al cerrar: el juego fue sobrado toda la partida con %.0f fps: te recomiendo subirlo a %.0f\n"
+              "  (prioridad elegida por ti: se aplica con el boton de Juegos).\n", limitBefore, cr.newLimit);
           PublishChanges(store);
-        } else if (climbOk && cr.action == ClimbAction::Raise && g_autoRaise) {
+        } else if (climbOk && cr.action == ClimbAction::Raise && actsAlone) {
           Log("\n  Al cerrar: el juego fue sobrado toda la partida con %.0f fps: lo subo a %.0f.\n", limitBefore, cr.newLimit);
           session.current = VrrRec(cr.newLimit);
           session.lowerPending = true;  // permite cambiar un limite ya comprobado
           session.accepted = false;
-          if (TryApply(now, st, true, "la subida automatica (el juego iba sobrado)"))
+          if (TryApply(now, st, true, T("la subida automatica (el juego iba sobrado)", "the automatic raise (the game had headroom)")))
             result = Fmt(T("%s iba sobrado: subo su límite de %.0f a %.0f FPS para la próxima partida. Si no lo sostiene, volveré a %.0f.",
                            "%s had headroom: raising its limit from %.0f to %.0f FPS for the next session. If it can't hold it, I'll go back to %.0f."),
                          session.label.c_str(), limitBefore, cr.newLimit, limitBefore);
@@ -4664,7 +5238,7 @@ static void RunEngine(std::wstring presentMonPath) {
         } else if (climbOk && cr.action == ClimbAction::AtTop) {
           Log("\n  Al cerrar: va sobrado y ya esta en el maximo para tu pantalla.\n");
         } else if (climbOk && cr.state.plentyStreak > 0) {
-          Log("\n  Al cerrar: va sobrado (%d de 2 partidas seguidas, con prioridad Estabilidad, para subirlo).\n",
+          Log("\n  Al cerrar: va sobrado (%d de 2 partidas seguidas, con prioridad Ritmo constante, para subirlo).\n",
               cr.state.plentyStreak);
         }
       }
@@ -4721,14 +5295,75 @@ static void RunEngine(std::wstring presentMonPath) {
     }
     const bool manual = !manualExe.empty();
     if (applyMode != lastApplyMode) {
-      Log("[%5.0f s] Modo: %s\n", session.T(now), applyMode ? "aplicar limites" : "solo medir");
+      Log("[%5.0f s] Modo: %s\n", session.T(now), applyMode ? T("aplicar limites", "apply limits") : T("solo medir", "measure only"));
       lastApplyMode = applyMode;
     }
 
     // Limites manuales pedidos desde la ventana.
     {
       // Limites manuales (Fijar...) y sugerencias aplicadas (con las protecciones de la subida automatica).
+      // Cambio de limitador pedido desde la ventana: se deshace cada limite con el limitador que lo aplico
+      // y se aplica el mismo valor con el nuevo (se notara al abrir cada juego, como siempre).
+      if (const int want = g_limiterReq.exchange(-1); want >= 0 && want != g_limiterKind) {
+        const bool usable = want == 0 ? nvOk : want == 1 ? g_guidedVendor != 0 : rtssOk;
+        if (usable) {
+          std::vector<AppliedChange> old;
+          for (auto& [exe, c] : store.items) old.push_back(c);
+          int undone = 0;
+          for (const auto& c : old)
+            if (nvd.Revert(c)) ++undone;  // con la pieza que aplico cada limite
+          store.items.clear();
+          g_limiterKind = want;
+          backend.Use(want == 2 ? static_cast<LimitBackend*>(&rtssBackend)
+                      : want == 1 ? static_cast<LimitBackend*>(&guidedBackend)
+                                  : static_cast<LimitBackend*>(&nvBackend));
+          limiterOk = true;
+          vsyncCap = want == 0 ? vsyncCapLearned : "no";
+          int moved = 0;
+          for (const auto& c : old) {
+            LimitRequest lr;
+            lr.frl = c.method == Method::DriverVsync ? c.newValue : (c.frlValue > 0 ? c.frlValue : c.newValue);
+            lr.vsyncOn = want == 0 && c.vrr;
+            lr.maxPerf = want == 0 && g_maxPerf;
+            lr.lowLatency = want == 0 && g_lowLatency;
+            AppliedChange nc;
+            if (lr.frl > 0 && nvd.Apply(c.exe, lr, nc)) {
+              nc.exe = c.exe;
+              nc.method = Method::FpsLimit;  // el VSync por intervalos pasa a limite de FPS con el mismo valor
+              nc.divisor = c.divisor;
+              nc.newValue = c.newValue;
+              nc.fgFactor = c.fgFactor;
+              nc.frlValue = lr.frl;
+              nc.displayHz = c.displayHz;
+              nc.vrr = c.vrr;
+              nc.manual = c.manual;
+              nc.verified = false;  // se vuelve a comprobar con el limitador nuevo
+              store.items[c.exe] = nc;
+              ++moved;
+            } else {
+              Log("  No pude mover el limite de %s al limitador nuevo: %s\n", c.exe.c_str(), nvd.Error().c_str());
+            }
+          }
+          store.Save();
+          WriteKv(L"equipo.txt", "limitador", want == 2 ? "rtss" : want == 1 ? "recomendar" : "driver");
+          Log("\n[%5.0f s] Limitador cambiado (%d limite%s movido%s; deshechos con el anterior: %d).\n", session.T(now),
+              moved, moved == 1 ? "" : "s", moved == 1 ? "" : "s", undone);
+          LogLimiter(Narrow(rtssBackend.Dir()));
+          {
+            std::lock_guard<std::mutex> lock(g_ui.m);
+            g_ui.driver = LimiterUiText(nvDriver.error);
+            g_ui.driverOk = true;
+            g_ui.notice = want == 1
+                ? Fmt(T("Limitador: solo recomendar. Te indico cada límite en Juegos (%d juegos).",
+                        "Limiter: recommend only. I show each limit in Games (%d games)."), moved)
+                : Fmt(T("Limitador cambiado: %d límites movidos. Se aplicarán al abrir cada juego.",
+                        "Limiter changed: %d limits moved. They'll apply when you open each game."), moved);
+          }
+          PublishChanges(store);
+        }
+      }
       std::vector<std::tuple<std::string, int, bool>> reqs;  // exe, fps en pantalla, manual
+      std::map<std::string, int> sugKinds;                   // tipo de cada recomendacion aplicada
       {
         std::lock_guard<std::mutex> lock(g_manualLimitMutex);
         for (const auto& [e, f] : g_manualLimitReq) reqs.emplace_back(e, f, true);
@@ -4739,6 +5374,11 @@ static void RunEngine(std::wstring presentMonPath) {
         for (const auto& e : sug) {
           auto it = g_ui.suggestions.find(e);
           if (it != g_ui.suggestions.end()) reqs.emplace_back(e, static_cast<int>(it->second), false);
+        }
+        sugKinds.clear();
+        for (const auto& e : sug) {
+          auto k = g_ui.suggestKind.find(e);
+          sugKinds[e] = k != g_ui.suggestKind.end() ? k->second : 0;
         }
       }
       for (const auto& [exe, fps, isManual] : reqs) {
@@ -4752,11 +5392,12 @@ static void RunEngine(std::wstring presentMonPath) {
         const bool vrrNow = g_useVrr && ((nvVrrKnown && vrrPossible) || (session.exe == exe && session.vrrActive));
         const uint32_t screen = static_cast<uint32_t>(fps);
         const uint32_t frl = k > 1 && frlFgMode == "reales" ? screen / static_cast<uint32_t>(k) : screen;
-        std::vector<std::pair<uint32_t, uint32_t>> desired = {{nv::FRL_FPS_ID, frl}};
-        if (vrrNow) desired.push_back({nv::VSYNCMODE_ID, nv::VSYNC_FORCEON});
-        if (g_maxPerf) desired.push_back({nv::PREFERRED_PSTATE_ID, nv::PSTATE_PREFER_MAX});
-        if (g_lowLatency) desired.push_back({nv::PRERENDERLIMIT_ID, 1});
-        bool ok = nvOk;
+        LimitRequest req;
+        req.frl = frl;
+        req.vsyncOn = vrrNow;
+        req.maxPerf = g_maxPerf;
+        req.lowLatency = g_lowLatency;
+        bool ok = limiterOk;
         const double previousReal = known != store.items.end() && known->second.fgFactor <= 1 ? known->second.newValue : 0.0;
         // Se parte de cero: se deshace lo anterior (puede incluir otros ajustes, como el VSync por intervalos).
         if (ok && known != store.items.end()) {
@@ -4764,7 +5405,7 @@ static void RunEngine(std::wstring presentMonPath) {
           if (ok) store.items.erase(known);
         }
         AppliedChange change;
-        if (ok) ok = nvd.ApplySettings(exe, desired, change);
+        if (ok) ok = nvd.Apply(exe, req, change);
         if (ok) {
           change.exe = exe;
           change.method = Method::FpsLimit;
@@ -4779,31 +5420,33 @@ static void RunEngine(std::wstring presentMonPath) {
           store.items[exe] = change;
           store.Save();
           const bool running = session.exe == exe && session.pid != 0;
-          {
-            std::lock_guard<std::mutex> lock(g_ui.m);
-            g_ui.suggestions.erase(exe);
-          }
-          WriteKv(L"equipo.txt", "sugerencia|" + exe, "");
+          ClearRecommendation(exe);
           if (isManual) {
             Log("\n[%5.0f s] LIMITE MANUAL para %s: %s.\n", session.T(now), name.c_str(), DescribeChange(change).c_str());
-            Log("          La app no lo cambiara; se comprueba al abrir el juego%s.\n", running ? " (reinicialo)" : "");
+            Log("          La app no lo cambiara; se comprueba al abrir el juego%s.\n", running ? T(" (reinicialo)", " (restart it)") : "");
             result = Fmt(running ? T("Límite manual para %s: %s. Reinicia el juego para aplicarlo.",
                                      "Manual limit for %s: %s. Restart the game to apply it.")
                                  : T("Límite manual para %s: %s. Se aplicará al abrir el juego.",
                                      "Manual limit for %s: %s. It will apply when you open the game."),
                          name.c_str(), DescribeChange(change).c_str());
           } else {
-            // Sugerencia aplicada: si no se sostiene, se vuelve al limite anterior (como una subida automatica).
+            // Recomendacion aplicada. Una subida recuerda el limite anterior: si no se sostiene, se vuelve a
+            // el (o, con prioridad elegida a mano, se recomienda volver).
+            const bool raise = sugKinds[exe] == 0;
             ClimbState cs = ClimbState::Parse(ReadKv(L"equipo.txt", "escalada|" + exe));
-            cs.prevGood = previousReal;
+            cs.prevGood = raise ? previousReal : 0.0;
             cs.plentyStreak = 0;
             WriteKv(L"equipo.txt", "escalada|" + exe, cs.Serialize());
-            Log("\n[%5.0f s] SUGERENCIA APLICADA para %s: %s (antes %.0f). Si no la sostiene, vuelvo a %.0f.\n",
-                session.T(now), name.c_str(), DescribeChange(change).c_str(), previousReal, previousReal);
-            result = Fmt(running ? T("%s: límite subido a %s. Reinicia el juego para aplicarlo.",
-                                     "%s: limit raised to %s. Restart the game to apply it.")
-                                 : T("%s: límite subido a %s. Se aplicará al abrir el juego.",
-                                     "%s: limit raised to %s. It will apply when you open the game."),
+            Log("\n[%5.0f s] RECOMENDACION APLICADA para %s: %s (antes %.0f).\n", session.T(now), name.c_str(),
+                DescribeChange(change).c_str(), previousReal);
+            result = Fmt(running ? (raise ? T("%s: límite subido a %s. Reinicia el juego para aplicarlo.",
+                                              "%s: limit raised to %s. Restart the game to apply it.")
+                                          : T("%s: límite bajado a %s. Reinicia el juego para aplicarlo.",
+                                              "%s: limit lowered to %s. Restart the game to apply it."))
+                                 : (raise ? T("%s: límite subido a %s. Se aplicará al abrir el juego.",
+                                              "%s: limit raised to %s. It will apply when you open the game.")
+                                          : T("%s: límite bajado a %s. Se aplicará al abrir el juego.",
+                                              "%s: limit lowered to %s. It will apply when you open the game.")),
                          name.c_str(), DescribeChange(change).c_str());
           }
           if (session.exe == exe) {
@@ -4822,7 +5465,7 @@ static void RunEngine(std::wstring presentMonPath) {
           }
         } else {
           result = Fmt(T("No pude cambiar el límite de %s: %s", "Couldn't change the limit for %s: %s"),
-                       name.c_str(), nvOk ? nvd.error.c_str() : T("driver de NVIDIA no disponible", "NVIDIA driver not available"));
+                       name.c_str(), limiterOk ? nvd.Error().c_str() : T("driver de NVIDIA no disponible", "NVIDIA driver not available"));
           Log("\n[%5.0f s] %s\n", session.T(now), result.c_str());
         }
         {
@@ -4846,18 +5489,23 @@ static void RunEngine(std::wstring presentMonPath) {
         if (it == store.items.end()) continue;
         std::string name = g_gameLabels.count(exe) ? g_gameLabels[exe] : exe;
         std::string result;
-        if (nvOk && nvd.Revert(it->second)) {
+        if (limiterOk && nvd.Revert(it->second)) {
           store.items.erase(it);
           store.Save();
           WriteKv(L"equipo.txt", "escalada|" + exe, "");  // empezar de cero: sin techo ni subidas pendientes
           WriteKv(L"equipo.txt", "prioridad|" + exe, "");
-          WriteKv(L"equipo.txt", "sugerencia|" + exe, "");
+          WriteKv(L"equipo.txt", "prioridad-sugerida|" + exe, "");
+          ClearRecommendation(exe);
           {
             std::lock_guard<std::mutex> lock(g_ui.m);
-            g_ui.suggestions.erase(exe);
+            g_ui.prioSuggest.erase(exe);
           }
-          result = Fmt(T("Deshecho: %s vuelve a como estaba. Si estaba abierto, reinícialo.",
-                         "Undone: %s is back to how it was. If it was open, restart it."), name.c_str());
+          result = g_limiterKind == 1
+                       ? Fmt(T("Deshecho: olvido el límite de %s. Quítalo también en %s.",
+                               "Undone: I forget %s's limit. Remove it in %s too."),
+                             name.c_str(), GuidedSoftware())
+                       : Fmt(T("Deshecho: %s vuelve a como estaba. Si estaba abierto, reinícialo.",
+                               "Undone: %s is back to how it was. If it was open, restart it."), name.c_str());
           Log("\n[%5.0f s] Deshecho %s (pedido desde la ventana).\n", session.T(now), exe.c_str());
           if (session.exe == exe) {
             session.expectedFps = 0;
@@ -4867,7 +5515,7 @@ static void RunEngine(std::wstring presentMonPath) {
           }
           if (exe == session.exe && displayRestoreNeeded) RestoreDisplay();
         } else {
-          result = Fmt(T("No pude deshacer %s: %s", "Couldn't undo %s: %s"), name.c_str(), nvd.error.c_str());
+          result = Fmt(T("No pude deshacer %s: %s", "Couldn't undo %s: %s"), name.c_str(), nvd.Error().c_str());
         }
         {
           std::lock_guard<std::mutex> lock(g_ui.m);
@@ -4885,12 +5533,13 @@ static void RunEngine(std::wstring presentMonPath) {
         WriteKv(L"equipo.txt", "escalada|" + exe, "");
         WriteKv(L"equipo.txt", "sugerencia|" + exe, "");
         WriteKv(L"equipo.txt", "prioridad|" + exe, "");
+        WriteKv(L"equipo.txt", "prioridad-sugerida|" + exe, "");
       }
       {
         std::lock_guard<std::mutex> lock(g_ui.m);
         g_ui.suggestions.clear();
       }
-      std::string result = UndoAll(nvd, store, nvOk);
+      std::string result = UndoAll(nvd, store, limiterOk);
       RestoreDisplay();
       Log("  %s\n  Modo cambiado a solo medir.\n", result.c_str());
       PublishChanges(store);
@@ -4910,6 +5559,8 @@ static void RunEngine(std::wstring presentMonPath) {
     }
     HWND fgWnd = nullptr;
     DWORD fgPid = ForegroundPid(&fgWnd);
+    // Una herramienta de captura abierta encima del juego no pausa la medicion.
+    if (session.pid != 0 && !session.background && fgPid != session.pid && IsCaptureTool(fgPid)) fgPid = session.pid;
 
     // Si los Hz no se pudieron medir bien, repetir cuando no haya juego abierto.
     if (!hzClean && !hzFromCache && session.pid == 0 && fresh.size() < 30 &&
@@ -4923,7 +5574,7 @@ static void RunEngine(std::wstring presentMonPath) {
         hzClean = true;
         Log("  Frecuencia real: %.3f Hz (guardada para las proximas veces)\n", hz);
         std::lock_guard<std::mutex> lock(g_ui.m);
-        g_ui.monitor = Fmt(T("%ldx%ld · %.3f Hz reales", "%ldx%ld · %.3f Hz measured"), target->width, target->height, hz);
+        g_ui.monitor = Fmt(T("%ld × %ld, %.3f Hz reales", "%ld × %ld, %.3f Hz measured"), target->width, target->height, hz);
         g_ui.hz = hz;
       }
       continue;
@@ -4939,6 +5590,16 @@ static void RunEngine(std::wstring presentMonPath) {
       lastClosedExe = session.exe;
       lastClosedAt = now;
       CloseDecision(now);
+      {  // resumen para "Ahora" sin juego abierto
+        const auto kc = store.items.find(session.exe);
+        std::lock_guard<std::mutex> lock(g_ui.m);
+        g_ui.lastGame = session.label;
+        g_ui.lastEnd = now;
+        g_ui.lastMinutes = session.T(now) / 60.0;
+        g_ui.lastFps = g_ui.realFps;
+        g_ui.lastHitches = g_ui.hitches;
+        g_ui.lastLocked = kc != store.items.end() && kc->second.verified;
+      }
       PrintSessionSummary(session, hz);
       RestoreDisplay();
       session = Session{};
@@ -5021,12 +5682,12 @@ static void RunEngine(std::wstring presentMonPath) {
         session.lastFrameArrival = now;
         gamesSeen++;
         Log("\n[Juego detectado] %s  (%s)%s\n", label.c_str(), session.exe.c_str(),
-            IsLibraryPath(path) ? "  [biblioteca de juegos]" : "");
+            IsLibraryPath(path) ? T("  [biblioteca de juegos]", "  [game library]") : "");
         if (!foundInFront && !manual)
           Log("  Esta en segundo plano: empiezo a medir cuando vuelvas al juego.\n");
         auto prev = store.items.find(session.exe);
         AppliedChange own;
-        if (prev == store.items.end() && nvOk && nvd.FindOwnProfile(session.exe, own)) {
+        if (prev == store.items.end() && nvOk && nvd.FindOwn(session.exe, own)) {
           if (own.method == Method::DriverVsync) own.newValue = static_cast<uint32_t>(std::lround(hz / own.divisor));
           store.items[own.exe] = own;
           store.Save();
@@ -5140,10 +5801,10 @@ static void RunEngine(std::wstring presentMonPath) {
         if (effective)
           Log("[%5.0f s] VRR (G-SYNC/FreeSync) actua con este juego (%s): el limite no necesita ser\n"
               "          un divisor de los Hz.\n",
-              session.T(now), (nvVrrKnown && vrrPossible) ? "segun el driver de NVIDIA" : "segun los tiempos de pantalla");
+              session.T(now), (nvVrrKnown && vrrPossible) ? T("segun el driver de NVIDIA", "according to the NVIDIA driver") : T("segun los tiempos de pantalla", "according to the display timings"));
         else
           Log("[%5.0f s] %s: uso los divisores de los Hz.\n", session.T(now),
-              detected ? "Divisores forzados (ajuste avanzado)" : "El VRR ya no actua con este juego");
+              detected ? T("Divisores forzados (ajuste avanzado)", "Forced divisors (advanced setting)") : T("El VRR ya no actua con este juego", "VRR no longer works with this game"));
         if (session.haveRec && !session.accepted) session.ResetPhase(now);
       }
       std::lock_guard<std::mutex> lock(g_ui.m);
@@ -5248,6 +5909,7 @@ static void RunEngine(std::wstring presentMonPath) {
           if (kc != store.items.end() && !kc->second.verified) {
             kc->second.verified = true;
             store.Save();
+            PublishChanges(store);  // la fila deja de mostrar la instruccion del modo guiado
           }
           session.accepted = true;
         }
@@ -5275,6 +5937,17 @@ static void RunEngine(std::wstring presentMonPath) {
         session.expectedFps = 0;
         session.appliedAtStart = false;
         session.lastApply = -1e9;
+      } else if (g_limiterKind == 1 && session.appliedAtStart && !session.restartNoted &&
+                 now > session.start + cfg::kVerifySec && fpsNow > exp * 1.10) {
+        // Modo guiado: el juego va claramente por encima del limite, asi que aun no se aplico.
+        session.restartNoted = true;
+        Log("[%5.0f s] Aun no veo el limite de %.0f fps (el juego va a ~%.0f): aplicalo en %s\n"
+            "          (instrucciones en Juegos) y reinicia el juego.\n",
+            session.T(now), exp, fpsNow, GuidedSoftware());
+        std::lock_guard<std::mutex> lock(g_ui.m);
+        g_ui.notice = Fmt(T("Aún no veo el límite de %s: aplícalo en %s (instrucciones en Juegos).",
+                            "I don't see %s's limit yet: apply it in %s (instructions in Games)."),
+                          session.label.c_str(), GuidedSoftware());
       } else if (now > session.verifyDeadline && !session.restartNoted && !session.appliedAtStart) {
         session.restartNoted = true;
         Log("[%5.0f s] Aun no veo el cambio (%.0f fps): hay que reiniciar el juego.\n",
@@ -5375,9 +6048,11 @@ static void RunEngine(std::wstring presentMonPath) {
       static int lastOv = -2;
       int ov = overlay::state;
       if (ov != lastOv && session.pid != 0) {
-        static const char* why[] = {"visible", "desactivado en la app", "sin juego detectado",
-                                    "el juego no esta en primer plano", "aun no hay datos suficientes",
-                                    "Windows no pudo dibujarlo"};
+        const char* why[] = {T("visible", "visible"), T("desactivado en la app", "turned off in the app"),
+                             T("sin juego detectado", "no game detected"),
+                             T("el juego no esta en primer plano", "the game is not in front"),
+                             T("aun no hay datos suficientes", "not enough data yet"),
+                             T("Windows no pudo dibujarlo", "Windows couldn't draw it")};
         // "Sin juego detectado" es el instante normal antes de que el juego se conecte: no se anota.
         if (ov >= 0 && ov <= 5 && ov != 2)
           Log("[%5.0f s] Overlay: %s%s\n", session.T(now), why[ov],
@@ -5419,7 +6094,8 @@ static ImFont* fontBody = nullptr;
 static ImFont* fontStrong = nullptr;
 static ImFont* fontBig = nullptr;
 static ImFont* fontHead = nullptr;  // titulos (Bahnschrift)
-static ImFont* fontNum = nullptr;   // cifra grande de FPS (Bahnschrift)
+static ImFont* fontNum = nullptr;      // cifras de "Ahora" (Bahnschrift)
+static ImFont* fontVerdict = nullptr;  // veredicto de "Ahora" (Bahnschrift)
 
 // Colores del tema
 static ImVec4 Hex(unsigned v) {
@@ -5571,8 +6247,10 @@ static void LoadFonts() {
   static const ImWchar ranges[] = {0x0020, 0x00FF, 0x2010, 0x2027, 0x2190, 0x2193, 0x2713, 0x2713, 0};
   if (GetFileAttributesA(path.c_str()) != INVALID_FILE_ATTRIBUTES) {
     fontHead = io.Fonts->AddFontFromFileTTF(path.c_str(), 24.0f * scale, nullptr, ranges);
-    fontNum = io.Fonts->AddFontFromFileTTF(path.c_str(), 60.0f * scale, nullptr, ranges);
+    fontNum = io.Fonts->AddFontFromFileTTF(path.c_str(), 32.0f * scale, nullptr, ranges);
+    fontVerdict = io.Fonts->AddFontFromFileTTF(path.c_str(), 38.0f * scale, nullptr, ranges);
   }
+  if (!fontVerdict) fontVerdict = fontBig;
   if (!fontHead) fontHead = fontBig;
   if (!fontNum) fontNum = fontBig;
 }
@@ -5581,6 +6259,7 @@ static void LoadFonts() {
 struct View {
   UiStatus status;
   std::string statusText, statusDetail, gpu, monitor, tip, driver, game, exe;
+  int vrrAlert = 0;
   std::string capText, bottleneck, recText, appliedText, notice, presentText;
   bool driverOk, haveGame;
   double realFps, lowFps, screenFps, steadyPct, jitterMs;
@@ -5588,6 +6267,10 @@ struct View {
   std::vector<UiChange> changes;
   std::string currentWarning;
   std::string vrrRange;
+  std::string lastGame;
+  double lastEnd = 0, lastMinutes = 0, lastFps = 0;
+  int lastHitches = 0;
+  bool lastLocked = false;
   bool vrrPossible, vrrNvKnown;
   int vrrState;
   std::vector<std::string> log;
@@ -5604,9 +6287,16 @@ static View Snapshot() {
   v.gpu = g_ui.gpu;
   v.monitor = g_ui.monitor;
   v.tip = g_ui.tip;
+  v.vrrAlert = g_ui.vrrAlert;
   v.driver = g_ui.driver;
   v.driverOk = g_ui.driverOk;
   v.haveGame = g_ui.haveGame;
+  v.lastGame = g_ui.lastGame;
+  v.lastEnd = g_ui.lastEnd;
+  v.lastMinutes = g_ui.lastMinutes;
+  v.lastFps = g_ui.lastFps;
+  v.lastHitches = g_ui.lastHitches;
+  v.lastLocked = g_ui.lastLocked;
   v.game = g_ui.game;
   v.exe = g_ui.exe;
   v.realFps = g_ui.realFps;
@@ -5638,45 +6328,12 @@ static View Snapshot() {
 
 // ---- Diseno: estilo SteamOS. El protagonista es la grafica de ritmo ("la linea"). ----
 static int page = 0;  // 0 Ahora, 1 Juegos, 2 Equipo, 3 Registro
+static bool g_scrollTop = false;
 
 static ImU32 Col(const ImVec4& c, float a = 1.0f) { return ImGui::GetColorU32(ImVec4(c.x, c.y, c.z, c.w * a)); }
 
-static ImVec4 StatusColor(UiStatus s) {
-  switch (s) {
-    case UiStatus::Applied: return kGreen;
-    case UiStatus::Measuring: return kBlue;
-    case UiStatus::Restart: return kAmber;
-    case UiStatus::Paused: return kAmber;
-    case UiStatus::Error: return kRed;
-    default: return kGray;
-  }
-}
 
-static const char* StatusWord(UiStatus s) {
-  switch (s) {
-    case UiStatus::Applied: return T("Estable", "Steady");
-    case UiStatus::Measuring: return T("Midiendo", "Measuring");
-    case UiStatus::Restart: return T("Atención", "Attention");
-    case UiStatus::Paused: return T("En pausa", "Paused");
-    case UiStatus::Error: return T("Error", "Error");
-    default: return T("En espera", "Waiting");
-  }
-}
 
-// Pastilla de estado: punto de color y una palabra.
-static void StatusPill(UiStatus st) {
-  ImVec4 c = StatusColor(st);
-  const char* w = StatusWord(st);
-  ImVec2 ts = ImGui::CalcTextSize(w);
-  float h = ts.y + 10 * scale, pad = 12 * scale, dot = 7 * scale;
-  ImVec2 p = ImGui::GetCursorScreenPos();
-  ImVec2 size(pad * 2 + dot + 8 * scale + ts.x, h);
-  ImDrawList* dl = ImGui::GetWindowDrawList();
-  dl->AddRectFilled(p, ImVec2(p.x + size.x, p.y + size.y), Col(c, 0.16f), h * 0.5f);
-  dl->AddCircleFilled(ImVec2(p.x + pad + dot * 0.5f, p.y + h * 0.5f), dot * 0.5f, Col(c));
-  dl->AddText(ImVec2(p.x + pad + dot + 8 * scale, p.y + 5 * scale), Col(c), w);
-  ImGui::Dummy(size);
-}
 
 // Fila etiqueta / valor sin tabla, alineada a una columna.
 static void KV(const char* label, const std::string& value, float col, const ImVec4* color = nullptr) {
@@ -5721,7 +6378,8 @@ static void PacingGraph(ImVec2 size) {
   const bool isTarget = target > 0;
   const double ref = isTarget ? target : refAuto;
   const bool locked = state == overlay::LimitState::Locked;
-  const ImVec4 stateCol = locked ? kGreen : kRed;
+  // Azul solo con el limite comprobado (el ritmo plano); si no, un tono neutro: medir sin limite no es un error.
+  const ImVec4 stateCol = locked ? kBlue : Hex(0xAEB6C3);
   float padX = 14 * scale, padY = 16 * scale;
   float x0 = p.x + padX, x1 = p.x + size.x - padX, y0 = p.y + padY, y1 = p.y + size.y - padY;
   const overlay::PaceRange pr = overlay::PaceScale(ref);
@@ -5794,27 +6452,34 @@ static void PacingGraph(ImVec2 size) {
   }
 }
 
-// Logo: una f trazada como una grafica, cruzada por la linea plana (variante compacta).
-// Diseno en una rejilla de 64; se dibuja en una baldosa redondeada de lado `size`.
+// Logo (desde la 0.60, variante "2b"): una f trazada como una grafica (de un nivel bajo a uno alto,
+// como un ritmo que se estabiliza), cruzada por la linea plana azul, que pasa por delante sin cortarse:
+// el trazo blanco se interrumpe a su alrededor. Rejilla de 120; baldosa redondeada de lado `size`.
+// Por debajo de 24 px no hay hueco (seria una mancha) y los trazos engordan para seguir leyendose.
 static void DrawLogo(ImDrawList* dl, ImVec2 p, float size) {
-  dl->AddRectFilled(p, ImVec2(p.x + size, p.y + size), Col(Hex(0x12151B)), size * 0.22f);
+  const ImU32 tile = Col(Hex(0x12151B));
+  dl->AddRectFilled(p, ImVec2(p.x + size, p.y + size), tile, size * 0.22f);
   dl->AddRect(p, ImVec2(p.x + size, p.y + size), Col(kLine), size * 0.22f, 0, std::max(1.0f, size / 64.0f));
-  const float k = size / 64.0f * 0.92f, off = (size - 64.0f * k) * 0.5f;
-  auto P = [&](float x, float y) { return ImVec2(p.x + off + x * k, p.y + off + y * k); };
-  const float w = 7.0f * k * (size < 40 ? 1.12f : 1.0f);
-  const ImU32 stem = Col(Hex(0xE8EBEF)), bar = Col(kBlue);
-  dl->PathLineTo(P(12, 52));
-  dl->PathLineTo(P(19, 52));
-  dl->PathBezierCubicCurveTo(P(24, 52), P(26, 48), P(27, 42));
-  dl->PathLineTo(P(31, 20));
-  dl->PathBezierCubicCurveTo(P(32, 14), P(35, 12), P(40, 12));
-  dl->PathLineTo(P(52, 12));
+  const float k = size / 120.0f;
+  auto P = [&](float x, float y) { return ImVec2(p.x + x * k, p.y + y * k); };
+  const float grow = size >= 96 ? 1.0f : size >= 40 ? 1.1f : size >= 24 ? 1.3f : 1.7f;
+  const float w = 10.0f * k * grow;
+  const ImU32 stem = Col(Hex(0xD3D7DE)), bar = Col(kBlue);
+  // Trazo blanco: cola baja, subida y remate alto (con extremos redondeados).
+  dl->PathLineTo(P(20, 103));
+  dl->PathLineTo(P(35, 103));
+  dl->PathBezierCubicCurveTo(P(43, 103), P(46, 99), P(48, 92));
+  dl->PathLineTo(P(62, 38));
+  dl->PathBezierCubicCurveTo(P(64, 31), P(69, 27), P(77, 27));
+  dl->PathLineTo(P(108, 27));
   dl->PathStroke(stem, 0, w);
-  dl->AddCircleFilled(P(12, 52), w * 0.5f, stem);  // extremos redondeados
-  dl->AddCircleFilled(P(52, 12), w * 0.5f, stem);
-  dl->AddLine(P(12, 32), P(52, 32), bar, w);
-  dl->AddCircleFilled(P(12, 32), w * 0.5f, bar);
-  dl->AddCircleFilled(P(52, 32), w * 0.5f, bar);
+  dl->AddCircleFilled(P(20, 103), w * 0.5f, stem);
+  dl->AddCircleFilled(P(108, 27), w * 0.5f, stem);
+  // Linea azul por delante: primero un hueco del color de la baldosa alrededor, luego la linea.
+  // (Como rectangulos redondeados: una linea gruesa con AddLine sale con un escalon en tamanos grandes.)
+  const ImVec2 a = P(17, 65), b = P(109, 65);
+  if (size >= 24) dl->AddRectFilled(ImVec2(a.x, a.y - w), ImVec2(b.x, b.y + w), tile);
+  dl->AddRectFilled(ImVec2(a.x - w * 0.5f, a.y - w * 0.5f), ImVec2(b.x + w * 0.5f, b.y + w * 0.5f), bar, w * 0.5f);
 }
 
 // Iconos de navegacion: trazo redondeado sobre una rejilla de 24 (como en la guia de iconos).
@@ -5863,7 +6528,10 @@ static bool NavItem(const char* label, int idx) {
   float w = ImGui::GetContentRegionAvail().x, h = std::max(40 * scale, fontStrong->FontSize + 18 * scale);
   ImGui::InvisibleButton(label, ImVec2(w, h));
   bool hov = ImGui::IsItemHovered();
-  if (ImGui::IsItemClicked()) page = idx;
+  if (ImGui::IsItemClicked() && page != idx) {
+    page = idx;
+    g_scrollTop = true;  // cada pagina empieza arriba del todo
+  }
   ImDrawList* dl = ImGui::GetWindowDrawList();
   if (sel || hov)
     dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), Col(sel ? kCardHi : kCard), 10 * scale);
@@ -5875,6 +6543,9 @@ static bool NavItem(const char* label, int idx) {
   ImGui::PopFont();
   return sel;
 }
+
+// Ancho comun de los botones de opciones (prioridad, limitador): el mismo en toda la app.
+static float OptionW() { return 170 * scale; }
 
 static void Section(const char* t) {
   ImGui::PushFont(fontHead);
@@ -6021,41 +6692,211 @@ static std::string VrrDescription(const View& v) {
   std::string vrr = v.vrrState == 2   ? T("actúa con el juego", "active with the game")
                     : v.vrrState == 3 ? T("actúa, pero se usan divisores (ajuste avanzado)", "active, but divisors are forced (advanced setting)")
                     : v.vrrState == 1 ? T("no actúa con el juego", "not active with the game")
-                    : v.vrrNvKnown    ? (v.vrrPossible ? T("disponible (G-SYNC)", "available (G-SYNC)")
+                    : v.vrrNvKnown    ? (v.vrrPossible ? T("G-SYNC disponible", "G-SYNC available")
                                                        : T("no disponible", "not available"))
                                       : T("se comprobará al jugar", "checked while playing");
-  if (!v.vrrRange.empty()) vrr += "  ·  " + v.vrrRange;
+  if (!v.vrrRange.empty()) vrr += std::string(T("; rango de ", "; range ")) + v.vrrRange;
   return vrr;
 }
 
 // Etiqueta redondeada con punto y texto, del color indicado (la del estado del limite).
-static float PillWidth(const char* text) { return ImGui::CalcTextSize(text).x + 47 * scale; }
-static void Pill(const char* text, const ImVec4& c) {
-  ImVec2 ts = ImGui::CalcTextSize(text);
-  float h = ts.y + 12 * scale, pad = 14 * scale, dot = 8 * scale;
-  ImVec2 p = ImGui::GetCursorScreenPos();
-  ImVec2 size(pad * 2 + dot + 9 * scale + ts.x, h);
-  ImDrawList* dl = ImGui::GetWindowDrawList();
-  dl->AddRectFilled(p, ImVec2(p.x + size.x, p.y + size.y), Col(c, 0.15f), h * 0.5f);
-  dl->AddCircleFilled(ImVec2(p.x + pad + dot * 0.5f, p.y + h * 0.5f), dot * 0.5f, Col(c));
-  dl->AddText(ImVec2(p.x + pad + dot + 9 * scale, p.y + 6 * scale), Col(c), text);
-  ImGui::Dummy(size);
+
+
+// Abre el Panel de control de NVIDIA: la version clasica si esta instalada, si no la de la Microsoft Store
+// (la de los drivers actuales).
+static void OpenNvidiaPanel() {
+  const wchar_t* classic = L"C:\\Program Files\\NVIDIA Corporation\\Control Panel Client\\nvcplui.exe";
+  if (GetFileAttributesW(classic) != INVALID_FILE_ATTRIBUTES) {
+    ShellExecuteW(nullptr, L"open", classic, nullptr, nullptr, SW_SHOWNORMAL);
+    return;
+  }
+  ShellExecuteW(nullptr, L"open", L"explorer.exe",
+                L"shell:AppsFolder\\NVIDIACorp.NVIDIAControlPanel_56jybvy8sckqj!NVIDIACorp.NVIDIAControlPanel", nullptr,
+                SW_SHOWNORMAL);
 }
 
-// Metrica de la tarjeta principal: etiqueta pequena y valor destacado.
-static void Metric(const char* label, const std::string& value) {
+// Aviso cuando G-SYNC no se esta usando, con la causa, los pasos y un boton al panel de NVIDIA.
+static void VrrAlertCard(const View& v) {
+  if (v.vrrAlert == 0) return;
+  const float w = ImGui::GetContentRegionAvail().x;
+  const char* title = T("G-SYNC no se está usando", "G-SYNC isn't being used");
+  const char* body =
+      v.vrrAlert == 1
+          ? T("Tu portátil está en modo híbrido: la gráfica integrada controla la pantalla y G-SYNC no puede "
+              "funcionar. Sin él, los límites pensados para G-SYNC pueden empeorar el movimiento.\n"
+              "Para activarlo: Panel de control de NVIDIA → Administrar modo de pantalla → «Solo GPU NVIDIA». "
+              "En algunos portátiles se elige en su propia app (PredatorSense, Armoury Crate, Lenovo Vantage…) "
+              "como modo de GPU «solo NVIDIA», «dGPU» o «Ultimate». Después hay que reiniciar.",
+              "Your laptop is in hybrid mode: the integrated GPU drives the display and G-SYNC can't work. "
+              "Without it, limits meant for G-SYNC can make motion worse.\n"
+              "To turn it on: NVIDIA Control Panel → Manage Display Mode → “NVIDIA GPU only”. On some laptops "
+              "it's chosen in their own app (PredatorSense, Armoury Crate, Lenovo Vantage…) as the “NVIDIA "
+              "only”, “dGPU” or “Ultimate” GPU mode. Then restart.")
+          : T("Tu pantalla admite G-SYNC (funcionaba antes), pero ahora está desactivado. Sin él, los límites "
+              "pensados para G-SYNC pueden empeorar el movimiento.\n"
+              "Para activarlo: Panel de control de NVIDIA → Configurar G-SYNC → «Habilitar G-SYNC».",
+              "Your display supports G-SYNC (it worked before), but it's turned off now. Without it, limits "
+              "meant for G-SYNC can make motion worse.\n"
+              "To turn it on: NVIDIA Control Panel → Set up G-SYNC → “Enable G-SYNC”.");
+  const ImVec2 p = ImGui::GetCursorScreenPos();
+  const float pad = 16 * scale, wrap = w - 2 * pad;
+  const float th = ImGui::CalcTextSize(body, nullptr, false, wrap).y;
+  const float bh = ImGui::GetFrameHeight();
+  const float h = pad + ImGui::GetTextLineHeight() + 6 * scale + th + 10 * scale + bh + pad;
+  ImDrawList* dl = ImGui::GetWindowDrawList();
+  dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), Col(kCard), 10 * scale);
+  dl->AddRectFilled(p, ImVec2(p.x + 4 * scale, p.y + h), Col(kAmber), 10 * scale, ImDrawFlags_RoundCornersLeft);
+  ImGui::SetCursorScreenPos(ImVec2(p.x + pad, p.y + pad));
+  if (fontStrong) ImGui::PushFont(fontStrong);
+  ImGui::TextColored(kAmber, "%s", title);
+  if (fontStrong) ImGui::PopFont();
+  ImGui::SetCursorScreenPos(ImVec2(p.x + pad, ImGui::GetCursorScreenPos().y + 6 * scale - ImGui::GetStyle().ItemSpacing.y));
+  ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + wrap);
+  ImGui::TextColored(kText, "%s", body);
+  ImGui::PopTextWrapPos();
+  ImGui::SetCursorScreenPos(ImVec2(p.x + pad, ImGui::GetCursorScreenPos().y + 10 * scale - ImGui::GetStyle().ItemSpacing.y));
+  if (ImGui::Button(T("Abrir el panel de NVIDIA", "Open the NVIDIA panel"))) OpenNvidiaPanel();
+  ImGui::SetCursorScreenPos(ImVec2(p.x, p.y + h + 14 * scale));
+  ImGui::Dummy(ImVec2(w, 0));
+}
+
+// Aceptar la recomendacion de pasar un juego a "Ritmo constante": queda fijado para el (prioridad elegida
+// por el usuario). Desde la fila de Juegos y desde Ahora.
+static void AcceptPrioSuggestion(const std::string& exe, const std::string& label) {
+  WriteKv(L"equipo.txt", "prioridad-fija|" + exe, "estabilidad");
+  WriteKv(L"equipo.txt", "prioridad-sugerida|" + exe, "");
+  int mode = 0;
+  bool autoSt = false;
+  const bool fluidNow = GameUsesFluid(exe, &mode, &autoSt);
+  std::lock_guard<std::mutex> lock(g_ui.m);
+  g_ui.prioSuggest.erase(exe);
+  g_ui.warnings.erase(exe);
+  for (auto& u : g_ui.changes)
+    if (u.exe == exe) {
+      u.prioMode = mode;
+      u.usesFluid = fluidNow;
+      u.autoStability = autoSt;
+      u.prioSuggest = false;
+      u.warning.clear();
+    }
+  g_ui.notice = Fmt(T("%s: «Ritmo constante» desde la próxima partida.", "%s: “Steady pace” from the next session."), label.c_str());
+}
+
+// Hace cuanto terminó algo, en palabras ("hace un momento", "hace 5 minutos", "hace 2 h").
+static std::string AgoText(double seconds) {
+  if (seconds < 60) return T("hace un momento", "a moment ago");
+  const int m = static_cast<int>(seconds / 60);
+  if (m < 60) return m == 1 ? T("hace 1 minuto", "1 minute ago") : Fmt(T("hace %d minutos", "%d minutes ago"), m);
+  const int h = m / 60;
+  return h == 1 ? T("hace 1 hora", "1 hour ago") : Fmt(T("hace %d horas", "%d hours ago"), h);
+}
+
+static void VSpace(float px) { ImGui::Dummy(ImVec2(0, px * scale)); }
+
+// Una cifra de "Ahora": el valor en grande (Bahnschrift) y debajo qué es, en palabras.
+static void Figure(const std::string& value, const std::string& label, float width) {
   ImGui::BeginGroup();
-  ImGui::TextColored(kDim, "%s", label);
-  ImGui::PushFont(fontStrong);
+  ImGui::PushFont(fontNum);
   ImGui::TextUnformatted(value.c_str());
   ImGui::PopFont();
+  ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + width - 16 * scale);
+  ImGui::TextColored(kDim, "%s", label.c_str());
+  ImGui::PopTextWrapPos();
   ImGui::EndGroup();
 }
 
+// Leyenda de la grafica: una muestra de color y su significado.
+static void LegendItem(const ImVec4& c, const char* text) {
+  ImVec2 p = ImGui::GetCursorScreenPos();
+  const float h = ImGui::GetTextLineHeight();
+  ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(p.x, p.y + h * 0.5f - 1.5f * scale),
+                                            ImVec2(p.x + 18 * scale, p.y + h * 0.5f + 1.5f * scale), Col(c), 2 * scale);
+  ImGui::Dummy(ImVec2(24 * scale, h));
+  ImGui::SameLine(0, 0);
+  ImGui::TextColored(kDim, "%s", text);
+}
+
+// "Ahora" (desde la 0.61): un veredicto en una frase, la grafica de ritmo como protagonista, tres cifras,
+// solo la accion que toca y los detalles plegados. Sin juego abierto, que hacer y la ultima partida:
+// nunca las cifras de una partida que ya termino.
 static void PageNow(const View& v) {
+  VrrAlertCard(v);
   const float full = ImGui::GetContentRegionAvail().x;
-  const float pad = 22 * scale, gap = 16 * scale;
-  // Estado del limite (el mismo que muestra el overlay) y datos para la variacion del ritmo
+  ImDrawList* dl = ImGui::GetWindowDrawList();
+
+  // ---------------- Sin juego abierto ----------------
+  if (!v.haveGame) {
+    const bool err = v.status == UiStatus::Error;
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + full);
+    ImGui::PushFont(fontVerdict);
+    ImGui::TextUnformatted(err ? v.statusText.c_str() : T("Abre un juego.", "Open a game."));
+    ImGui::PopFont();
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 4 * scale);
+    ImGui::TextColored(kDim, "%s", err ? v.statusDetail.c_str()
+                                       : T("Lo detecto solo en cuanto pasa a primer plano, y empiezo a medir.",
+                                           "I detect it as soon as it comes to the front, and start measuring."));
+    ImGui::PopTextWrapPos();
+    VSpace(24);
+    {  // la linea plana, en reposo
+      const ImVec2 p = ImGui::GetCursorScreenPos();
+      const float h = 96 * scale, pad = 24 * scale;
+      dl->AddRectFilled(p, ImVec2(p.x + full, p.y + h), Col(kCard), 16 * scale);
+      for (float x = p.x + pad; x < p.x + full - pad; x += 12 * scale)
+        dl->AddCircleFilled(ImVec2(x, p.y + h * 0.5f), 1.6f * scale, Col(kLine));
+      ImGui::Dummy(ImVec2(full, h));
+    }
+    if (!v.lastGame.empty()) {
+      VSpace(24);
+      const ImVec2 p = ImGui::GetCursorScreenPos();
+      const float pad = 24 * scale;
+      dl->ChannelsSplit(2);
+      dl->ChannelsSetCurrent(1);
+      ImGui::SetCursorScreenPos(ImVec2(p.x + pad, p.y + pad * 0.9f));
+      ImGui::BeginGroup();
+      ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + full - pad * 2);
+      ImGui::PushFont(fontHead);
+      ImGui::TextUnformatted(T("Tu última partida", "Your last session"));
+      ImGui::PopFont();
+      const std::string when = v.lastGame + ", " + AgoText(NowSec() - v.lastEnd);
+      ImGui::TextColored(kDim, "%s", when.c_str());
+      VSpace(6);
+      const int mins = static_cast<int>(std::lround(v.lastMinutes));
+      const std::string dur = mins < 1 ? std::string(T("menos de un minuto", "less than a minute"))
+                              : mins == 1 ? std::string(T("1 minuto", "1 minute"))
+                                          : Fmt(T("%d minutos", "%d minutes"), mins);
+      const std::string hit = v.lastHitches == 1 ? std::string(T("1 tirón", "1 stutter"))
+                                                 : Fmt(T("%d tirones", "%d stutters"), v.lastHitches);
+      const std::string sum =
+          v.lastLocked ? Fmt(T("Fue estable a %.0f FPS durante %s, con %s. Su límite está comprobado y aceptado.",
+                               "It was steady at %.0f FPS for %s, with %s. Its limit is checked and accepted."),
+                             v.lastFps, dur.c_str(), hit.c_str())
+                       : Fmt(T("Jugaste %s, a unos %.0f FPS, con %s.", "You played for %s, at about %.0f FPS, with %s."),
+                             dur.c_str(), v.lastFps, hit.c_str());
+      ImGui::TextUnformatted(sum.c_str());
+      ImGui::PopTextWrapPos();
+      VSpace(10);
+      if (ImGui::Button(T("Ver en Juegos", "See in Games"))) {
+        page = 1;
+        g_scrollTop = true;
+      }
+      ImGui::EndGroup();
+      const float bottom = ImGui::GetItemRectMax().y + pad * 0.9f;
+      dl->ChannelsSetCurrent(0);
+      dl->AddRect(p, ImVec2(p.x + full, bottom), Col(kLine), 16 * scale, 0, 1.0f * scale);
+      dl->ChannelsMerge();
+      ImGui::SetCursorScreenPos(ImVec2(p.x, bottom));
+      ImGui::Dummy(ImVec2(full, 0));
+    }
+    if (!v.notice.empty()) {
+      VSpace(16);
+      ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + full);
+      ImGui::TextColored(kBlue, "%s", v.notice.c_str());
+      ImGui::PopTextWrapPos();
+    }
+    return;
+  }
+
+  // ---------------- Durante una partida ----------------
   overlay::LimitState ls = overlay::LimitState::None;
   std::string limLabel;
   double baseSwing = -1.0;
@@ -6069,174 +6910,191 @@ static void PageNow(const View& v) {
   }
   const bool locked = ls == overlay::LimitState::Locked;
   const double swing = overlay::RecentSwing(frames);
+  const UiChange* cur = nullptr;
+  for (const auto& c : v.changes)
+    if (c.exe == v.exe) cur = &c;
 
-  // Cabecera: juego, estado y etiqueta del limite a la derecha
-  const ImVec2 h0 = ImGui::GetCursorPos();
-  std::string pill;
-  ImVec4 pillCol = kRed;
-  if (v.haveGame) {
-    pill = locked ? std::string(T("FIJADO · ", "LOCKED · ")) + limLabel
-           : ls == overlay::LimitState::Pending ? std::string(T("SIN CONFIRMAR · ", "UNCONFIRMED · ")) + limLabel
-                                                : std::string(T("SIN LÍMITE", "NO LIMIT"));
-    pillCol = locked ? kBlue : kRed;
+  // Veredicto: una frase con la conclusion, y debajo el porque.
+  std::string title, sub;
+  if (v.status == UiStatus::Paused) {
+    title = T("En pausa.", "Paused.");
+    sub = v.statusDetail.empty() ? v.statusText : v.statusDetail;
+  } else if (v.status == UiStatus::Restart) {
+    title = v.statusText;
+    sub = v.statusDetail;
+  } else if (locked && cur) {
+    const double real = cur->value / static_cast<double>(std::max(1, cur->fg));
+    const bool sinking = v.lowFps > 0 && v.lowFps < real / 1.13;  // la regla del 13 %
+    title = cur->fg > 1 ? Fmt(sinking ? T("Va a %.0f FPS reales, con caídas en las zonas pesadas.",
+                                         "Running at %.0f real FPS, with drops in heavy areas.")
+                                       : T("Va estable a %.0f FPS reales.", "Steady at %.0f real FPS."),
+                              real)
+                        : Fmt(sinking ? T("Va a %.0f FPS, con caídas en las zonas pesadas.", "Running at %.0f FPS, with drops in heavy areas.")
+                                      : T("Va estable a %.0f FPS.", "Steady at %.0f FPS."),
+                              real);
+    sub = std::string(T("Límite de ", "Limit of ")) + cur->desc + T(". Comprobado y aceptado.", ". Checked and accepted.");
+  } else if (ls == overlay::LimitState::Pending) {
+    title = Fmt(T("Comprobando el límite de %s…", "Checking the %s limit…"), limLabel.c_str());
+    sub = cur ? std::string(T("Límite de ", "Limit of ")) + cur->desc + T(". En unos segundos sabré si funciona.", ". I'll know in a few seconds whether it works.")
+              : std::string(T("En unos segundos sabré si funciona.", "I'll know in a few seconds whether it works."));
+  } else {
+    title = T("Midiendo sin límite.", "Measuring without a limit.");
+    sub = g_applyMode ? T("Al cerrar el juego decidiré su límite con toda la partida.",
+                          "When you close the game, I'll decide its limit using the whole session.")
+                      : T("«Aplicar límites» está desactivado: solo mido.", "“Apply limits” is off: I only measure.");
   }
-  const float pillW = v.haveGame ? PillWidth(pill.c_str()) : ImGui::CalcTextSize(StatusWord(v.status)).x + 47 * scale;
-  ImGui::PushTextWrapPos(h0.x + full - pillW - gap);
+  ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + full);
   ImGui::PushFont(fontHead);
-  ImGui::TextUnformatted(v.haveGame ? v.game.c_str() : v.statusText.c_str());
+  ImGui::TextColored(Hex(0xAEB6C3), "%s", v.game.c_str());
   ImGui::PopFont();
-  if (v.haveGame) ImGui::TextColored(kDim, "%s", v.statusText.c_str());
-  if (!v.statusDetail.empty()) ImGui::TextColored(kDim, "%s", v.statusDetail.c_str());
-  ImGui::PopTextWrapPos();
-  const float afterHeader = ImGui::GetCursorPosY();
-  ImGui::SetCursorPos(ImVec2(h0.x + full - pillW, h0.y + 4 * scale));
-  if (v.haveGame) Pill(pill.c_str(), pillCol);
-  else StatusPill(v.status);
-  ImGui::SetCursorPos(ImVec2(h0.x, std::max(afterHeader, ImGui::GetCursorPosY())));
+  VSpace(2);
+  ImGui::PushFont(fontVerdict);
+  ImGui::TextUnformatted(title.c_str());
+  ImGui::PopFont();
+  ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 4 * scale);
+  if (!sub.empty()) ImGui::TextColored(kDim, "%s", sub.c_str());
   if (!v.currentWarning.empty()) {
-    ImGui::PushTextWrapPos(h0.x + full);
+    VSpace(4);
     ImGui::TextColored(kAmber, "%s", v.currentWarning.c_str());
-    ImGui::PopTextWrapPos();
-    if (ImGui::SmallButton(T("Ir a Juegos", "Go to Games"))) page = 1;
   }
-  ImGui::Dummy(ImVec2(0, 8 * scale));
+  ImGui::PopTextWrapPos();
+  VSpace(22);
 
-  // Tarjeta principal: cifra, metricas y grafica
-  ImDrawList* dl = ImGui::GetWindowDrawList();
-  const float lineH = ImGui::GetTextLineHeightWithSpacing();
-  const float heroH = std::max(240 * scale, fontNum->FontSize + lineH * 6 + 70 * scale);
-  ImVec2 p = ImGui::GetCursorScreenPos();
-  dl->AddRectFilled(p, ImVec2(p.x + full, p.y + heroH), Col(kCard), 18 * scale);
-  const float leftW = 230 * scale;
-  ImGui::SetCursorScreenPos(ImVec2(p.x + pad, p.y + 18 * scale));
-  ImGui::BeginGroup();
-  ImGui::PushFont(fontNum);
-  ImGui::TextUnformatted(v.realFps > 0 ? Fmt("%.0f", v.realFps).c_str() : "—");
-  ImGui::PopFont();
-  if (v.screenFps > 0)
-    ImGui::TextColored(kDim, T("FPS reales · %.0f en pantalla", "real FPS · %.0f on screen"), v.screenFps);
-  else
-    ImGui::TextColored(kDim, "%s", T("FPS reales", "real FPS"));
-  ImGui::Dummy(ImVec2(0, 10 * scale));
-  const float mcol = 100 * scale;
-  const float mx = ImGui::GetCursorPosX();
-  Metric(T("1 % bajo", "1 % low"), v.lowFps > 0 ? Fmt("%.0f", v.lowFps) : "—");
-  ImGui::SameLine(mx + mcol);
-  Metric(T("Consistencia", "Consistency"), v.realFps > 0 ? Fmt("%.0f %%", v.steadyPct) : "—");
-  if (ImGui::IsItemHovered())
-    ImGui::SetTooltip(T("Fotogramas reales cuya duración cambia menos de 2 ms respecto al anterior.\n"
-                        "Variación media: %.2f ms. Cuanto más alto el porcentaje, más regular el ritmo.",
-                        "Real frames whose duration changes by less than 2 ms from the previous one.\n"
-                        "Average change: %.2f ms. The higher the percentage, the steadier the pace."),
-                      v.jitterMs);
-  ImGui::Dummy(ImVec2(0, 6 * scale));
-  Metric(T("Tirones", "Stutters"), Fmt("%d", v.hitches));
-  ImGui::SameLine(mx + mcol);
-  Metric(T("Variación", "Swing"), swing >= 0 ? Fmt("±%.1f ms", swing) : "—");
-  if (ImGui::IsItemHovered())
-    ImGui::SetTooltip("%s", baseSwing > 0 ? Fmt(T("Variación del ritmo en los últimos 10 s. Sin límite: ±%.1f ms.",
-                                                  "Pace swing over the last 10 s. Without a limit: ±%.1f ms."), baseSwing).c_str()
-                                          : T("Variación del ritmo en los últimos 10 s.", "Pace swing over the last 10 s."));
-  ImGui::EndGroup();
-  ImGui::SetCursorScreenPos(ImVec2(p.x + leftW, p.y + 14 * scale));
-  PacingGraph(ImVec2(full - leftW - 14 * scale, heroH - 28 * scale));
-  ImGui::SetCursorScreenPos(ImVec2(p.x, p.y + heroH + gap));
+  // La grafica de ritmo, a todo lo ancho: la protagonista.
+  ImGui::TextColored(kDim, "%s", T("Ritmo de los últimos 10 segundos", "Pace over the last 10 seconds"));
+  VSpace(4);
+  PacingGraph(ImVec2(full, 250 * scale));
+  VSpace(6);
+  LegendItem(locked ? kBlue : Hex(0xAEB6C3), locked ? T("Al ritmo del límite", "At the limit's pace") : T("Ritmo del juego", "Game's pace"));
+  ImGui::SameLine(0, 28 * scale);
+  LegendItem(kAmber, T("Tirón: un fotograma de más de 2,5 veces lo normal", "Stutter: a frame more than 2.5 times the usual"));
+  VSpace(24);
 
-  // Tarjetas inferiores: Limite y Detalles, de la misma altura
-  const float cardW = (full - gap) * 0.5f;
-  const ImVec2 top = ImGui::GetCursorScreenPos();
-  dl->ChannelsSplit(2);
-  dl->ChannelsSetCurrent(1);
-  auto CardTitle = [&](const char* t) {
-    ImGui::PushFont(fontHead);
-    ImGui::TextUnformatted(t);
-    ImGui::PopFont();
-    ImGui::Dummy(ImVec2(0, 2 * scale));
-  };
-  float bottomA, bottomB;
-  {  // Limite
-    ImGui::SetCursorScreenPos(ImVec2(top.x + pad, top.y + 18 * scale));
-    ImGui::BeginGroup();
-    const float lx = ImGui::GetCursorPosX();
-    ImGui::PushTextWrapPos(lx + cardW - pad * 2);
-    CardTitle(T("Límite", "Limit"));
-    const float k1 = lx + 120 * scale;
-    const bool applied = v.appliedText != T("ninguno", "none");
-    KV(T("Aplicado", "Applied"), v.appliedText, k1, applied ? &kBlue : nullptr);
-    KV(T("Recomendado", "Recommended"), v.recText.empty() ? "—" : v.recText, k1);
-    if (v.haveGame) {
-      const char* st = locked ? T("comprobado y aceptado", "checked and accepted")
-                       : ls == overlay::LimitState::Pending ? T("pendiente de comprobar", "waiting to be checked")
-                                                            : T("sin límite todavía", "no limit yet");
-      KV(T("Estado", "Status"), st, k1, locked ? &kBlue : &kRed);
+  // Tres cifras con nombres claros. En pausa, el motor deja los FPS reales a cero: se muestra el ultimo
+  // valor de esta partida, para que las tres cifras sean coherentes.
+  static double lastReal = 0.0;
+  static std::string lastRealExe;
+  if (v.realFps > 0) {
+    lastReal = v.realFps;
+    lastRealExe = v.exe;
+  }
+  const double shownReal = v.realFps > 0 ? v.realFps : lastRealExe == v.exe ? lastReal : 0.0;
+  {
+    const float colW = full / 3.0f;
+    const float x0 = ImGui::GetCursorPosX();
+    Figure(shownReal > 0 ? Fmt("%.0f", shownReal) : "—",
+           v.screenFps > 0 ? Fmt(T("FPS reales (%.0f en pantalla)", "real FPS (%.0f on screen)"), v.screenFps)
+                           : std::string(T("FPS reales", "real FPS")),
+           colW);
+    ImGui::SameLine(x0 + colW);
+    Figure(v.lowFps > 0 ? Fmt("%.0f", v.lowFps) : "—", T("FPS en el 1 % más lento", "FPS in the slowest 1 %"), colW);
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("%s", T("El ritmo del 1 % de fotogramas más lentos (sin contar los tirones).\n"
+                                "Cuanto más cerca de los FPS reales, más constante va el juego.",
+                                "The pace of the slowest 1 % of frames (not counting stutters).\n"
+                                "The closer to the real FPS, the steadier the game."));
+    ImGui::SameLine(x0 + colW * 2);
+    Figure(Fmt("%d", v.hitches), T("Tirones en esta partida", "Stutters this session"), colW);
+  }
+  VSpace(24);
+
+  // Solo la accion que toca: la recomendacion pendiente de este juego, o aplicar ya la actual.
+  {
+    std::string text, button;
+    bool prio = false, applyNow = false;
+    if (cur && (cur->suggestFps > 0 || cur->prioSuggest)) {
+      text = cur->warning;
+      prio = cur->suggestFps <= 0;
+      button = prio ? T("Usar «Ritmo constante»", "Use “Steady pace”")
+                    : Fmt(cur->suggestKind == 0 ? T("Subir a %.0f FPS", "Raise to %.0f FPS") : T("Bajar a %.0f FPS", "Lower to %.0f FPS"),
+                          cur->suggestFps);
+    } else if (!cur && g_applyMode && !v.recText.empty() && v.recText.find("—") == std::string::npos &&
+               v.recText != T("midiendo…", "measuring…")) {
+      text = Fmt(T("Límite recomendado ahora: %s. Si no quieres esperar al final de la partida, aplícalo ya y reinicia el juego.",
+                   "Limit recommended now: %s. If you don't want to wait for the end of the session, apply it now and restart the game."),
+                 v.recText.c_str());
+      button = T("Aplicar ya", "Apply now");
+      applyNow = true;
     }
-    ImGui::PopTextWrapPos();
-    ImGui::Dummy(ImVec2(0, 6 * scale));
-    bool can = v.haveGame && g_applyMode && !applied && !v.recText.empty() &&
-               v.recText.find("—") == std::string::npos && v.recText != T("midiendo…", "measuring…");
-    ImGui::BeginDisabled(!can);
-    PrimaryButtonStyle(can);
-    if (ImGui::Button(T("Aplicar ya", "Apply now"))) g_applyNowRequest = true;
-    PrimaryButtonEnd(can);
-    ImGui::EndDisabled();
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-      ImGui::SetTooltip("%s", T("Guarda ya la recomendación actual (luego reinicia el juego). Si no, la app\n"
-                                "decide con toda la partida al cerrar el juego.",
-                                "Saves the current recommendation now (then restart the game). Otherwise the\n"
-                                "app decides with the whole session when you close the game."));
-    ImGui::SameLine();
-    ImGui::BeginDisabled(!v.haveGame || v.exe.empty());
-    if (ImGui::Button(T("Límite manual…", "Manual limit…"))) {
-      int k = v.screenFps > v.realFps * 1.4 && v.realFps > 0 ? static_cast<int>(std::lround(v.screenFps / v.realFps)) : 1;
-      int def = 0;
-      for (const auto& c : v.changes)
-        if (c.exe == v.exe) { def = c.value; k = c.fg; }
-      if (def == 0) def = static_cast<int>(std::lround(v.realFps > 0 ? v.realFps * k : 60));
-      RequestManual(v.exe, v.game, def, k);
-    }
-    ImGui::EndDisabled();
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-      ImGui::SetTooltip("%s", T("Pon tú el límite de este juego. La app no lo cambiará.",
-                                "Set this game's limit yourself. The app won't change it."));
-    bool hasChange = false;
-    for (const auto& c : v.changes) hasChange = hasChange || c.exe == v.exe;
-    if (v.haveGame && hasChange) {
-      ImGui::SameLine();
-      if (ImGui::Button(T("Deshacer", "Undo"))) {
-        std::lock_guard<std::mutex> lock(g_undoOneMutex);
-        g_undoOne.push_back(v.exe);
+    if (!button.empty()) {
+      const ImVec2 p = ImGui::GetCursorScreenPos();
+      const float pad = 22 * scale, bw = ImGui::CalcTextSize(button.c_str()).x + ImGui::GetStyle().FramePadding.x * 2;
+      const bool urgent = cur && cur->suggestFps > 0 && cur->suggestKind == 2;
+      dl->ChannelsSplit(2);
+      dl->ChannelsSetCurrent(1);
+      // Texto y boton centrados en la misma franja, sea el texto de una linea o de varias.
+      const float wrapW = full - pad * 3 - bw;
+      const float textH = ImGui::CalcTextSize(text.c_str(), nullptr, false, wrapW).y;
+      const float rowH = std::max(textH, ImGui::GetFrameHeight());
+      ImGui::SetCursorScreenPos(ImVec2(p.x + pad, p.y + pad + (rowH - textH) * 0.5f));
+      ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + wrapW);
+      ImGui::TextColored(urgent ? kRed : kText, "%s", text.c_str());
+      ImGui::PopTextWrapPos();
+      ImGui::SetCursorScreenPos(ImVec2(p.x + full - pad - bw, p.y + pad + (rowH - ImGui::GetFrameHeight()) * 0.5f));
+      PrimaryButtonStyle(true);
+      if (ImGui::Button(button.c_str())) {
+        if (applyNow) {
+          g_applyNowRequest = true;
+        } else if (prio) {
+          AcceptPrioSuggestion(cur->exe, cur->label);
+        } else {
+          std::lock_guard<std::mutex> lock(g_manualLimitMutex);
+          g_applySuggestionReq.push_back(cur->exe);
+        }
       }
-      if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("%s", T("Devuelve este juego a como estaba; se recalculará en la próxima partida.",
-                                  "Returns this game to how it was; it will be recalculated next session."));
+      PrimaryButtonEnd(true);
+      const float bottom = p.y + pad * 2 + rowH;
+      dl->ChannelsSetCurrent(0);
+      dl->AddRectFilled(p, ImVec2(p.x + full, bottom), Col(kCard), 16 * scale);
+      dl->AddRect(p, ImVec2(p.x + full, bottom), Col(urgent ? kRed : kLine, urgent ? 0.6f : 1.0f), 16 * scale, 0, 1.0f * scale);
+      dl->ChannelsMerge();
+      ImGui::SetCursorScreenPos(ImVec2(p.x, bottom));
+      ImGui::Dummy(ImVec2(full, 0));
+      VSpace(20);
     }
-    ImGui::EndGroup();
-    bottomA = ImGui::GetItemRectMax().y;
   }
-  {  // Detalles
-    ImGui::SetCursorScreenPos(ImVec2(top.x + cardW + gap + pad, top.y + 18 * scale));
-    ImGui::BeginGroup();
-    const float lx = ImGui::GetCursorPosX();
-    ImGui::PushTextWrapPos(lx + cardW - pad * 2);
-    CardTitle(T("Detalles", "Details"));
-    const float k2 = lx + 140 * scale;
-    KV("VRR", VrrDescription(v), k2, v.vrrState == 2 ? &kBlue : nullptr);
-    KV(T("Presentación", "Presentation"), v.presentText.empty() ? "—" : v.presentText, k2);
-    KV(T("Límite del juego", "Game's own limit"), v.capText.empty() ? "—" : v.capText, k2);
-    if (!v.bottleneck.empty()) KV(T("Cuello de botella", "Bottleneck"), v.bottleneck, k2);
-    KV(T("Pantalla", "Display"), v.monitor.empty() ? "—" : v.monitor, k2);
-    ImGui::PopTextWrapPos();
-    ImGui::EndGroup();
-    bottomB = ImGui::GetItemRectMax().y;
+
+  // Detalles, plegados: un titulo con flecha, alineado con el resto (una cabecera plegable de la
+  // biblioteca se saldria de los margenes de la pagina).
+  {
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    dl->AddLine(p, ImVec2(p.x + full, p.y), Col(kLine), 1.0f * scale);
+    VSpace(12);
   }
-  const float cardH = std::max(bottomA, bottomB) + 18 * scale - top.y;
-  dl->ChannelsSetCurrent(0);
-  dl->AddRectFilled(top, ImVec2(top.x + cardW, top.y + cardH), Col(kCard), 18 * scale);
-  dl->AddRectFilled(ImVec2(top.x + cardW + gap, top.y), ImVec2(top.x + full, top.y + cardH), Col(kCard), 18 * scale);
-  dl->ChannelsMerge();
-  ImGui::SetCursorScreenPos(ImVec2(top.x, top.y + cardH + 10 * scale));
-  ImGui::Dummy(ImVec2(full, 0));
+  ImGui::PushFont(fontHead);
+  const bool detailsOpen = ImGui::TreeNodeEx(T("Detalles", "Details"), ImGuiTreeNodeFlags_NoTreePushOnOpen);
+  ImGui::PopFont();
+  if (detailsOpen) {
+    VSpace(4);
+    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(0, 5 * scale));
+    if (ImGui::BeginTable("detalles", 2, ImGuiTableFlags_SizingStretchProp)) {
+      ImGui::TableSetupColumn("k", ImGuiTableColumnFlags_WidthFixed, 230 * scale);
+      ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch);
+      auto Row = [](const char* k, const std::string& val) {
+        if (val.empty() || val == "—") return;
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::TextColored(kDim, "%s", k);
+        ImGui::TableSetColumnIndex(1);
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextUnformatted(val.c_str());
+        ImGui::PopTextWrapPos();
+      };
+      Row("G-SYNC / VRR", VrrDescription(v));
+      Row(T("Presentación", "Presentation"), v.presentText);
+      Row(T("Qué limita al juego", "What limits the game"), v.bottleneck);
+      Row(T("Límite propio del juego", "Game's own limit"), v.capText);
+      Row(T("Variación del ritmo", "Pace swing"),
+          swing >= 0 ? (baseSwing > 0 ? Fmt(T("±%.1f ms (sin límite: ±%.1f ms)", "±%.1f ms (without a limit: ±%.1f ms)"), swing, baseSwing)
+                                      : Fmt("±%.1f ms", swing))
+                     : std::string());
+      Row(T("Pantalla", "Display"), v.monitor);
+      ImGui::EndTable();
+    }
+    ImGui::PopStyleVar();
+  }
   if (!v.notice.empty()) {
+    VSpace(16);
     ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + full);
     ImGui::TextColored(kBlue, "%s", v.notice.c_str());
     ImGui::PopTextWrapPos();
@@ -6244,68 +7102,107 @@ static void PageNow(const View& v) {
 }
 
 static void PageGames(const View& v) {
+  VrrAlertCard(v);
+  // Limitador: como se aplican los limites. Solo se muestra si hay algo que elegir (AMD o Intel, o RTSS).
+  const int lk = g_limiterKind;
+  const bool nvAvail = g_nvidiaAvailable, rtssAvail = g_rtssAvailable;
+  if (!nvAvail && (rtssAvail || g_guidedVendor != 0)) {  // con NVIDIA todo es automatico: no hay nada que elegir
+    Section(T("Limitador", "Limiter"));
+    const int first = nvAvail ? 0 : 1;  // driver de NVIDIA, o "Solo recomendar" con AMD/Intel
+    const char* firstName = nvAvail ? T("Driver de NVIDIA", "NVIDIA driver") : T("Solo recomendar", "Recommend only");
+    const bool canFirst = nvAvail || g_guidedVendor != 0;
+    if (canFirst) {
+      const bool sel = lk == first;
+      PrimaryButtonStyle(sel);
+      if (ImGui::Button(firstName, ImVec2(OptionW(), 0)) && !sel) g_limiterReq = first;
+      PrimaryButtonEnd(sel);
+    }
+    if (rtssAvail) {
+      if (canFirst) ImGui::SameLine(0, 4 * scale);
+      const bool sel = lk == 2;
+      PrimaryButtonStyle(sel);
+      if (ImGui::Button(T("RivaTuner (RTSS)", "RivaTuner (RTSS)"), ImVec2(OptionW(), 0)) && !sel) g_limiterReq = 2;
+      PrimaryButtonEnd(sel);
+    }
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x * 0.85f);
+    ImGui::TextColored(kDim, "%s",
+        lk == 2 ? (nvAvail ? T("RivaTuner (RTSS): la app aplica cada límite en el perfil del juego en RTSS. RTSS tiene que "
+                               "estar abierto mientras juegas. Sin «GPU al máximo» ni la baja latencia del driver; con "
+                               "G-SYNC, activa tú el VSync del driver.",
+                               "RivaTuner (RTSS): the app applies each limit in the game's RTSS profile. RTSS has to be "
+                               "running while you play. Without “GPU at max” or the driver's low latency; with G-SYNC, "
+                               "turn on the driver's VSync yourself.")
+                             : T("RivaTuner (RTSS): la app aplica cada límite en el perfil del juego en RTSS. RTSS tiene que "
+                                 "estar abierto mientras juegas. Con FreeSync, activa también el VSync del driver.",
+                                 "RivaTuner (RTSS): the app applies each limit in the game's RTSS profile. RTSS has to be "
+                                 "running while you play. With FreeSync, also turn on the driver's VSync."))
+        : lk == 1 ? (rtssAvail ? T("Solo recomendar: la app te indica cada límite en la fila del juego, lo aplicas tú y ella "
+                                   "comprueba que funciona. Con RivaTuner (RTSS), la app los aplicaría sola.",
+                                   "Recommend only: the app shows each limit on the game's row, you apply it and it checks "
+                                   "that it works. With RivaTuner (RTSS), the app would apply them itself.")
+                               : T("Solo recomendar: la app te indica cada límite en la fila del juego, lo aplicas tú y ella "
+                                   "comprueba que funciona. Si instalas RivaTuner (RTSS), podrás elegirlo aquí para que la "
+                                   "app los aplique sola.",
+                                   "Recommend only: the app shows each limit on the game's row, you apply it and it checks "
+                                   "that it works. If you install RivaTuner (RTSS), you'll be able to choose it here so the "
+                                   "app applies them itself."))
+                  : T("Driver de NVIDIA (recomendado): la app aplica cada límite en el perfil del juego del driver, con "
+                      "«GPU al máximo» y la baja latencia.",
+                      "NVIDIA driver (recommended): the app applies each limit in the game's driver profile, with "
+                      "“GPU at max” and low latency."));
+    if (rtssAvail && canFirst)  // solo si hay a que cambiar
+      ImGui::TextColored(kDim, "%s", T("Al cambiar de limitador, los límites de tus juegos se mueven al nuevo.",
+                                       "When you change the limiter, your games' limits move to the new one."));
+    ImGui::PopTextWrapPos();
+    ImGui::Dummy(ImVec2(0, 14 * scale));
+  }
   Section(T("Prioridad", "Priority"));
   {
-    int pr = g_priority;
-    const char* names[2] = {T("Estabilidad", "Stability"), T("Fluidez", "Smoothness")};
-    for (int i : {1, 0}) {  // Fluidez primero (predeterminada)
-      if (i == 0) ImGui::SameLine(0, 4 * scale);
-      bool sel = pr == i;
+    const int pm = g_prioMode;
+    const char* names[3] = {T("Automática", "Automatic"), T("Ritmo constante", "Steady pace"), T("Más FPS", "More FPS")};
+    for (int i = 0; i < 3; ++i) {
+      if (i > 0) ImGui::SameLine(0, 4 * scale);
+      const bool sel = pm == i;
       PrimaryButtonStyle(sel);
-      if (ImGui::Button(names[i], ImVec2(140 * scale, 0)) && !sel) {
-        g_priority = i;
-        WriteKv(L"equipo.txt", "prioridad", i == 1 ? "fluidez" : "estabilidad");
+      if (ImGui::Button(names[i], ImVec2(OptionW(), 0)) && !sel) {
+        SetPrioMode(i);
+        WriteKv(L"equipo.txt", "prioridad", i == 0 ? "auto" : i == 1 ? "estabilidad" : "fluidez");
       }
       PrimaryButtonEnd(sel);
     }
     ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x * 0.85f);
-    ImGui::TextColored(kDim, "%s", pr == 1
-        ? T("Fluidez (recomendada): el límite más alto que el juego alcanza la mayor parte del tiempo, "
-            "aceptando caídas breves en los momentos más exigentes.",
-            "Smoothness (recommended): the highest limit the game reaches most of the time, accepting "
-            "brief drops in the most demanding moments.")
-        : T("Estabilidad: un límite que el juego sostiene incluso en sus peores momentos. El ritmo más "
-            "regular, aunque a veces algo más bajo.",
-            "Stability: a limit the game holds even in its worst moments. The steadiest pace, though "
-            "sometimes a bit lower."));
+    ImGui::TextColored(kDim, "%s",
+        pm == 0 ? T("Automática (recomendada): la app ajusta cada juego por su cuenta. Empieza con «Más FPS», "
+                    "pasa a «Ritmo constante» los juegos que resultan inestables, y sube o baja cada límite según "
+                    "lo que el juego sostiene.",
+                    "Automatic (recommended): the app adjusts each game on its own. It starts with “More FPS”, "
+                    "moves games that turn out to be unstable to “Steady pace”, and raises or lowers each limit "
+                    "based on what the game holds.")
+        : pm == 1 ? T("Ritmo constante: un límite que el juego sostiene incluso en sus peores momentos (el ritmo "
+                      "más regular, a veces con algunos FPS menos). La app no cambia nada por su cuenta: si un "
+                      "juego va sobrado o no sostiene su límite, te lo recomienda en su fila.",
+                      "Steady pace: a limit the game holds even in its worst moments (the steadiest pace, sometimes "
+                      "with a few fewer FPS). The app doesn't change anything on its own: if a game has headroom or "
+                      "can't hold its limit, it recommends it on its row.")
+                  : T("Más FPS: el límite más alto que el juego alcanza la mayor parte del tiempo, aceptando caídas "
+                      "breves en los momentos más exigentes. La app no cambia nada por su cuenta: si un juego va "
+                      "sobrado, no sostiene su límite o le conviene «Ritmo constante», te lo recomienda en su fila.",
+                      "More FPS: the highest limit the game reaches most of the time, accepting brief drops in the "
+                      "most demanding moments. The app doesn't change anything on its own: if a game has headroom, "
+                      "can't hold its limit or would do better with “Steady pace”, it recommends it on its row."));
     ImGui::PopTextWrapPos();
     ImGui::Dummy(ImVec2(0, 4 * scale));
     ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x * 0.85f);
-    ImGui::TextColored(kDim, "%s", T("Es el punto de partida de cada juego: con Fluidez, si un juego resulta inestable "
-                                     "con su límite (sus fotogramas más lentos se hunden en dos partidas seguidas), la "
-                                     "app lo pasa a Estabilidad y lo indica en su fila. Al cambiar la prioridad, los "
-                                     "límites ya aplicados no se recalculan: usa el botón «Deshacer» del juego.",
-                                     "It's each game's starting point: with Smoothness, if a game turns out to be "
-                                     "unstable with its limit (its slowest frames sink in two sessions in a row), the "
-                                     "app moves it to Stability and shows it on its row. Changing the priority doesn't "
-                                     "recalculate limits already applied: use the game's “Undo” button."));
-    ImGui::PopTextWrapPos();
-  }
-  ImGui::Dummy(ImVec2(0, 14 * scale));
-  Section(T("Ajuste de límites", "Limit adjustment"));
-  {
-    const bool autoNow = g_autoRaise;
-    const char* names[2] = {T("Automático", "Automatic"), T("Solo sugerir", "Suggest only")};
-    for (int i = 0; i <= 1; ++i) {
-      if (i == 1) ImGui::SameLine(0, 4 * scale);
-      const bool sel = (i == 0) == autoNow;
-      PrimaryButtonStyle(sel);
-      if (ImGui::Button(names[i], ImVec2(140 * scale, 0)) && !sel) {
-        g_autoRaise = i == 0;
-        WriteKv(L"equipo.txt", "subir-solo", i == 0 ? "" : "no");
-      }
-      PrimaryButtonEnd(sel);
-    }
-    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x * 0.85f);
-    ImGui::TextColored(kDim, "%s", autoNow
-        ? T("Automático (recomendado): si el juego va sobrado con su límite, la app lo sube sola un escalón; si no "
-            "lo sostiene, lo baja. Si una subida falla, vuelve al límite anterior.",
-            "Automatic (recommended): if the game has headroom with its limit, the app raises it one step on its own; "
-            "if it can't hold it, it lowers it. If a raise fails, it goes back to the previous limit.")
-        : T("Solo sugerir: si el juego va sobrado, la app te lo sugiere con un botón «Aplicar sugerencia». Si no "
-            "sostiene su límite, lo sigue bajando sola.",
-            "Suggest only: if the game has headroom, the app suggests it with an “Apply suggestion” button. If it "
-            "can't hold its limit, it still lowers it on its own."));
+    if (lk == 1)
+      ImGui::TextColored(kDim, "%s", Fmt(T("Con «Solo recomendar», la prioridad decide qué límite te recomiendo; lo aplicas tú en %s.",
+                                           "With “Recommend only”, the priority decides which limit I recommend; you apply it in %s."),
+                                         GuidedSoftware()).c_str());
+    ImGui::TextColored(kDim, "%s", T("Cada juego puede tener la suya con el botón de prioridad de su fila. Al cambiar "
+                                     "la prioridad, los límites ya aplicados no se recalculan: usa el botón «Deshacer» "
+                                     "del juego.",
+                                     "Each game can have its own with the priority button on its row. Changing the "
+                                     "priority doesn't recalculate limits already applied: use the game's “Undo” "
+                                     "button."));
     ImGui::PopTextWrapPos();
   }
   ImGui::Dummy(ImVec2(0, 14 * scale));
@@ -6324,11 +7221,18 @@ static void PageGames(const View& v) {
       const float bw = ImGui::CalcTextSize(T("Deshacer", "Undo")).x + pad2;
       const float mw = ImGui::CalcTextSize(T("Fijar…", "Set…")).x + pad2;
       // Boton de la prioridad del juego: ancho fijo (el de la etiqueta mas larga) para que no baile.
-      const float prw = std::max({ImGui::CalcTextSize(T("Auto · Estabilidad", "Auto · Stability")).x,
-                                  ImGui::CalcTextSize(T("Estabilidad", "Stability")).x}) + pad2 + 18 * scale;
+      // Ancho de la etiqueta mas larga de las cuatro posibles (en ingles, "Auto · Smoothness" es mas larga
+      // que las de Stability; hasta la 0.53 la flecha tapaba su ultima letra).
+      const float prw = std::max({ImGui::CalcTextSize(T("Auto · Ritmo constante", "Auto · Steady pace")).x,
+                                  ImGui::CalcTextSize(T("Auto · Más FPS", "Auto · More FPS")).x}) + pad2 + 22 * scale;
+      // Recomendacion pendiente (solo con prioridad elegida a mano): un boton para aplicarla.
+      const bool recPrio = c.suggestFps <= 0 && c.prioSuggest;
       const std::string sugLabel =
-          c.suggestFps > 0 ? Fmt(T("Aplicar sugerencia (%.0f)", "Apply suggestion (%.0f)"), c.suggestFps) : std::string();
-      const float sw = c.suggestFps > 0 ? ImGui::CalcTextSize(sugLabel.c_str()).x + pad2 : 0.0f;
+          c.suggestFps > 0 ? Fmt(c.suggestKind == 0 ? T("Subir a %.0f FPS", "Raise to %.0f FPS") : T("Bajar a %.0f FPS", "Lower to %.0f FPS"),
+                                 c.suggestFps)
+          : recPrio ? std::string(T("Usar «Ritmo constante»", "Use “Steady pace”"))
+                    : std::string();
+      const float sw = !sugLabel.empty() ? ImGui::CalcTextSize(sugLabel.c_str()).x + pad2 : 0.0f;
       float wrapW = w - (bw + mw + prw + (sw > 0 ? sw + 8 * scale : 0.0f) + 70 * scale);
       float warnH = c.warning.empty() ? 0.0f
                     : ImGui::CalcTextSize(c.warning.c_str(), nullptr, false, wrapW).y + 6 * scale;
@@ -6338,8 +7242,11 @@ static void PageGames(const View& v) {
       float h = line + descH + ImGui::GetStyle().ItemSpacing.y + warnH + 22 * scale;
       ImDrawList* dl = ImGui::GetWindowDrawList();
       dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), Col(kCard), 10 * scale);
+      // Aviso de la fila: ambar; rojo si es urgente (un limite que, sin G-SYNC, empeora el juego).
+      const bool urgent = c.suggestFps > 0 && c.suggestKind == 2;
       if (!c.warning.empty())
-        dl->AddRectFilled(ImVec2(p.x, p.y + 10 * scale), ImVec2(p.x + 3 * scale, p.y + h - 10 * scale), Col(kAmber), 2 * scale);
+        dl->AddRectFilled(ImVec2(p.x, p.y + 10 * scale), ImVec2(p.x + 3 * scale, p.y + h - 10 * scale),
+                          Col(urgent ? kRed : kAmber), 2 * scale);
       ImGui::SetCursorScreenPos(ImVec2(p.x + 16 * scale, p.y + 11 * scale));
       ImGui::BeginGroup();
       ImGui::PushFont(fontStrong);
@@ -6350,30 +7257,39 @@ static void PageGames(const View& v) {
       ImGui::PopTextWrapPos();
       if (!c.warning.empty()) {
         ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + wrapW);
-        ImGui::TextColored(kAmber, "%s", c.warning.c_str());
+        ImGui::TextColored(urgent ? kRed : kAmber, "%s", c.warning.c_str());
         ImGui::PopTextWrapPos();
       }
       ImGui::EndGroup();
       const float by = p.y + (h - ImGui::GetFrameHeight()) * 0.5f;
-      if (c.suggestFps > 0) {
+      if (!sugLabel.empty()) {
         ImGui::SetCursorScreenPos(ImVec2(p.x + w - bw - mw - prw - sw - 38 * scale, by));
         PrimaryButtonStyle(true);
         if (ImGui::Button(sugLabel.c_str())) {
-          std::lock_guard<std::mutex> lock(g_manualLimitMutex);
-          g_applySuggestionReq.push_back(c.exe);
+          if (recPrio) {
+            AcceptPrioSuggestion(c.exe, c.label);
+          } else {
+            std::lock_guard<std::mutex> lock(g_manualLimitMutex);
+            g_applySuggestionReq.push_back(c.exe);
+          }
         }
         PrimaryButtonEnd(true);
         if (ImGui::IsItemHovered())
-          ImGui::SetTooltip("%s", T("Sube el límite al valor sugerido. Si el juego no lo sostiene,\n"
-                                    "la app volverá sola al límite actual.",
-                                    "Raises the limit to the suggested value. If the game can't hold it,\n"
-                                    "the app will go back to the current limit on its own."));
+          ImGui::SetTooltip("%s", recPrio ? T("Aplica «Ritmo constante» a este juego desde la próxima partida.",
+                                              "Applies “Steady pace” to this game from the next session.")
+                                  : c.suggestKind == 0
+                                  ? T("Sube el límite al valor recomendado. Si el juego no lo sostiene,\n"
+                                      "la app te recomendará volver al actual.",
+                                      "Raises the limit to the recommended value. If the game can't hold it,\n"
+                                      "the app will recommend going back to the current one.")
+                                  : T("Baja el límite al valor recomendado, que el juego sí sostiene.",
+                                      "Lowers the limit to the recommended value, which the game does hold."));
       }
       // Prioridad del juego: automatica (la global; la app puede pasarlo a Estabilidad) o fija.
       if (!c.manual) {
         ImGui::SetCursorScreenPos(ImVec2(p.x + w - bw - mw - prw - 30 * scale, by));
-        const char* applied = c.usesFluid ? T("Fluidez", "Smoothness") : T("Estabilidad", "Stability");
-        const std::string pl = c.prioMode == 0 ? std::string("Auto · ") + applied : std::string(applied);
+        const char* applied = c.usesFluid ? T("Más FPS", "More FPS") : T("Ritmo constante", "Steady pace");
+        const std::string pl = c.prioMode == 0 && g_prioMode == 0 ? std::string("Auto · ") + applied : std::string(applied);
         // Texto alineado a la izquierda y un triangulo dibujado a la derecha (indica que despliega un menu;
         // el caracter del triangulo no esta en la fuente de la ventana).
         ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.0f, 0.5f));
@@ -6387,42 +7303,49 @@ static void PageGames(const View& v) {
         }
         if (ImGui::IsItemHovered())
           ImGui::SetTooltip("%s", c.prioMode != 0
-              ? T("Prioridad elegida por ti para este juego. La app no la cambia.",
-                  "Priority you chose for this game. The app doesn't change it.")
+              ? T("Prioridad elegida por ti para este juego: la app no cambia nada por su cuenta, solo te recomienda.",
+                  "Priority you chose for this game: the app doesn't change anything on its own, it only recommends.")
+              : g_prioMode != 0
+              ? T("Usa el ajuste general de prioridad.", "Uses the general priority setting.")
               : c.autoStability
-              ? T("Automática: la app pasó este juego a Estabilidad porque es inestable con su límite.",
-                  "Automatic: the app moved this game to Stability because it's unstable with its limit.")
-              : T("Automática: usa la prioridad global; la app puede pasarlo a Estabilidad si es inestable.",
-                  "Automatic: uses the global priority; the app may move it to Stability if it's unstable."));
+              ? T("Automática: la app pasó este juego a «Ritmo constante» porque es inestable con su límite.",
+                  "Automatic: the app moved this game to “Steady pace” because it's unstable with its limit.")
+              : T("Automática: empieza con «Más FPS»; la app lo pasa a «Ritmo constante» si es inestable.",
+                  "Automatic: starts with “More FPS”; the app moves it to “Steady pace” if it's unstable."));
         if (ImGui::BeginPopup("prio")) {
           int choice = -1;
-          if (ImGui::Selectable(T("Automática", "Automatic"), c.prioMode == 0)) choice = 0;
-          if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("%s", T("Empieza con la prioridad global; si el juego resulta inestable con su límite,\n"
-                                      "la app lo pasa a Estabilidad.",
-                                      "Starts with the global priority; if the game turns out to be unstable with its\n"
-                                      "limit, the app moves it to Stability."));
-          if (ImGui::Selectable(T("Siempre Fluidez", "Always Smoothness"), c.prioMode == 1)) choice = 1;
-          if (ImGui::Selectable(T("Siempre Estabilidad", "Always Stability"), c.prioMode == 2)) choice = 2;
+          if (ImGui::Selectable(g_prioMode == 0 ? T("Automática", "Automatic") : T("Como el ajuste general", "Same as the general setting"),
+                                c.prioMode == 0))
+            choice = 0;
+          if (ImGui::IsItemHovered() && g_prioMode == 0)
+            ImGui::SetTooltip("%s", T("Empieza con «Más FPS»; si el juego resulta inestable con su límite,\n"
+                                      "la app lo pasa a «Ritmo constante».",
+                                      "Starts with “More FPS”; if the game turns out to be unstable with its\n"
+                                      "limit, the app moves it to “Steady pace”."));
+          if (ImGui::Selectable(T("Siempre ritmo constante", "Always steady pace"), c.prioMode == 2)) choice = 2;
+          if (ImGui::Selectable(T("Siempre más FPS", "Always more FPS"), c.prioMode == 1)) choice = 1;
           ImGui::Separator();
           ImGui::TextColored(kDim, "%s", T("Se aplica desde la próxima partida.", "Applies from the next session."));
           ImGui::EndPopup();
           if (choice >= 0 && choice != c.prioMode) {
             WriteKv(L"equipo.txt", "prioridad-fija|" + c.exe, choice == 1 ? "fluidez" : choice == 2 ? "estabilidad" : "");
+            WriteKv(L"equipo.txt", "prioridad-sugerida|" + c.exe, "");
             int mode = 0;
             bool autoSt = false;
             const bool fluidNow = GameUsesFluid(c.exe, &mode, &autoSt);
             std::lock_guard<std::mutex> lock(g_ui.m);
+            if (g_ui.prioSuggest.erase(c.exe) && !g_ui.suggestions.count(c.exe)) g_ui.warnings.erase(c.exe);
             for (auto& u : g_ui.changes)
               if (u.exe == c.exe) {
                 u.prioMode = mode;
                 u.usesFluid = fluidNow;
                 u.autoStability = autoSt;
+                u.prioSuggest = false;
               }
             g_ui.notice = Fmt(T("%s: prioridad %s desde la próxima partida.", "%s: %s priority from the next session."),
                               c.label.c_str(),
-                              choice == 0 ? T("automática", "automatic") : choice == 1 ? T("Fluidez", "Smoothness")
-                                                                                  : T("Estabilidad", "Stability"));
+                              choice == 0 ? (g_prioMode == 0 ? T("automática", "automatic") : T("la general", "the general one"))
+                                          : choice == 1 ? T("«Más FPS»", "“More FPS”") : T("«Ritmo constante»", "“Steady pace”"));
           }
         }
       }
@@ -6432,12 +7355,15 @@ static void PageGames(const View& v) {
         ImGui::SetTooltip("%s", T("Pon tú el límite de este juego. La app no lo cambiará.",
                                   "Set this game's limit yourself. The app won't change it."));
       ImGui::SetCursorScreenPos(ImVec2(p.x + w - bw - 14 * scale, by));
-      PrimaryButtonStyle(!c.warning.empty());
+      // Deshacer se destaca con un aviso que pide revisar el limite; con una recomendacion, el boton
+      // importante es el de la recomendacion.
+      const bool undoHi = !c.warning.empty() && c.suggestFps <= 0 && !c.prioSuggest && !c.guidedPending;
+      PrimaryButtonStyle(undoHi);
       if (ImGui::Button(T("Deshacer", "Undo"))) {
         std::lock_guard<std::mutex> lock(g_undoOneMutex);
         g_undoOne.push_back(c.exe);
       }
-      PrimaryButtonEnd(!c.warning.empty());
+      PrimaryButtonEnd(undoHi);
       if (ImGui::IsItemHovered())
         ImGui::SetTooltip("%s", T("Devuelve este juego a como estaba. Si «Aplicar límites» está activado,\n"
                                   "la app lo recalculará la próxima vez que juegues.",
@@ -6497,8 +7423,11 @@ static void PageLog(const View& v) {
   ImGui::Dummy(ImVec2(0, 6 * scale));
   ImGui::PushStyleColor(ImGuiCol_ChildBg, kCard);
   ImGui::BeginChild("log", ImVec2(0, 0), ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_HorizontalScrollbar);
+  // Interlineado de texto, no el espacio entre elementos de la interfaz (dejaba el registro a doble espacio).
+  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, 3 * scale));
   for (const auto& line : v.log) ImGui::TextColored(kDim, "%s", line.c_str());
   if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 4) ImGui::SetScrollHereY(1.0f);
+  ImGui::PopStyleVar();
   ImGui::EndChild();
   ImGui::PopStyleColor();
 }
@@ -6577,6 +7506,10 @@ static void Draw() {
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(30 * scale, 26 * scale));
   ImGui::PushStyleColor(ImGuiCol_ChildBg, kBg);
   ImGui::BeginChild("main", ImVec2(0, 0), ImGuiChildFlags_AlwaysUseWindowPadding);
+  if (g_scrollTop) {
+    ImGui::SetScrollY(0.0f);
+    g_scrollTop = false;
+  }
   switch (page) {
     case 0: PageNow(v); break;
     case 1: PageGames(v); break;
@@ -6593,10 +7526,20 @@ static void Draw() {
 
 int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
   {
-    // Sin prioridad guardada (instalacion nueva): Fluidez, la predeterminada desde la 0.48.3. Una
-    // prioridad ya guardada se respeta.
-    if (ReadKv(L"equipo.txt", "prioridad").empty()) WriteKv(L"equipo.txt", "prioridad", "fluidez");
-    g_priority = ReadKv(L"equipo.txt", "prioridad") == "estabilidad" ? 0 : 1;
+    // Prioridad global. Hasta la 0.53, "fluidez" significaba en realidad "automatica" (empezar con mas FPS
+    // y pasar a ritmo constante los juegos inestables), salvo con prioridad-auto=no, que la dejaba fija;
+    // se convierte una sola vez. Sin prioridad guardada (instalacion nueva): automatica.
+    {
+      std::string pr = ReadKv(L"equipo.txt", "prioridad");
+      const bool autoOff = ReadKv(L"equipo.txt", "prioridad-auto") == "no";
+      if (pr.empty() || (pr == "fluidez" && !autoOff && ReadKv(L"equipo.txt", "prioridad-v3") != "1")) pr = "auto";
+      if (ReadKv(L"equipo.txt", "prioridad-v3") != "1") {
+        WriteKv(L"equipo.txt", "prioridad", pr);
+        WriteKv(L"equipo.txt", "prioridad-auto", "");
+        WriteKv(L"equipo.txt", "prioridad-v3", "1");
+      }
+      SetPrioMode(pr == "estabilidad" ? 1 : pr == "fluidez" ? 2 : 0);
+    }
     if (ReadKv(L"equipo.txt", "divisores-siempre") == "si") g_useVrr = false;
     if (ReadKv(L"equipo.txt", "overlay") == "no") overlay::enabled = false;
     if (ReadKv(L"equipo.txt", "grabar-fotogramas") == "si") g_recordFrames = true;
@@ -6618,8 +7561,13 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
   // "Deshacer cambios.bat": sin ventana, solo el resultado.
   if (undo) {
     OpenLog();
-    NvDriver nvd;
-    bool ok = nvd.Init();
+    NvDriver nvDriver;
+    NvidiaBackend nvBackend(nvDriver);
+    RtssBackend rtssBackend;
+    const bool rtssOk = rtssBackend.Init();
+    bool ok = nvDriver.Init() || rtssOk;
+    BackendSelector nvd(&nvBackend);
+    if (rtssOk) nvd.SetRtss(&rtssBackend);
     ChangeStore store(DataDirectory() + L"\\cambios-aplicados.txt");
     store.Load();
     store.Migrate(ExeDirectory() + L"\\cambios-aplicados.txt");

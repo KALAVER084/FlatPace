@@ -1,4 +1,4 @@
-# FlatPace 0.51.3 user guide
+# FlatPace 0.62.2 user guide
 
 This guide describes the current version. Changes between versions are listed in the [changelog](CHANGELOG.md) (in Spanish). The app has an English interface: switch it with **ES | EN** at the bottom of the sidebar.
 
@@ -23,8 +23,8 @@ Nothing needs to be installed and no Windows settings need to change. To uninsta
 
 The sidebar has four sections:
 
-- **Now:** the current game and the status tag of its limit (*LOCKED* in blue; *UNCONFIRMED* or *NO LIMIT* in red); a card with the real FPS, four metrics (1 % low, consistency, stutters and pace swing) and the **pacing graph**; and two cards: *Limit* (applied, recommended and status, with *Apply now*, *Manual limit…* and *Undo*) and *Details* (VRR, presentation, the game's own limit, bottleneck and display). The graph stays visible when you switch to the app.
-- **Games:** the global priority, *Limit adjustment* (*Automatic* or *Suggest only*, section 4), the games with a limit, *Undo all changes* and *Choose game…*. Each game shows its limit and its buttons: its **priority** (section 5), *Set…*, *Undo* and, if a raise is suggested, *Apply suggestion*.
+- **Now:** during a session, the game and a **one-sentence verdict** (*"Steady at 114 FPS."*, *"Measuring without a limit."*, *"Checking the limit…"*), with the limit explained below; the full-width **pacing graph** (blue once the limit is checked, stutters in amber); three numbers (real FPS, FPS in the slowest 1 % and stutters); only the action that matters (a pending recommendation with its button, or *Apply now*); and collapsed *Details* (G-SYNC, presentation, what limits the game, pace swing and display). With no game open, what to do and a summary of your last session. The graph stays visible when you switch to the app.
+- **Games:** with AMD or Intel, the limiter (*Recommend only* or RivaTuner, if installed; with NVIDIA everything is automatic and it doesn't appear), the general priority (section 5), the games with a limit, *Undo all changes* and *Choose game…*. Each game shows its limit and its buttons: its **priority**, *Set…*, *Undo* and, if the app recommends something, the button to apply it.
 - **System:** GPU, display, driver and VRR status with the monitor's refresh range.
 - **Log:** everything the app does and measures, with a button to open the log file and the **Record per-frame data** checkbox, which saves a CSV file per session in the `grabaciones` folder (*Open recordings* button), useful for analyzing the pace in detail. If the game provides the necessary data (some games with Reflex), each session summary also includes **PC latency** (from when the game reads your input until the image is sent to the display), with and without the limit. In the games tested so far it hasn't appeared yet. The summary also says **what limits the slow moments** (the CPU or the GPU), with the matching advice: if it's the CPU, lowering graphics won't help, but the settings that load it will (population, physics, view distance). And it warns if the CPU lowers its frequency right in those moments, common on laptops due to heat or power.
 
@@ -36,24 +36,29 @@ At the bottom of the sidebar: **Apply limits** (when off, the app only measures)
 |---|---|---|
 | **First** | Measures the whole session. When you close the game, it decides and saves the limit: *"Limit for the next session of …"* | Play normally |
 | **Second** | Checks that the game runs at the limit's pace: **"Limit working"**. The limit becomes **accepted** | Nothing |
-| **Later** | Measures and keeps watch. When you close the game, if it didn't hold the limit for a sustained period, it lowers it; if it had **headroom** the whole session, it **raises** it by 13 % (without going over your display's maximum) | Nothing |
+| **Later** | Measures and keeps watch. When you close the game, if it didn't hold the limit for a sustained period, it lowers it; if it had **headroom** the whole session, it **raises** it by 13 % (without going over your display's maximum). With a priority you chose by hand, it recommends the change instead of making it | Nothing, or apply the recommendations |
 
 **Want it sooner?** On *Now*, the **Apply now** button saves the current recommendation. Restart the game so the driver applies it. When you close the game, the app refines it with the whole session.
 
 **When is an accepted limit lowered?** Only if the game ran more than 13 % below the limit, in stretches of at least 5 seconds, for at least 10 % of the session and one minute in total. Shorter dips are treated as isolated events. The last minute before the game closes doesn't count: it's usually menus, exiting or a possible hang.
 
-**When is it raised?** With G-SYNC/FreeSync and without frame generation, if the game had **headroom** the whole session: at least 3 minutes with the limit, no stretch below it (neither the median nor the 1 % low) and almost all frames waiting on the limiter. With *Smoothness* one such session is enough; with *Stability* it takes two in a row. The rules pick the limit cautiously, and many games perform better with a limit than without one, so the app climbs step by step to what the game really holds. If a raise doesn't hold (with *Stability*, even if only in the heavy areas), it goes back to the previous limit and won't try again for 30 days. If you'd rather decide yourself, choose **Suggest only** in *Games* → *Limit adjustment*: the app will tell you the game has headroom and show an **Apply suggestion** button, with the same protections. Lowering is automatic in both modes, because a limit the game can't hold always worsens the pace; for full control over a game, use *Set…*.
+**When is it raised?** With G-SYNC/FreeSync and without frame generation, if the game had **headroom** the whole session: at least 3 minutes with the limit, no stretch below it (neither the median nor the 1 % low) and almost all frames waiting on the limiter. With *More FPS* one such session is enough; with *Steady pace* it takes two in a row. The rules pick the limit cautiously, and many games perform better with a limit than without one, so the app climbs step by step to what the game really holds. If a raise doesn't hold (with *Steady pace*, even if only in the heavy areas), it goes back to the previous limit and won't try again for 30 days. **And if you'd rather decide yourself?** The app only changes limits on its own with the **Automatic** priority (section 5) and in games without their own priority. If you choose the priority yourself, general or for a game, the app doesn't change anything: when a game has headroom, can't hold its limit or would do better with *Steady pace*, it **recommends** it on its row, with the reason and a button to apply it (*Raise to…*, *Lower to…* or *Use “Steady pace”*). If a recommendation to lower is because, without G-SYNC, the limit is making the game worse, it shows in red. And if you want full control over a game, use *Set…*.
 
-## 5. Priority: Smoothness or Stability
+## 5. Priority: Automatic, Steady pace or More FPS
 
-On *Games*:
+On *Games* there are two ways of deciding the limit, and the priority chooses between them:
 
-- **Smoothness** (default, recommended): the limit the game reaches **90 % of the time**, accepting brief drops in the most demanding moments. More FPS; in testing, perceptible drops took about 1 % of the time.
-- **Stability:** a limit the game holds even in its worst moments **without perceptible drops** (its slowest 1 % arrives at most 13 % late, a difference you can't notice). It gives the steadiest pace and the flattest line in the graph.
+- **More FPS:** the limit the game reaches **90 % of the time**, accepting brief drops in the most demanding moments. In testing, perceptible drops were around 1 % of the time.
+- **Steady pace:** a limit the game holds even in its worst moments **without perceptible drops** (its slowest 1 % arrives at most 13 % late, a difference you can't notice). It's the steadiest pace and the flattest line on the graph, sometimes with a few fewer FPS.
 
-With G-SYNC/FreeSync, neither counts **stutters** (frames over 2.5 times the usual): no limit fixes them. Without VRR, the previous rules are kept for now.
+The general priority has three options:
 
-**The priority is each game's starting point.** With *Smoothness*, if a game turns out to be unstable with its limit (its slowest frames sink in a sustained way in two sessions in a row), the app moves it to *Stability* and shows it on its *Games* row: *"· Stability (chosen by the app)"*. That way stable games make the most of your PC and unstable ones keep a steady pace. It only changes in that direction; *Undo* forgets it. If you'd rather decide yourself, each game's priority button on *Games* lets you choose **Automatic**, **Always Smoothness** or **Always Stability**; the app doesn't change the last two.
+- **Automatic** (default, recommended): the app adjusts each game on its own. It starts with *More FPS* and, if the game turns out to be unstable with its limit (its slowest frames sink in a sustained way in two sessions in a row), moves it to *Steady pace*; it also raises or lowers each limit based on what the game holds (section 4). That way stable games make the most of your PC and unstable ones keep a steady pace. The priority only changes in that direction, so it doesn't alternate between the two; *Undo* forgets it.
+- **Steady pace** or **More FPS:** the same for all games, and you're in control: the app doesn't change anything on its own and **recommends** on each game's row what it would be worth changing.
+
+Each game can have its own with the priority button on its row, which shows the one being applied (*"Auto · Steady pace"*, for example) and lets you choose between the general one, **Always steady pace** or **Always more FPS**. With its own priority, that game is also under your control: the app only recommends.
+
+With G-SYNC/FreeSync, neither counts **stutters** (frames more than 2.5 times the usual): no limit fixes them. Without VRR, the previous rules still apply for now.
 
 Limits already accepted don't change when you switch priority: undo the game to recalculate it with the new criterion.
 
@@ -135,5 +140,9 @@ To find which limit gives the steadiest pace in a game, compare sessions of a fe
 **Why isn't the limit equal to my FPS?** The app picks the pace the game holds in its demanding moments, not in the quiet ones, so the pace stays constant.
 
 **Where are the logs?** Next to the program, as `registro-date-time.txt`, and in the *Log* section.
+
+**The app says G-SYNC isn't being used.** On a laptop, it's most likely in **hybrid mode**: the integrated GPU drives the display and G-SYNC can't work. It happens with options like *Automatic Selection*, which choose the mode at each boot, or after a driver update. Choose “NVIDIA GPU only” in the NVIDIA Control Panel (*Manage Display Mode*) or in your laptop's app, and restart. Then press *Undo* on the games whose limit was decided while G-SYNC wasn't working, so they're recalculated.
+
+**I have an AMD or Intel GPU.** FlatPace starts in ***Recommend only*** (guided mode). If you have **RivaTuner Statistics Server (RTSS)** installed (it comes with MSI Afterburner), you can choose it as the limiter on *Games*, above the priority: the app will apply limits itself in each game's RTSS profile (keep it running while you play, and with FreeSync also turn on the driver's VSync). When you change the limiter, your games' limits move to the new one. In *Recommend only*: it measures the game, decides the limit and checks it, but you apply it. On each game's row, on *Games*, you'll see exactly what to set and where (in AMD Software, Radeon Chill with equal minimum and maximum; in Intel Graphics Software, its FPS limiter; or the game's own limiter), and whether to also turn on the driver's VSync (with FreeSync) and the low latency option. When you open the game, the app checks that it works: if you haven't applied it yet, it reminds you, and once *"Limit working"* appears, the instruction goes away. If the app recommends another limit later, the row will show the new value. Automatic mode only exists with NVIDIA because of the AMD and Intel kits' licenses (the [README](README.en.md) explains why).
 
 **I'm going to update the NVIDIA driver.** A normal update keeps game profiles, and the limits with them. A *clean install* erases them: press *Undo all changes* first, and the app will measure each game again.

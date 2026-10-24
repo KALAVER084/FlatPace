@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <cwchar>
 #include <deque>
 #include <limits>
@@ -31,6 +32,8 @@ static std::atomic<int> g_vrrMinHz{0}, g_vrrMaxHz{0};
 #include "../src/core/analysis.h"
 #include "../src/core/suggest.h"
 #include "../src/core/decision.h"
+#include "../src/core/limit_request.h"
+#include "../src/core/log_text.h"
 namespace overlay {
 #include "../src/core/pace_basics.h"
 #include "../src/core/pace_series.h"
@@ -1019,6 +1022,70 @@ TEST(AutoPriorityMovesUnstableGamesToStability) {
   CHECK(AutoPriority::Parse(a.Serialize()).stability);
 }
 
+// La traduccion a NVIDIA debe dar exactamente las listas que construia el motor hasta la 0.52.
+TEST(NvDesiredMatchesPreviousEngine) {
+  using V = std::vector<std::pair<uint32_t, uint32_t>>;
+  for (int mp = 0; mp <= 1; ++mp)
+    for (int ll = 0; ll <= 1; ++ll) {
+      auto old = [&](V d) {  // el codigo anterior: extras solo si hay algo, sin duplicar la cola
+        if (mp && !d.empty()) d.push_back({nv::PREFERRED_PSTATE_ID, nv::PSTATE_PREFER_MAX});
+        if (ll && !d.empty() &&
+            std::none_of(d.begin(), d.end(), [](const auto& x) { return x.first == nv::PRERENDERLIMIT_ID; }))
+          d.push_back({nv::PRERENDERLIMIT_ID, 1});
+        return d;
+      };
+      LimitRequest r;
+      r.maxPerf = mp;
+      r.lowLatency = ll;
+      // G-SYNC: limitador + VSync forzado
+      r.frl = 114;
+      r.vsyncOn = true;
+      CHECK(NvDesired(r) == old({{nv::FRL_FPS_ID, 114}, {nv::VSYNCMODE_ID, nv::VSYNC_FORCEON}}));
+      // Sin VRR, limite entero o con generacion: solo el limitador
+      r.vsyncOn = false;
+      CHECK(NvDesired(r) == old({{nv::FRL_FPS_ID, 114}}));
+      // VSync por intervalos (1/2, 1/3, 1/4): sin limitador, con la cola de un fotograma
+      for (int n = 1; n <= 4; ++n) {
+        LimitRequest v = r;
+        v.frl = 0;
+        v.vsyncDivisor = n;
+        CHECK(NvDesired(v) == old({{nv::VSYNCMODE_ID, nv::VsyncForDivisor(n)}, {nv::PRERENDERLIMIT_ID, 1}}));
+      }
+      // Sin nada que aplicar: no se toca nada, ni siquiera los extras
+      LimitRequest e;
+      e.maxPerf = mp;
+      e.lowLatency = ll;
+      CHECK(NvDesired(e).empty() && e.Empty());
+    }
+  CHECK(nv::DivisorForVsync(nv::VsyncForDivisor(3)) == 3);
+}
+
+// Cada traduccion del registro debe tener los mismos huecos que su original y en el mismo orden (un
+// %s donde habia un %d, o uno de menos, romperia el mensaje o la app). "%.0s" equivale a "%s".
+static std::vector<std::string> FormatSlots(const char* f) {
+  std::vector<std::string> out;
+  for (const char* p = f; *p; ++p) {
+    if (*p != '%') continue;
+    ++p;
+    if (*p == '%') continue;
+    while (*p && std::strchr("-+ #0123456789.", *p)) ++p;
+    std::string len;
+    while (*p && std::strchr("hlzjtL", *p)) len += *p++;
+    if (*p) out.push_back(len + *p);
+  }
+  return out;
+}
+TEST(LogTranslationsKeepFormat) {
+  CHECK(LogEnglishTable().size() > 150);
+  for (const auto& [es, en] : LogEnglishTable()) {
+    const bool same = FormatSlots(es) == FormatSlots(en);
+    if (!same) std::printf("  traduccion con huecos distintos: %s\n", es);
+    CHECK(same);
+  }
+  CHECK(std::string(LogEnglish("[%5.0f s] Pausa larga ignorada (carga o menu)\n")) == "[%5.0f s] Long pause ignored (loading or menu)\n");
+  CHECK(std::string(LogEnglish("mensaje sin traducir %d")) == "mensaje sin traducir %d");
+}
+
 int main() {
   std::printf("Pruebas de FlatPace (src/core)\n");
   RUN(Percentiles);
@@ -1063,6 +1130,8 @@ int main() {
   RUN(LeftEdgeValuesStayPut);
   RUN(RightEdgeNeverRedraws);
   RUN(FailureRuleIgnoresClosingMinute);
+  RUN(NvDesiredMatchesPreviousEngine);
+  RUN(LogTranslationsKeepFormat);
   RUN(AutoPriorityMovesUnstableGamesToStability);
   RUN(ClimbLadderToCeiling);
   RUN(ClimbRevertsAndRemembersCeiling);

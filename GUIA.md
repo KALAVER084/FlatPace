@@ -1,4 +1,4 @@
-# Guía de uso de FlatPace 0.51.3
+# Guía de uso de FlatPace 0.62.2
 
 Esta guía describe la versión actual. Los cambios entre versiones están en el [historial](CHANGELOG.md).
 
@@ -23,8 +23,8 @@ No hace falta instalar nada ni cambiar ajustes de Windows. Para desinstalar, bor
 
 La barra lateral tiene cuatro secciones:
 
-- **Ahora:** el juego actual y la etiqueta de estado de su límite (*FIJADO* en azul; *SIN CONFIRMAR* o *SIN LÍMITE* en rojo); una tarjeta con los FPS reales, cuatro métricas (1 % bajo, consistencia, tirones y variación del ritmo) y la **gráfica de ritmo**; y dos tarjetas: *Límite* (aplicado, recomendado y estado, con *Aplicar ya*, *Límite manual…* y *Deshacer*) y *Detalles* (VRR, presentación, límite del juego, cuello de botella y pantalla). La gráfica se conserva cuando cambias a la app.
-- **Juegos:** la prioridad global, el *Ajuste de límites* (*Automático* o *Solo sugerir*, sección 4), los juegos con límite y *Deshacer todos los cambios* y *Elegir juego*. Cada juego muestra su límite y sus botones: el de su **prioridad** (sección 5), *Fijar…*, *Deshacer* y, si hay una subida sugerida, *Aplicar sugerencia*.
+- **Ahora:** durante una partida, el juego y un **veredicto en una frase** (*"Va estable a 114 FPS."*, *"Midiendo sin límite."*, *"Comprobando el límite…"*), con el límite explicado debajo; la **gráfica de ritmo** a todo lo ancho (azul cuando el límite está comprobado, tirones en ámbar); tres cifras (FPS reales, FPS en el 1 % más lento y tirones); solo la acción que toca (una recomendación pendiente con su botón, o *Aplicar ya*); y los *Detalles* plegados (G-SYNC, presentación, qué limita al juego, variación del ritmo y pantalla). Sin juego abierto, qué hacer y un resumen de tu última partida. La gráfica se conserva cuando cambias a la app.
+- **Juegos:** con AMD o Intel, el limitador (*Solo recomendar* o RivaTuner, si está instalado; con NVIDIA todo es automático y no aparece), la prioridad general (sección 5), los juegos con límite, *Deshacer todos los cambios* y *Elegir juego*. Cada juego muestra su límite y sus botones: el de su **prioridad**, *Fijar…*, *Deshacer* y, si la app te recomienda algo, el botón para aplicarlo.
 - **Equipo:** gráfica, pantalla, driver y estado del VRR con el rango de frecuencias del monitor.
 - **Registro:** todo lo que la app hace y mide, con el botón para abrir el archivo de registro y la casilla **Grabar los datos de cada fotograma**, que guarda un archivo CSV por partida en la carpeta `grabaciones` (botón *Abrir grabaciones*), útil para analizar el ritmo con detalle. Si el juego entrega los datos necesarios (algunos juegos con Reflex), el resumen de cada partida incluye además la **latencia del PC** (desde que el juego lee tu acción hasta que la imagen sale hacia la pantalla), con el límite y sin él. En los juegos probados hasta ahora todavía no ha aparecido. El resumen también dice **qué limita los momentos lentos** (la CPU o la GPU), con el consejo que corresponde: si es la CPU, bajar los gráficos no ayudará, pero sí los ajustes que la cargan (población, física, distancia de visión). Y avisa si la CPU baja de frecuencia justo en esos momentos, algo frecuente en portátiles por calor o energía.
 
@@ -36,24 +36,29 @@ Al pie de la barra: **Aplicar límites** (si está apagado, la app solo mide), *
 |---|---|---|
 | **Primera** | Mide toda la partida. Al cerrar el juego, decide y guarda el límite: *"Límite para la próxima partida de …"* | Jugar con normalidad |
 | **Segunda** | Comprueba que el juego va al ritmo del límite: **"Límite funcionando"**. El límite queda **aceptado** | Nada |
-| **Siguientes** | Mide y vigila. Al cerrar, si el juego no sostuvo el límite de forma continuada, lo baja; si fue **sobrado** toda la partida, lo **sube** un 13 % (sin pasar del máximo de tu pantalla) | Nada |
+| **Siguientes** | Mide y vigila. Al cerrar, si el juego no sostuvo el límite de forma continuada, lo baja; si fue **sobrado** toda la partida, lo **sube** un 13 % (sin pasar del máximo de tu pantalla). Con una prioridad elegida a mano, en lugar de cambiarlo te lo recomienda | Nada, o aplicar las recomendaciones |
 
 **¿Lo quieres antes?** En *Ahora*, el botón **Aplicar ya** guarda la recomendación del momento. Reinicia el juego para que el driver lo aplique. Al cerrar, la app lo afina con toda la partida.
 
 **¿Cuándo se baja un límite aceptado?** Solo si el juego fue más de un 13 % por debajo del límite, en tramos de al menos 5 segundos, durante al menos el 10 % de la partida y un minuto en total. Las bajadas más cortas se tratan como eventos aislados. El último minuto antes de cerrar el juego no cuenta: ahí suelen estar los menús, la salida o un posible cuelgue.
 
-**¿Cuándo se sube?** Con G-SYNC/FreeSync y sin generación de fotogramas, si el juego fue **sobrado** toda la partida: al menos 3 minutos con el límite, ni un tramo por debajo (ni de la mediana ni del 1 % bajo) y casi todos los fotogramas esperando al limitador. Con *Fluidez* basta una partida así; con *Estabilidad* hacen falta dos seguidas. Las reglas eligen el límite con prudencia, y muchos juegos rinden más con un límite puesto que sin él, así que la app va subiendo poco a poco hasta lo que el juego sostiene de verdad. Si una subida no se sostiene (con *Estabilidad*, aunque solo sea en las zonas pesadas), vuelve al límite anterior y no lo vuelve a intentar durante 30 días. Si prefieres decidir tú, elige **Solo sugerir** en *Juegos* → *Ajuste de límites*: la app te avisará de que el juego va sobrado y mostrará el botón **Aplicar sugerencia**, con las mismas protecciones. Las bajadas son automáticas en ambos modos, porque un límite que el juego no sostiene siempre empeora el ritmo; si quieres control total sobre un juego, usa *Fijar…*.
+**¿Cuándo se sube?** Con G-SYNC/FreeSync y sin generación de fotogramas, si el juego fue **sobrado** toda la partida: al menos 3 minutos con el límite, ni un tramo por debajo (ni de la mediana ni del 1 % bajo) y casi todos los fotogramas esperando al limitador. Con *Más FPS* basta una partida así; con *Ritmo constante* hacen falta dos seguidas. Las reglas eligen el límite con prudencia, y muchos juegos rinden más con un límite puesto que sin él, así que la app va subiendo poco a poco hasta lo que el juego sostiene de verdad. Si una subida no se sostiene (con *Ritmo constante*, aunque solo sea en las zonas pesadas), vuelve al límite anterior y no lo vuelve a intentar durante 30 días. **¿Y si prefieres decidir tú?** La app solo cambia los límites por su cuenta con la prioridad **Automática** (sección 5) y en los juegos sin prioridad propia. Si eliges tú la prioridad, general o de un juego, la app no cambia nada: cuando un juego va sobrado, no sostiene su límite o le conviene *Ritmo constante*, te lo **recomienda** en su fila, con el motivo y un botón para aplicarlo (*Subir a…*, *Bajar a…* o *Usar «Ritmo constante»*). Si una recomendación de bajar se debe a que, sin G-SYNC, el límite está empeorando el juego, aparece en rojo. Y si quieres control total sobre un juego, usa *Fijar…*.
 
-## 5. Prioridad: Fluidez o Estabilidad
+## 5. Prioridad: Automática, Ritmo constante o Más FPS
 
-En *Juegos*:
+En *Juegos* hay dos formas de decidir el límite, y la prioridad elige entre ellas:
 
-- **Fluidez** (por defecto, recomendada): el límite que el juego alcanza **el 90 % del tiempo**, aceptando caídas breves en los momentos más exigentes. Da más FPS; en las pruebas, las caídas perceptibles fueron de alrededor del 1 % del tiempo.
-- **Estabilidad:** un límite que el juego sostiene incluso en sus peores momentos **sin bajar de forma perceptible** (su 1 % más lento llega como mucho un 13 % tarde, una diferencia que no se nota). Es el ritmo más regular y la línea más plana en la gráfica.
+- **Más FPS:** el límite que el juego alcanza **el 90 % del tiempo**, aceptando caídas breves en los momentos más exigentes. En las pruebas, las caídas perceptibles fueron de alrededor del 1 % del tiempo.
+- **Ritmo constante:** un límite que el juego sostiene incluso en sus peores momentos **sin bajar de forma perceptible** (su 1 % más lento llega como mucho un 13 % tarde, una diferencia que no se nota). Es el ritmo más regular y la línea más plana en la gráfica, a veces con algunos FPS menos.
 
-Con G-SYNC/FreeSync, ninguna de las dos cuenta los **tirones** (fotogramas de más de 2,5 veces lo normal): ningún límite los arregla. Sin VRR, por ahora se mantienen las reglas anteriores.
+La prioridad general tiene tres opciones:
 
-**La prioridad es el punto de partida de cada juego.** Con *Fluidez*, si un juego resulta inestable con su límite (sus fotogramas más lentos se hunden de forma sostenida en dos partidas seguidas), la app lo pasa a *Estabilidad* y lo indica en su fila de *Juegos*: *"· Estabilidad (elegida por la app)"*. Así, los juegos estables aprovechan al máximo tu equipo y los inestables mantienen un ritmo constante. Solo cambia en esa dirección; *Deshacer* lo olvida. Si prefieres decidirlo tú, el botón de prioridad de cada juego en *Juegos* permite elegir **Automática**, **Siempre Fluidez** o **Siempre Estabilidad**; las dos últimas no las cambia la app.
+- **Automática** (por defecto, recomendada): la app ajusta cada juego por su cuenta. Empieza con *Más FPS* y, si el juego resulta inestable con su límite (sus fotogramas más lentos se hunden de forma sostenida en dos partidas seguidas), lo pasa a *Ritmo constante*; además, sube o baja cada límite según lo que el juego sostiene (sección 4). Así, los juegos estables aprovechan al máximo tu equipo y los inestables mantienen un ritmo constante. La prioridad solo cambia en esa dirección, para no alternar entre las dos; *Deshacer* lo olvida.
+- **Ritmo constante** o **Más FPS:** la misma para todos los juegos, y tú tienes el control: la app no cambia nada por su cuenta y te **recomienda** en la fila de cada juego lo que convendría cambiar.
+
+Cada juego puede tener la suya con el botón de prioridad de su fila, que muestra la que se aplica (*"Auto · Ritmo constante"*, por ejemplo) y permite elegir entre la general, **Siempre ritmo constante** o **Siempre más FPS**. Con una prioridad propia, ese juego queda también bajo tu control: la app solo te recomienda.
+
+Con G-SYNC/FreeSync, ninguna cuenta los **tirones** (fotogramas de más de 2,5 veces lo normal): ningún límite los arregla. Sin VRR, por ahora se mantienen las reglas anteriores.
 
 Los límites ya aceptados no cambian al cambiar la prioridad: deshaz el juego para recalcularlo con el criterio nuevo.
 
@@ -135,5 +140,9 @@ Para saber qué límite da el ritmo más regular en un juego, compara partidas d
 **¿Por qué el límite no es igual a mis FPS?** La app elige el ritmo que el juego sostiene en sus momentos exigentes, no en los tranquilos, para que el ritmo sea constante.
 
 **¿Dónde están los registros?** Junto al programa, como `registro-fecha-hora.txt`, y en la sección *Registro*.
+
+**La app dice que G-SYNC no se está usando.** En un portátil, lo más habitual es que esté en **modo híbrido**: la gráfica integrada controla la pantalla y G-SYNC no puede funcionar. Pasa con opciones como *Automatic Selection*, que eligen el modo en cada arranque, o tras actualizar el driver. Elige «Solo GPU NVIDIA» en el Panel de control de NVIDIA (*Administrar modo de pantalla*) o en la app de tu portátil, y reinicia. Después, pulsa *Deshacer* en los juegos cuyo límite se decidiera mientras G-SYNC no funcionaba, para que se recalculen.
+
+**Tengo una gráfica AMD o Intel.** FlatPace empieza en ***Solo recomendar*** (el modo guiado). Si tienes **RivaTuner Statistics Server (RTSS)** instalado (viene con MSI Afterburner), puedes elegirlo como limitador en *Juegos*, encima de la prioridad: la app aplicará los límites ella misma en el perfil de cada juego de RTSS (déjalo abierto mientras juegas, y con FreeSync activa también el VSync del driver). Al cambiar de limitador, los límites de tus juegos se mueven al nuevo. En *Solo recomendar*: mide el juego, decide el límite y lo comprueba, pero lo aplicas tú. En la fila de cada juego, en *Juegos*, verás exactamente qué poner y dónde (en AMD Software, Radeon Chill con mínimo y máximo iguales; en Intel Graphics Software, su limitador de FPS; o el limitador del propio juego), y si conviene activar también el VSync del driver (con FreeSync) y la opción de baja latencia. Al abrir el juego, la app comprueba que funciona: si aún no lo has aplicado, te lo recuerda, y cuando aparece *"Límite funcionando"*, la instrucción desaparece. Si la app recomienda otro límite más adelante, la fila mostrará el valor nuevo. El modo automático solo existe con NVIDIA por las licencias de los kits de AMD e Intel (en el [README](README.md) se explica el motivo).
 
 **Voy a actualizar el driver de NVIDIA.** Una actualización normal conserva los perfiles de los juegos, y con ellos los límites. Una *instalación limpia* los borra: pulsa antes *Deshacer todos los cambios*, y la app volverá a medir cada juego.
