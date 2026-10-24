@@ -159,7 +159,7 @@ The censored-data model already takes part in one decision: it decides whether t
 
 - **Refresh divisors:** without VRR, each image occupies a whole number of refreshes; only divisors give an even pace. Google applies the same rule in Android's Game Mode.
 - **Variation versus average:** average FPS alone doesn't predict perceived quality when frame times vary (WPI, CHI 2023).
-- **13 % perceptible threshold:** frame-rate perception is roughly logarithmic (Weber's law); a 13-15 % change is needed to notice it half of the time (frame-rate JND study in VR and desktop, 2025).
+- **13 % perceptible threshold:** rate perception is roughly logarithmic (Weber's law). Naylor-Lovell, Chalmers and Debattista ([Virtual Reality, 2025](https://doi.org/10.1007/s10055-025-01227-9)) measured the just noticeable difference of the update rate (*tick rate*) of a moving object, in VR and on a desktop with G-SYNC at 90 Hz: k = 0.133 and 0.155, that is, a 13-15 % change to notice it half of the time, constant in log units. It's an object's update rate, not the duration of a game's frames, but a very close phenomenon; frame-rate studies (Denes et al., 2020) find steps of the same order. The threshold grows a lot when the display isn't a whole multiple of the motion's rate, which supports using exact divisors of the Hz without VRR.
 - **VRR ceiling:** Blur Busters' 3 FPS rule (G-SYNC 101) and the Hz − Hz²/4096 formula, inspired by Special K and matching Reflex's automatic cap.
 - **Measurement:** PresentMon (Intel) and NVIDIA's Reflex marker methodology.
 
