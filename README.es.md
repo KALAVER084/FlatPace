@@ -8,17 +8,25 @@ Versión actual: **0.62.2** · Windows 10 (1803 o posterior) y Windows 11 · [Gu
 
 *El overlay en Greylock. Izquierda: sin límite, 225 FPS pero irregulares (variación del ritmo ±0,9 ms; el 1 % más lento, a 150). Derecha: con el límite que eligió FlatPace, 129 FPS completamente planos (±0,1 ms; el 1 % más lento, también a 129).*
 
+**[Descarga la última versión](https://github.com/KALAVER084/FlatPace/releases/latest)** · Automático con NVIDIA · Guiado con AMD e Intel (aún sin probar)
+
+## Inicio rápido
+
+1. Descarga `FlatPace-x.x.x.zip` de la [última versión](https://github.com/KALAVER084/FlatPace/releases/latest) y descomprímelo donde quieras (no hace falta instalar nada).
+2. Abre `FlatPace.exe` y acepta los permisos de administrador (los necesitan PresentMon y el driver de NVIDIA).
+3. Juega con normalidad. Al cerrar el juego, FlatPace guarda el límite para la próxima partida (con AMD o Intel, salvo que elijas RivaTuner como limitador, te dice en *Juegos* qué poner y dónde).
+4. En la siguiente partida, la app comprueba que funciona ("Límite funcionando") y queda **aceptado**.
+
+Si Windows muestra "Windows protegió su PC", pulsa *Más información* → *Ejecutar de todas formas*: aparece porque el programa no está firmado digitalmente.
+
 ## Qué hace
 
-- **Mide cada juego** mientras juegas, fotograma a fotograma (con PresentMon de Intel), separando los fotogramas reales de los generados por DLSS Frame Generation.
-- **Decide el límite con toda la partida** al cerrar el juego, según tu prioridad, tu pantalla y si hay G-SYNC/FreeSync.
-- **Lo aplica en el driver de NVIDIA** (perfil del juego, sin tocar el juego), **comprueba que funciona** en la siguiente partida y lo mantiene. Junto al límite activa **"GPU al máximo"**, que evita que la GPU baje frecuencias con el límite puesto y mejora el 1 % bajo, y el **modo de baja latencia**, que evita que los fotogramas se acumulen cuando el juego no llega al límite. Con AMD e Intel, **te dice qué poner y dónde** y comprueba que funciona, o lo aplica ella misma con **RivaTuner (RTSS)** si lo eliges como limitador, una función experimental y aún sin probar (ver más abajo).
-- **Lo ajusta solo, o te lo recomienda:** si el juego deja de sostenerlo de forma continuada, lo baja (los tropiezos aislados no cuentan); si va sobrado, lo sube poco a poco hasta lo que el juego sostiene de verdad. En modo automático lo hace la app; si eliges tú la prioridad, te lo recomienda con un botón y decides tú.
-- **Una prioridad por juego, automática:** cada juego empieza con *Más FPS* y pasa solo a *Ritmo constante* si resulta inestable con su límite. También puedes elegir una para todos o fijarla a mano en cada juego.
-- **Todo es reversible:** cada juego se puede deshacer por separado, y vuelve exactamente a como estaba.
-- **Diagnóstico:** tirones, qué limita los momentos lentos (la CPU o la GPU) con el consejo que corresponde, rendimiento de la CPU, movimiento descompasado por la generación de fotogramas, modo de presentación, VRR activo, overlay en el juego con la gráfica de ritmo y grabación opcional de cada fotograma para analizar partidas.
-- **Ligero:** funciona con prioridad baja y en el modo de eficiencia de Windows 11, para no competir con el juego.
-- **En español y en inglés:** la interfaz y el registro, en el idioma que elijas.
+- **Mide cada juego** mientras juegas, fotograma a fotograma.
+- **Elige el límite que tu juego sostiene de verdad** al cerrarlo, con los datos de toda la partida.
+- **Lo aplica en el driver de NVIDIA,** sin tocar el juego, y comprueba que funciona.
+- **Lo sigue ajustando:** lo baja si el juego no lo sostiene y lo sube si va sobrado.
+- **Te explica el porqué:** los tirones, si frena al juego la CPU o la GPU, y un overlay en el juego con la gráfica de ritmo.
+- **Todo es reversible y sin conexión,** en español y en inglés.
 
 ## Así se ve
 
@@ -36,9 +44,37 @@ Capturas con la interfaz en inglés.
 
 ![La sección Juegos: prioridad y juegos con límite](docs/img/juegos.png)
 
+## Requisitos y compatibilidad
+
+| | Medir y decidir | Aplicar el límite | Comprobar que funciona |
+|---|---|---|---|
+| NVIDIA | Sí | Automático, en el driver | Sí |
+| AMD / Intel (aún sin probar) | Sí | *Solo recomendar*: lo aplicas tú siguiendo las instrucciones de la app; o automático, si eliges RivaTuner (RTSS) como limitador (experimental) | Sí |
+
+- **Pantallas sin VRR:** límites que dividen exactamente los Hz reales (por ejemplo 240, 120, 80, 60 en una de 240 Hz).
+- **G-SYNC / FreeSync / Adaptive-Sync:** límites al ritmo exacto que el juego sostiene, por debajo del máximo de la pantalla.
+- **Portátiles en modo híbrido:** funcionan, pero sin G-SYNC; la app avisa y explica cómo activarlo.
+- **Juegos con anticheat:** FlatPace no entra en el juego; solo usa el perfil del driver, como el Panel de control de NVIDIA.
+
+## Limitaciones
+
+- El driver aplica el límite **al abrir el juego**: los cambios se notan en la partida siguiente.
+- Con AMD e Intel, "GPU al máximo" y el modo de baja latencia del driver no están disponibles, y el VSync del driver lo activas tú; sin RTSS, el límite también lo aplicas tú.
+- No elimina los tirones propios del juego (compilación de shaders, cargas): los detecta y los muestra.
+- La generación de fotogramas puede descompasar el movimiento aunque el ritmo sea constante: FlatPace lo mide y lo explica, pero ningún límite lo corrige.
+- La latencia del PC solo aparece si el juego entrega los datos necesarios; en los juegos probados aún no lo ha hecho.
+- Usa PresentMon 2.6.0, que tiene fallos conocidos; si deja de enviar datos a mitad de partida, FlatPace lo reinicia.
+- Con FlatPace en primer plano, la tecla *Impr Pant* no abre la herramienta de recortes de Windows 11: FlatPace se ejecuta como administrador, y Windows no deja que la herramienta vea el teclado mientras una ventana de administrador tiene el foco. *Win + Impr Pant* (pantalla completa) y *Win + Shift + S* sí funcionan.
+- Probado sobre todo en un portátil con RTX 4080 y pantalla de 240 Hz con G-SYNC, con unos pocos juegos (Greylock, Megabonk, Metal Eden, Space Marine 2 y Control Resonant). Los límites con RTSS y el modo guiado aún no se han probado en gráficas AMD ni Intel: se agradecen informes.
+
 ## Cómo funciona
 
-**La regla del 13 % (ley de Weber).** La ley de Weber (Weber, 1846) dice que la diferencia mínima que percibimos en un estímulo no es una cantidad fija, sino una proporción de su tamaño. Un estudio de 2025 (Naylor-Lovell, Chalmers y Debattista, 2025) la midió para el movimiento en pantalla: la frecuencia con que se actualiza un objeto en movimiento tiene que cambiar **entre un 13 y un 15 %** para que la gente note que se mueve más o menos fluido la mitad de las veces, en realidad virtual y en escritorio, y esa proporción se mantuvo constante en el rango estudiado, con una excepción que se explica más abajo. El estudio mide la frecuencia de actualización de un objeto, no la duración de cada fotograma de un juego, pero es un fenómeno muy cercano, y los estudios sobre la frecuencia de fotogramas dan saltos perceptibles del mismo orden: de 50 a 60 Hz, o de 100 a 125 Hz (Denes y otros, 2020).
+Para quien quiera los detalles: las reglas de cada decisión, con sus fuentes. Pulsa un título para abrirlo.
+
+<details>
+<summary><b>La regla del 13 % (ley de Weber)</b></summary>
+
+La ley de Weber (Weber, 1846) dice que la diferencia mínima que percibimos en un estímulo no es una cantidad fija, sino una proporción de su tamaño. Un estudio de 2025 (Naylor-Lovell, Chalmers y Debattista, 2025) la midió para el movimiento en pantalla: la frecuencia con que se actualiza un objeto en movimiento tiene que cambiar **entre un 13 y un 15 %** para que la gente note que se mueve más o menos fluido la mitad de las veces, en realidad virtual y en escritorio, y esa proporción se mantuvo constante en el rango estudiado, con una excepción que se explica más abajo. El estudio mide la frecuencia de actualización de un objeto, no la duración de cada fotograma de un juego, pero es un fenómeno muy cercano, y los estudios sobre la frecuencia de fotogramas dan saltos perceptibles del mismo orden: de 50 a 60 Hz, o de 100 a 125 Hz (Denes y otros, 2020).
 
 **Cómo la aplica FlatPace.** La app nunca compara milisegundos fijos: cada umbral de *"se nota / no se nota"* es **un 13 % del ritmo de ese momento**, el extremo más estricto del estudio. Así, la misma regla vale a cualquier velocidad: un fotograma 1 ms más lento es una diferencia perceptible a 240 FPS (un 24 % de los 4,2 ms que dura), pero no a 60 FPS (un 6 % de 16,7 ms). Y como un 13 % menos de FPS equivale a fotogramas un 15 % más largos, el umbral cae dentro del rango del estudio tanto si se mide en FPS como en duración. Se usa en:
 - **La regla de fallos:** un límite falla si el juego queda más de un 13 % por debajo de él de forma sostenida (en tramos de al menos 5 segundos, que sumen un minuto y el 10 % de la partida). Las caídas más cortas se consideran tropiezos aislados y no cuentan.
@@ -56,6 +92,11 @@ El mismo estudio (Naylor-Lovell, Chalmers y Debattista, 2025) encontró otra cos
 - Naylor-Lovell, W., Chalmers, A. y Debattista, K. (2025). [*Tick rate-frame rate cross interaction and the impact upon just noticeable differences in virtual reality*](https://doi.org/10.1007/s10055-025-01227-9). *Virtual Reality*, 29, 149. Acceso abierto. De aquí salen el 13-15 % y la excepción de los múltiplos no enteros.
 - Denes, G., Jindal, A., Mikhailiuk, A. y Mantiuk, R. K. (2020). [*A perceptual model of motion quality for rendering with adaptive refresh-rate and resolution*](https://doi.org/10.1145/3386569.3392411). *ACM Transactions on Graphics*, 39(4), artículo 133. Los saltos perceptibles en la frecuencia de fotogramas.
 
+</details>
+
+<details>
+<summary><b>Cómo elige, comprueba y ajusta el límite</b></summary>
+
 **Cómo elige el límite.** Al cerrar el juego, con los datos de toda la partida (sin contar los tirones, fotogramas de más de 2,5 veces lo normal y al menos 8 ms más largos, que ningún límite arregla):
 - **Más FPS:** el ritmo que el juego alcanza el 90 % del tiempo.
 - **Ritmo constante:** un límite que el juego sostiene también en sus peores momentos.
@@ -70,34 +111,36 @@ El mismo estudio (Naylor-Lovell, Chalmers y Debattista, 2025) encontró otra cos
 - **Si con *Más FPS* los fotogramas más lentos se hunden más de un 13 % en dos partidas seguidas,** el juego es inestable con su límite y pasa a *Ritmo constante*. Solo en esa dirección, para no alternar entre las dos.
 - **El último minuto antes de cerrar el juego no cuenta:** suele ser de menús, salida o algún cuelgue.
 
-**Datos censurados: cuánto podría dar el juego con el límite puesto.** Con un límite, la mayoría de los fotogramas esperan al limitador, así que todos parecen durar lo mismo: el periodo del límite. De ellos solo se sabe que el juego habría tardado *"como mucho"* eso, no cuánto en realidad. Es como querer saber la velocidad máxima de un coche que circula por una calle limitada a 50: si casi siempre va a 50, sabes que podría ir más rápido, pero no cuánto. En estadística, a eso se le llama **datos censurados**, y la app los trata como tales. Antes de nada, mide cuánto oscila el propio limitador en cada partida, para no confundir ese ruido con un juego que no llega. Después los usa de dos formas:
+Con la prioridad *Automática*, la app hace estos cambios por su cuenta. Si eliges tú la prioridad, no cambia nada: te los recomienda en la fila de cada juego, con un botón para aplicarlos. Los detalles de cada regla están en la [guía de uso](GUIA.md) y en la [documentación técnica](TECNICO.md).
+
+</details>
+
+<details>
+<summary><b>Datos censurados: cuánto podría dar el juego con el límite puesto</b></summary>
+
+Con un límite, la mayoría de los fotogramas esperan al limitador, así que todos parecen durar lo mismo: el periodo del límite. De ellos solo se sabe que el juego habría tardado *"como mucho"* eso, no cuánto en realidad. Es como querer saber la velocidad máxima de un coche que circula por una calle limitada a 50: si casi siempre va a 50, sabes que podría ir más rápido, pero no cuánto. En estadística, a eso se le llama **datos censurados**, y la app los trata como tales. Antes de nada, mide cuánto oscila el propio limitador en cada partida, para no confundir ese ruido con un juego que no llega. Después los usa de dos formas:
 - **Para decidir si sube el límite:** si más del 98 % de los fotogramas esperan al limitador, el juego va sobrado y podría ir más rápido. Es lo que un limitador normal no puede saber.
 - **Para estimar la capacidad del juego sin el límite,** con un modelo estadístico (Tobit) que combina los fotogramas lentos, que se miden de verdad, con los que esperan, de los que solo se sabe el máximo. Aparece en el resumen de cada partida como *capacidad estimada*. Es solo informativa: el 1 % más lento estimado es fiable (en Greylock, 74 FPS estimados frente a 76 medidos), y la mediana solo se muestra cuando hay pocos fotogramas esperando, porque si no sería una extrapolación.
 
-Con la prioridad *Automática*, la app hace estos cambios por su cuenta. Si eliges tú la prioridad, no cambia nada: te los recomienda en la fila de cada juego, con un botón para aplicarlos. Los detalles de cada regla están en la [guía de uso](GUIA.md) y en la [documentación técnica](TECNICO.md).
+</details>
 
-## Inicio rápido
+<details>
+<summary><b>Todo lo que hace, en detalle</b></summary>
 
-1. Descomprime la carpeta donde quieras (no hace falta instalar nada).
-2. Abre `FlatPace.exe` y acepta los permisos de administrador (los necesitan PresentMon y el driver de NVIDIA).
-3. Juega con normalidad. Al cerrar el juego, FlatPace guarda el límite para la próxima partida (con AMD o Intel, salvo que elijas RivaTuner como limitador, te dice en *Juegos* qué poner y dónde).
-4. En la siguiente partida, la app comprueba que funciona ("Límite funcionando") y queda **aceptado**.
+- **Mide cada juego** mientras juegas, fotograma a fotograma (con PresentMon de Intel), separando los fotogramas reales de los generados por DLSS Frame Generation.
+- **Decide el límite con toda la partida** al cerrar el juego, según tu prioridad, tu pantalla y si hay G-SYNC/FreeSync.
+- **Lo aplica en el driver de NVIDIA** (perfil del juego, sin tocar el juego), **comprueba que funciona** en la siguiente partida y lo mantiene. Junto al límite activa **"GPU al máximo"**, que evita que la GPU baje frecuencias con el límite puesto y mejora el 1 % bajo, y el **modo de baja latencia**, que evita que los fotogramas se acumulen cuando el juego no llega al límite. Con AMD e Intel, **te dice qué poner y dónde** y comprueba que funciona, o lo aplica ella misma con **RivaTuner (RTSS)** si lo eliges como limitador, una función experimental y aún sin probar (ver más abajo).
+- **Lo ajusta solo, o te lo recomienda:** si el juego deja de sostenerlo de forma continuada, lo baja (los tropiezos aislados no cuentan); si va sobrado, lo sube poco a poco hasta lo que el juego sostiene de verdad. En modo automático lo hace la app; si eliges tú la prioridad, te lo recomienda con un botón y decides tú.
+- **Una prioridad por juego, automática:** cada juego empieza con *Más FPS* y pasa solo a *Ritmo constante* si resulta inestable con su límite. También puedes elegir una para todos o fijarla a mano en cada juego.
+- **Todo es reversible:** cada juego se puede deshacer por separado, y vuelve exactamente a como estaba.
+- **Diagnóstico:** tirones, qué limita los momentos lentos (la CPU o la GPU) con el consejo que corresponde, rendimiento de la CPU, movimiento descompasado por la generación de fotogramas, modo de presentación, VRR activo, overlay en el juego con la gráfica de ritmo y grabación opcional de cada fotograma para analizar partidas.
+- **Ligero:** funciona con prioridad baja y en el modo de eficiencia de Windows 11, para no competir con el juego.
+- **En español y en inglés:** la interfaz y el registro, en el idioma que elijas.
 
-Si Windows muestra "Windows protegió su PC", pulsa *Más información* → *Ejecutar de todas formas*: aparece porque el programa no está firmado digitalmente.
+</details>
 
-## Requisitos y compatibilidad
-
-| | Medir y decidir | Aplicar el límite | Comprobar que funciona |
-|---|---|---|---|
-| NVIDIA | Sí | Automático, en el driver | Sí |
-| AMD / Intel (aún sin probar) | Sí | *Solo recomendar*: lo aplicas tú siguiendo las instrucciones de la app; o automático, si eliges RivaTuner (RTSS) como limitador (experimental) | Sí |
-
-- **Pantallas sin VRR:** límites que dividen exactamente los Hz reales (por ejemplo 240, 120, 80, 60 en una de 240 Hz).
-- **G-SYNC / FreeSync / Adaptive-Sync:** límites al ritmo exacto que el juego sostiene, por debajo del máximo de la pantalla.
-- **Portátiles en modo híbrido:** funcionan, pero sin G-SYNC; la app avisa y explica cómo activarlo.
-- **Juegos con anticheat:** FlatPace no entra en el juego; solo usa el perfil del driver, como el Panel de control de NVIDIA.
-
-### Por qué el modo automático solo funciona con NVIDIA
+<details>
+<summary><b>Por qué el modo automático solo funciona con NVIDIA</b></summary>
 
 Para aplicar un límite por su cuenta, FlatPace necesita el kit oficial con el que cada fabricante permite a otros programas controlar su driver. Sus licencias son muy distintas:
 - **NVIDIA (NVAPI)** se publica con **licencia MIT**, la misma que FlatPace: se puede usar y redistribuir en un proyecto de código abierto sin restricciones.
@@ -106,16 +149,7 @@ Para aplicar un límite por su cuenta, FlatPace necesita el kit oficial con el q
 
 Por eso, con AMD e Intel, FlatPace empieza en ***Solo recomendar***: mide el juego, decide el límite, te indica exactamente dónde ponerlo (en AMD Software o en Intel Graphics Software, o en el limitador del propio juego) y comprueba que funciona. Si tienes **RivaTuner Statistics Server (RTSS)**, un programa gratuito y muy extendido (viene con MSI Afterburner) cuyo limitador funciona con cualquier gráfica, puedes elegirlo como limitador en *Juegos* (**experimental:** está implementado, pero aún no se ha probado con RTSS en una gráfica AMD o Intel): la app escribirá el límite en el perfil de cada juego de RTSS, sin usar ningún kit con licencia restrictiva. Nunca lo usa sin que lo elijas, porque RTSS entra en los juegos y quizá lo uses para otras cosas. Tiene que estar abierto mientras juegas. *Esta es nuestra lectura de las licencias, no un asesoramiento legal.*
 
-## Limitaciones
-
-- El driver aplica el límite **al abrir el juego**: los cambios se notan en la partida siguiente.
-- Con AMD e Intel, "GPU al máximo" y el modo de baja latencia del driver no están disponibles, y el VSync del driver lo activas tú; sin RTSS, el límite también lo aplicas tú.
-- No elimina los tirones propios del juego (compilación de shaders, cargas): los detecta y los muestra.
-- La generación de fotogramas puede descompasar el movimiento aunque el ritmo sea constante: FlatPace lo mide y lo explica, pero ningún límite lo corrige.
-- La latencia del PC solo aparece si el juego entrega los datos necesarios; en los juegos probados aún no lo ha hecho.
-- Usa PresentMon 2.6.0, que tiene fallos conocidos; si deja de enviar datos a mitad de partida, FlatPace lo reinicia.
-- Con FlatPace en primer plano, la tecla *Impr Pant* no abre la herramienta de recortes de Windows 11: FlatPace se ejecuta como administrador, y Windows no deja que la herramienta vea el teclado mientras una ventana de administrador tiene el foco. *Win + Impr Pant* (pantalla completa) y *Win + Shift + S* sí funcionan.
-- Probado sobre todo en un portátil con RTX 4080 y pantalla de 240 Hz con G-SYNC, con unos pocos juegos (Greylock, Megabonk, Metal Eden, Space Marine 2 y Control Resonant). Los límites con RTSS y el modo guiado aún no se han probado en gráficas AMD ni Intel: se agradecen informes.
+</details>
 
 ## Privacidad
 
