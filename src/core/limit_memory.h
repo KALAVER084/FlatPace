@@ -148,8 +148,9 @@ struct LimitMemory {
 
 // Lo que aporta una partida a la memoria, a partir de sus fotogramas reales (sin generacion) y del tiempo
 // de trabajo de cada uno (el mayor de CPU y GPU). capFps: el limite que tenia (0 si ninguno). Sin el
-// ultimo minuto (el cierre del juego no cuenta) ni los segundos por debajo del rango del VRR (menus y
+// cierre del juego ni los segundos por debajo del rango del VRR (menus y
 // cinematicas a 30-40 fps, donde un limite no ayuda). Devuelve minutes = 0 si no hay datos suficientes.
+// (Sin los ultimos 15 s, como la regla de fallos desde la 0.65.)
 static LimitMemory::Point SessionMemoryPoint(const std::vector<float>& realMs, const std::vector<float>& workMs,
                                              double capFps, double vrrMinFps, long long when) {
   LimitMemory::Point p;
@@ -160,7 +161,7 @@ static LimitMemory::Point SessionMemoryPoint(const std::vector<float>& realMs, c
   // Sin el ultimo minuto.
   size_t end = n;
   double tail = 0.0;
-  while (end > 0 && tail < 60000.0) tail += realMs[--end];
+  while (end > 0 && tail < 15000.0) tail += realMs[--end];  // como la regla de fallos (kCloseTrimSec)
   if (end < 1000) return p;
   std::vector<double> ms(realMs.begin(), realMs.begin() + end), work(workMs.begin(), workMs.begin() + end);
   double total = 0.0;

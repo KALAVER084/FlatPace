@@ -980,18 +980,31 @@ TEST(ClimbNoPingPongAcrossSessions) {
 
 TEST(FailureRuleIgnoresClosingMinute) {
   // 10 min a 110 fps y, al final, 70 s colgado presentando a ~52 fps (Greylock): sin quitar el cierre,
-  // seria un fallo; sin los ultimos 60 s, solo quedan 10 s por debajo y el limite se sostiene.
+  // seria un fallo. Desde la 0.65 se quitan los ultimos 15 s y el tramo final muy por debajo del
+  // limite (menos del 70 %): el cuelgue entero.
   FailureTracker f;
   for (int s = 0; s < 600; ++s) f.Add(110, 110, 1.0);
   for (int s = 0; s < 70; ++s) f.Add(52, 110, 1.0);
   CHECK(f.Failed());
-  const FailureTracker t = f.WithoutLast(kCloseTrimSec, 110);
+  const FailureTracker t = f.WithoutClosing(110);
   CHECK(!t.Failed());
-  CHECK_NEAR(t.failSecs, 10, 1e-9);
+  CHECK_NEAR(t.failSecs, 0, 1e-9);
+  CHECK(t.trimmed == 70);
   // Un fallo de verdad, en mitad de la partida, se sigue detectando.
   FailureTracker g;
   for (int s = 0; s < 600; ++s) g.Add(s >= 200 && s < 300 ? 80 : 110, 110, 1.0);
-  CHECK(g.WithoutLast(kCloseTrimSec, 110).Failed());
+  CHECK(g.WithoutClosing(110).Failed());
+  // Salida normal: solo se pierden 15 s, no un minuto.
+  FailureTracker h;
+  for (int s = 0; s < 300; ++s) h.Add(110, 110, 1.0);
+  CHECK(h.WithoutClosing(110).trimmed == 15);
+  // Una zona pesada (algo por debajo del limite) hasta el cierre si cuenta: es juego, no el cierre.
+  FailureTracker z;
+  for (int s = 0; s < 400; ++s) z.Add(110, 110, 1.0);
+  for (int s = 0; s < 120; ++s) z.Add(90, 110, 1.0);  // 82 % del limite
+  const FailureTracker zt = z.WithoutClosing(110);
+  CHECK(zt.trimmed == 15);
+  CHECK(zt.Failed());  // 105 s por debajo, el 20 % de la partida
 }
 
 TEST(AutoPriorityMovesUnstableGamesToStability) {
@@ -1254,6 +1267,7 @@ TEST(ExplainRoundTrip) {
   CHECK(old.kind == LimitExplain::WholeSession && old.to == 118.0f && old.curveSeconds);
   w.kind = LimitExplain::FailMedian;
   CHECK(LimitExplain::Parse(w.Serialize()).curveSeconds);
+  CHECK(LimitExplain::Parse(w.Serialize()).version == 3);
 
 }
 TEST(ExplainSessionSeriesKeepDips) {
@@ -1276,6 +1290,95 @@ TEST(ExplainSessionSeriesKeepDips) {
   CHECK(r.verified && !r.fg && r.limit == 114.0f && r.fps.size() == s.fps.size());
   CHECK(std::fabs(r.waitPct - 97.0f) < 0.06f && std::fabs(r.secsPerPoint - s.secsPerPoint) < 0.01f);
   CHECK(SessionExplain::Parse("").limit == 0.0f);
+  // 0.66: guarda el 1 % mas lento de la partida; los registros de la 0.63-0.65 (version 1) se siguen leyendo.
+  s.sessionLow = 96.2f;
+  const SessionExplain r2 = SessionExplain::Parse(s.Serialize());
+  CHECK(std::fabs(r2.sessionLow - 96.2f) < 0.06f && r2.fps.size() == s.fps.size());
+  const std::string v1 = "1|1792957000|3.50|114.0|1|0|0|0.0|1|0.6|97.0|15|1|114:110,114:80";
+  const SessionExplain old1 = SessionExplain::Parse(v1);
+  CHECK(old1.limit == 114.0f && old1.sessionLow == 0.0f && old1.fps.size() == 2 && old1.low[1] == 80.0f);
+}
+
+
+// 0.65: la serie de la grafica, mas barata, debe ser identica a la de la 0.64, dibujo a dibujo.
+TEST(PaceSeriesFastMatchesReference) {
+  for (int screen = 0; screen <= 1; ++screen) {
+    overlay::PaceClassCache ca, cb;
+    std::vector<std::pair<double, double>> tl;
+    double t = 0.0;
+    unsigned seed = 12345;
+    auto rnd = [&]() { seed = seed * 1103515245u + 12345u; return (seed >> 8) % 1000 / 1000.0; };
+    bool same = true;
+    size_t points = 0;
+    for (int frame = 0; frame < 2000; ++frame) {
+      // ~8,3 ms con ruido, tirones de vez en cuando y una zona mas lenta
+      double ms = (frame > 900 && frame < 1300 ? 10.5 : 8.3) + (rnd() - 0.5) * 1.2;
+      if (frame % 173 == 0) ms *= 3.0;
+      t += ms / 1000.0;
+      tl.push_back({t, ms});
+      if (tl.size() > 1400) tl.erase(tl.begin());
+      if (frame % 3 == 0) {  // un dibujo cada pocos fotogramas, con el reloj un poco por detras
+        const double display = t - 0.05;
+        const auto a = overlay::BuildTimeSeriesMap(tl, display, overlay::kPaceSpanSec, 190, 8.3, ca, 1, screen != 0);
+        const auto b = overlay::BuildTimeSeries(tl, display, overlay::kPaceSpanSec, 190, 8.3, cb, 1, screen != 0);
+        if (a.size() != b.size()) same = false;
+        for (size_t i = 0; same && i < a.size(); ++i)
+          if (a[i].x != b[i].x || a[i].ms != b[i].ms || a[i].spike != b[i].spike) same = false;
+        points += b.size();
+      }
+    }
+    CHECK(same);
+    CHECK(points > 1000);
+  }
+}
+
+
+// ---- El 1 % mas lento de la partida (0.66) ----
+TEST(SteadyChecksWithSessionLow) {
+  // Greylock con 107: el 1 % mas lento de la partida fue ~97 -> la formula da 109: se sostiene.
+  SteadyCheck a = CheckSteady(96.9, 107);
+  CHECK(a.holds);
+  CHECK(a.target == 109.0);
+  // Con 121: ~90 -> 102: no se sostiene, y baja a 102 (no un escalon a ciegas).
+  SteadyCheck b = CheckSteady(90.0, 121);
+  CHECK(!b.holds);
+  CHECK(b.target == 101.0 || b.target == 102.0);
+  // Diferencias pequenas (dentro del 5 %) no bajan el limite.
+  CHECK(CheckSteady(92.0, 107).holds);   // 103 frente a 107: un 3,7 %
+  CHECK(!CheckSteady(88.0, 107).holds);  // 99 frente a 107: un 7,5 %
+  CHECK(CheckSteady(0.0, 107).holds);    // sin datos, no se toca
+}
+TEST(MoreFpsSankWithSessionLow) {
+  CHECK(SessionSank(90.0, 121));    // 25 % por debajo
+  CHECK(!SessionSank(110.0, 121));  // 9 % por debajo
+  CHECK(!SessionSank(0.0, 121));
+  AutoPriority p;
+  p = UpdateAutoPriority(p, true, true, 300);
+  CHECK(!p.stability && p.unstableStreak == 1);
+  p = UpdateAutoPriority(p, true, false, 300);  // partida larga y limpia: corta la racha
+  CHECK(p.unstableStreak == 0);
+  p = UpdateAutoPriority(p, true, true, 300);
+  p = UpdateAutoPriority(p, true, true, 300);
+  CHECK(p.stability);
+}
+TEST(SessionGameLowIgnoresShortClosingAndStutters) {
+  // 8 min a ~107 fps (9,35 ms) con un 0,5 % de fotogramas lentos del juego (11 ms) y tirones (60 ms)
+  std::vector<float> r, w;
+  for (int i = 0; i < 50000; ++i) {
+    float x = 9.35f, wk = 6.0f;
+    if (i % 200 == 0) { x = 11.0f; wk = 10.8f; }
+    if (i % 997 == 0) { x = 60.0f; wk = 59.0f; }
+    r.push_back(x);
+    w.push_back(wk);
+  }
+  const double low = SessionGameLowFps(r, w, 1000.0 / 107, 15);
+  CHECK(low > 100.0 && low <= 107.5);  // el 0,5 % lento no llega al 1 %; los tirones no cuentan
+  // Un 3 % de fotogramas a 13 ms causados por el juego: el 1 % mas lento cae a ~77.
+  std::vector<float> r2(r), w2(w);
+  for (int i = 0; i < 50000; i += 33) { r2[i] = 13.0f; w2[i] = 12.8f; }
+  const double low2 = SessionGameLowFps(r2, w2, 1000.0 / 107, 15);
+  CHECK(low2 > 70.0 && low2 < 80.0);
+  CHECK(SessionGameLowFps(std::vector<float>(500, 9.0f), std::vector<float>(500, 5.0f), 9.35, 15) == 0.0);
 }
 
 int main() {
@@ -1338,6 +1441,10 @@ int main() {
   RUN(ExplainPerSecondRatesSkipMenus);
   RUN(ExplainRoundTrip);
   RUN(ExplainSessionSeriesKeepDips);
+  RUN(PaceSeriesFastMatchesReference);
+  RUN(SteadyChecksWithSessionLow);
+  RUN(MoreFpsSankWithSessionLow);
+  RUN(SessionGameLowIgnoresShortClosingAndStutters);
   RUN(AutoPriorityMovesUnstableGamesToStability);
   RUN(ClimbLadderToCeiling);
   RUN(ClimbRevertsAndRemembersCeiling);

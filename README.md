@@ -2,7 +2,7 @@
 
 **FlatPace measures your games and applies the frame-rate limit that makes them run as steadily as possible.** The idea behind it: a steady pace feels smoother than higher but uneven FPS.
 
-Current version: **0.63.1** · Windows 10 (1803 or later) and Windows 11. [User guide](GUIDE.md) · [Technical documentation](TECHNICAL.md) · [License](LICENSE) · [Español](README.es.md). The changelog ([CHANGELOG.md](CHANGELOG.md)) is in Spanish; the app has an English interface (ES | EN selector).
+Current version: **0.66.1** · Windows 10 (1803 or later) and Windows 11. [User guide](GUIDE.md) · [Technical documentation](TECHNICAL.md) · [License](LICENSE) · [Español](README.es.md). The changelog ([CHANGELOG.md](CHANGELOG.md)) is in Spanish; the app has an English interface (ES | EN selector).
 
 ![FlatPace's overlay in Greylock, without a limit and with the limit the app chose](docs/img/overlay-antes-despues.png)
 
@@ -78,8 +78,8 @@ Weber's law (Weber, 1846) says that the smallest difference we perceive in a sti
 
 **How FlatPace applies it.** The app never compares fixed milliseconds: every *"noticeable / not noticeable"* threshold is **13 % of the current pace**, the strictest end of the study. That way the same rule works at any speed: a frame 1 ms slower is a perceptible difference at 240 FPS (24 % of the 4.2 ms it lasts), but not at 60 FPS (6 % of 16.7 ms). And since 13 % fewer FPS means frames 15 % longer, the threshold falls within the study's range whether it's measured in FPS or in duration. It's used in:
 - **The failure rule:** a limit fails if the game stays more than 13 % below it in a sustained way (in stretches of at least 5 seconds, adding up to a minute and 10 % of the session). Shorter drops count as isolated dips and are ignored.
-- **Raises, and lowerings when the slowest 1 % sinks:** one 13 % step, just enough to be noticeable.
-- ***Steady pace*:** the slowest 1 % of frames can arrive at most 13 % late, so the limit is 1.13 times the FPS of that slowest 1 %. And if, with *More FPS*, that 1 % sinks more than 13 % in two sessions in a row, the game moves to *Steady pace*.
+- **Raises:** one 13 % step, just enough to be noticeable. *Steady pace* lowerings don't go beyond one step per session either.
+- ***Steady pace*:** the slowest 1 % of frames can arrive at most 13 % late, so the limit is 1.13 times the FPS of that slowest 1 %. When each session closes, the same formula is applied to the whole session's slowest 1 % to check the limit. And if, with *More FPS*, that 1 % stays more than 13 % below the limit in two sessions in a row, the game moves to *Steady pace*.
 - **Out-of-step motion:** a frame is out of step if it's drawn with an animation error larger than 13 % of its duration.
 - **The pacing graph:** its band marks ±13 % of the frame time (with a minimum of 0.5 ms and a maximum of 6 ms, which only kick in above about 260 FPS or below about 22).
 
@@ -106,10 +106,10 @@ The same study (Naylor-Lovell, Chalmers and Debattista, 2025) found something el
 **How it checks that it works.** In the next session, the limit is confirmed (*"Limit working"*) if the game runs at its pace within ±1.5 % and fewer than 10 % of frames arrive more than 7 % early. This check is done by measuring the game, so it works with any GPU.
 
 **How it adjusts it afterwards.** When each session closes:
-- **If the limit fails** (the 13 % rule), it lowers it to the pace the game did hold: with G-SYNC/FreeSync, the one it exceeded in 90 % of the session's seconds; without VRR, the next divisor of the Hz. If what sank was the slowest 1 % (with *Steady pace*), it lowers it one 13 % step.
+- **If the limit fails** (the 13 % rule), it lowers it to the pace the game did hold: with G-SYNC/FreeSync, the one it exceeded in 90 % of the session's seconds; without VRR, the next divisor of the Hz. With *Steady pace*, its formula is also applied to the whole session (1.13 × its slowest 1 %): if it doesn't reach the limit (with a 5 % margin), it lowers it to what the formula gives, at most one 13 % step per session, in case it was an unusual session.
 - **If the game has headroom the whole session** (at least 3 minutes with the limit, no stretch below it and more than 98 % of frames waiting on the limiter), it raises it one step: after one such session with *More FPS*, or two in a row with *Steady pace*. If the raise doesn't hold, it goes back to the previous limit and doesn't try again for 30 days. To know that, it uses censored data (see below).
-- **If with *More FPS* the slowest frames sink more than 13 % in two sessions in a row,** the game is unstable with its limit and moves to *Steady pace*. Only in that direction, so it doesn't alternate between the two.
-- **The last minute before the game closes doesn't count:** it's usually menus, exiting or a hang.
+- **If with *More FPS* the session's slowest 1 % stays more than 13 % below the limit in two sessions in a row,** the game is unstable with its limit and moves to *Steady pace*. A clean session of at least 3 minutes resets the streak (a shorter one doesn't count), so a single session through a heavy area isn't enough: it has to repeat. For example, with a limit of 126 (threshold: 110), a session whose slowest 1 % is 103 counts as "1 of 2", and if the next one gives 114 over 12 minutes, the streak goes back to zero. It only acts with the *Automatic* priority (if you choose the game's priority by hand, the app recommends it on its row without changing it), and only in that direction, so it doesn't alternate between the two; *Undo* forgets it.
+- **Closing the game doesn't count:** neither the last 15 seconds (exiting a game usually takes under 8) nor, before them, a final stretch far below the limit (under 70 %), which is a hang or a slow menu on the way out. A heavy area is somewhat below and does count, even if it lasts until the game closes.
 
 With the *Automatic* priority, the app makes these changes on its own. If you choose the priority yourself, it doesn't change anything: it recommends them on each game's row, with a button to apply them. The details of each rule are in the [user guide](GUIDE.md) and the [technical documentation](TECHNICAL.md).
 

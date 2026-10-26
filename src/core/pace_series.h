@@ -20,6 +20,9 @@ struct PaceClassCache {
   std::map<long long, PaceClass> bins;
   double colDur = 0.0;
   unsigned generation = 0;
+  // Fotogramas de cada tramo del dibujo en curso; se reutiliza entre dibujos (0.65), para no reservar
+  // memoria para cada tramo 60 veces por segundo.
+  std::vector<std::pair<long long, std::vector<float>>> scratch;
 };
 
 // Grafica de desviaciones: cada tramo vale la mediana de sus fotogramas (o su maximo si contiene
@@ -33,7 +36,7 @@ struct PaceClassCache {
 // el ojo, y solo es tiron una imagen de mas de 2,5 x (como los TIRONES del registro): linea recta un
 // 94 % del tiempo, sin esconder caidas reales (si la generacion se apaga, la media tambien cambia).
 constexpr int kScreenAvgBins = 5;
-static std::vector<PacePoint> BuildTimeSeries(const std::vector<std::pair<double, double>>& timeline,
+static std::vector<PacePoint> BuildTimeSeriesMap(const std::vector<std::pair<double, double>>& timeline,
                                               double display, double span, int cols, double ref,
                                               PaceClassCache& cache, unsigned generation, bool screen = false) {
   std::vector<PacePoint> out;
@@ -86,6 +89,87 @@ static std::vector<PacePoint> BuildTimeSeries(const std::vector<std::pair<double
     out.push_back({static_cast<float>(1.0 - (display - center) / span), value, c.spike});
   }
   // Olvidar los tramos que ya salieron de la grafica
+  const long long oldest = static_cast<long long>(std::floor((display - span) / colDur)) - 4;
+  cache.bins.erase(cache.bins.begin(), cache.bins.lower_bound(oldest));
+  return out;
+}
+
+// La misma serie que BuildTimeSeriesMap (la version hasta la 0.64, que sigue como referencia para las
+// pruebas y para fotogramas desordenados), mas barata: agrupa los fotogramas en orden reutilizando la
+// memoria del dibujo anterior, y solo calcula los tramos que aun no estan clasificados (uno o dos por
+// dibujo; los demas salen de la cache, como ya pasaba, pero antes se recalculaban y se descartaban).
+static std::vector<PacePoint> BuildTimeSeries(const std::vector<std::pair<double, double>>& timeline,
+                                              double display, double span, int cols, double ref,
+                                              PaceClassCache& cache, unsigned generation, bool screen = false) {
+  for (size_t i = 1; i < timeline.size(); ++i)
+    if (timeline[i].first < timeline[i - 1].first)
+      return BuildTimeSeriesMap(timeline, display, span, cols, ref, cache, generation, screen);
+  std::vector<PacePoint> out;
+  if (cols < 2 || timeline.empty()) return out;
+  const double colDur = span / cols;
+  if (cache.colDur != colDur || cache.generation != generation) {
+    cache.bins.clear();
+    cache.colDur = colDur;
+    cache.generation = generation;
+  }
+  auto& g = cache.scratch;
+  size_t used = 0;
+  for (const auto& r : timeline) {
+    if (r.first > display || r.first < display - span - 2 * colDur) continue;
+    const long long k = static_cast<long long>(std::floor(r.first / colDur));
+    if (used == 0 || g[used - 1].first != k) {
+      if (used == g.size()) g.emplace_back();
+      g[used].first = k;
+      g[used].second.clear();
+      ++used;
+    }
+    g[used - 1].second.push_back(static_cast<float>(r.second));
+  }
+  auto bin = [&](long long j) -> const std::vector<float>* {
+    size_t lo = 0, hi = used;
+    while (lo < hi) {
+      const size_t mid = (lo + hi) / 2;
+      if (g[mid].first < j) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo < used && g[lo].first == j ? &g[lo].second : nullptr;
+  };
+  const double tol = PaceTolerance(ref);
+  const double spikeAt = ref * (screen ? 2.5 : 1.5);
+  const int half = screen ? kScreenAvgBins / 2 : 0;
+  for (size_t idx = 0; idx < used; ++idx) {
+    const long long k = g[idx].first;
+    const bool complete = (k + 1 + half) * colDur <= display;
+    if (!complete) continue;
+    const double center = (k + 0.5) * colDur;
+    PaceClass c;
+    auto it = cache.bins.find(k);
+    if (it != cache.bins.end()) {
+      c = it->second;
+    } else {
+      std::vector<float>& v = g[idx].second;
+      const float mx = *std::max_element(v.begin(), v.end());
+      float med;
+      if (screen) {  // media de las imagenes de los tramos vecinos
+        double sum = 0.0;
+        int n = 0;
+        for (long long j = k - half; j <= k + half; ++j)
+          if (const std::vector<float>* nb = bin(j))
+            for (float x : *nb) {
+              sum += x;
+              ++n;
+            }
+        med = static_cast<float>(sum / std::max(1, n));
+      } else {
+        std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end());
+        med = v[v.size() / 2];
+      }
+      c = PaceClass{!(mx > spikeAt) && std::fabs(med - ref) <= tol, mx > spikeAt, mx > spikeAt ? mx : med};
+      cache.bins[k] = c;
+    }
+    const float value = c.flat ? static_cast<float>(ref) : c.value;
+    out.push_back({static_cast<float>(1.0 - (display - center) / span), value, c.spike});
+  }
   const long long oldest = static_cast<long long>(std::floor((display - span) / colDur)) - 4;
   cache.bins.erase(cache.bins.begin(), cache.bins.lower_bound(oldest));
   return out;

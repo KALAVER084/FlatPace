@@ -132,7 +132,7 @@ static std::atomic<bool> g_quit{false};
 static std::atomic<int> g_lang{0};
 static const char* T(const char* es, const char* en) { return g_lang == 1 ? en : es; }
 
-static constexpr const char* kVersion = "0.63.1";
+static constexpr const char* kVersion = "0.66.1";
 
 // Carpeta donde esta este .exe.
 static std::wstring ExeDirectory() {
@@ -418,8 +418,35 @@ static void ExemptCurrentThread() {
 static std::atomic<HANDLE> presentMonProcess{nullptr};
 static std::atomic<double> overlayDrawMsSum{0.0};
 static std::atomic<long long> overlayDraws{0};
+// Desde la 0.65.1: el trabajo completo de cada dibujo del overlay (con la preparacion de los datos, que
+// overlayDrawMsSum no incluye) y los dibujos de la ventana principal.
+static std::atomic<double> overlayFullMsSum{0.0};
+static std::atomic<double> windowDrawMsSum{0.0};
+static std::atomic<long long> windowDraws{0};
 
 // Tiempo de CPU (s) consumido por un proceso (por defecto, todo FlatPace).
+// Tiempo de procesador de cada hilo (0.65.2): el de todo el proceso no decia donde se iba. Cada hilo
+// guarda aqui su identificador al arrancar.
+static std::atomic<HANDLE> mainThread{nullptr}, engineThread{nullptr}, readerThread{nullptr};
+static std::atomic<long long> pmLines{0}, pmOwnLines{0};  // lineas de PresentMon; las de FlatPace se descartan
+// Si PresentMon se reinicia, su proceso y el hilo lector son otros: se guarda lo que consumieron los
+// anteriores (0.66.1; antes la cuenta restaba el antiguo al nuevo y podia salir negativa).
+static std::atomic<double> pmCpuDone{0.0}, readerCpuDone{0.0};
+// Momento de la ultima linea de PresentMon, de cualquier programa (tambien las del propio FlatPace que se
+// descartan): la vigilancia la usa para saber si PresentMon sigue enviando.
+static std::atomic<double> pmLastLineAt{0.0};
+static HANDLE OpenCurrentThread() {
+  return OpenThread(THREAD_QUERY_LIMITED_INFORMATION, FALSE, GetCurrentThreadId());
+}
+static double ThreadCpuSec(HANDLE h) {
+  FILETIME c, e, k, u;
+  if (!h || !GetThreadTimes(h, &c, &e, &k, &u)) return 0.0;
+  auto toSec = [](const FILETIME& f) {
+    return (static_cast<double>(f.dwHighDateTime) * 4294967296.0 + f.dwLowDateTime) * 1e-7;
+  };
+  return toSec(k) + toSec(u);
+}
+
 static double ProcessCpuSec(HANDLE proc = GetCurrentProcess()) {
   FILETIME c, e, k, u;
   if (!proc || !GetProcessTimes(proc, &c, &e, &k, &u)) return 0.0;
@@ -428,6 +455,8 @@ static double ProcessCpuSec(HANDLE proc = GetCurrentProcess()) {
   };
   return toSec(k) + toSec(u);
 }
+static double PresentMonCpuTotal() { return pmCpuDone.load() + ProcessCpuSec(presentMonProcess.load()); }
+static double ReaderCpuTotal() { return readerCpuDone.load() + ThreadCpuSec(readerThread.load()); }
 }  // namespace eco
 
 
@@ -500,6 +529,7 @@ class PresentMonReader {
     running_ = true;
     thread_ = std::thread([this] {
       eco::ExemptCurrentThread();
+      if (HANDLE old = eco::readerThread.exchange(eco::OpenCurrentThread())) CloseHandle(old);
       ReadLoop();
     });
     return true;
@@ -509,6 +539,15 @@ class PresentMonReader {
     if (job_) TerminateJobObject(job_, 0);
     StopEtwSession(kEtwSession);  // no dejar la sesion de captura abierta
     if (thread_.joinable()) thread_.join();
+    // Lo que consumieron este PresentMon y su lector se guarda antes de soltarlos (si se reinicia).
+    if (HANDLE h = eco::readerThread.exchange(nullptr)) {
+      eco::readerCpuDone = eco::readerCpuDone.load() + eco::ThreadCpuSec(h);
+      CloseHandle(h);
+    }
+    if (process_ && eco::presentMonProcess.load() == process_) {
+      eco::pmCpuDone = eco::pmCpuDone.load() + eco::ProcessCpuSec(process_);
+      eco::presentMonProcess = nullptr;
+    }
     if (process_) { CloseHandle(process_); process_ = nullptr; }
     if (read_) { CloseHandle(read_); read_ = nullptr; }
     if (job_) { CloseHandle(job_); job_ = nullptr; }
@@ -531,34 +570,55 @@ class PresentMonReader {
   }
 
  private:
+  std::vector<std::string> cols_;  // columnas de la linea en curso (se reutiliza)
   void ReadLoop() {
     std::string buffer;
     char chunk[4096];
     DWORD n = 0;
+    std::string line;
     while (ReadFile(read_, chunk, sizeof(chunk), &n, nullptr) && n > 0) {
       buffer.append(chunk, n);
-      size_t pos;
-      while ((pos = buffer.find('\n')) != std::string::npos) {
-        std::string line = buffer.substr(0, pos);
-        buffer.erase(0, pos + 1);
+      // Las lineas completas del bloque, y lo leido se quita una sola vez (antes, en cada linea, lo
+      // que movia todo lo que quedaba detras).
+      size_t start = 0, pos;
+      while ((pos = buffer.find('\n', start)) != std::string::npos) {
+        line.assign(buffer, start, pos - start);
+        start = pos + 1;
         if (!line.empty() && line.back() == '\r') line.pop_back();
         HandleLine(line);
       }
+      buffer.erase(0, start);
     }
     running_ = false;
   }
 
   static std::vector<std::string> SplitCsv(const std::string& line) {
     std::vector<std::string> cols;
-    size_t start = 0;
+    SplitCsvInto(line, cols);
+    return cols;
+  }
+  // Igual, reutilizando la memoria de la linea anterior (0.65.2).
+  static void SplitCsvInto(const std::string& line, std::vector<std::string>& cols) {
+    size_t i = 0, start = 0;
     while (true) {
-      size_t comma = line.find(',', start);
-      cols.push_back(line.substr(start, comma == std::string::npos ? std::string::npos
-                                                                     : comma - start));
+      const size_t comma = line.find(',', start);
+      const size_t len = comma == std::string::npos ? std::string::npos : comma - start;
+      if (i == cols.size()) cols.emplace_back();
+      cols[i++].assign(line, start, len);
       if (comma == std::string::npos) break;
       start = comma + 1;
     }
-    return cols;
+    cols.resize(i);
+  }
+  // Proceso de una linea sin dividirla entera (para descartar pronto las del propio FlatPace).
+  static long long FieldNumber(const std::string& line, int col) {
+    size_t start = 0;
+    for (int i = 0; i < col; ++i) {
+      start = line.find(',', start);
+      if (start == std::string::npos) return -1;
+      ++start;
+    }
+    return std::strtoll(line.c_str() + start, nullptr, 10);
   }
 
   static int FindColumn(const std::vector<std::string>& cols,
@@ -588,7 +648,18 @@ class PresentMonReader {
 
   void HandleLine(const std::string& line) {
     if (line.empty()) return;
-    std::vector<std::string> cols = SplitCsv(line);
+    eco::pmLastLineAt = NowSec();
+    if (headerParsed_) {
+      ++eco::pmLines;
+      // Las imagenes del propio FlatPace (el overlay presenta 60 por segundo, y la ventana): nada las
+      // usa, y analizarlas costaba tanto como las del juego.
+      if (colPid_ >= 0 && FieldNumber(line, colPid_) == static_cast<long long>(GetCurrentProcessId())) {
+        ++eco::pmOwnLines;
+        return;
+      }
+    }
+    SplitCsvInto(line, cols_);
+    const std::vector<std::string>& cols = cols_;
 
     if (!headerParsed_) {
       if (line.find("Application") != std::string::npos && cols.size() > 3) {
@@ -1879,6 +1950,10 @@ struct Session {
   double engMsSum = 0.0, engMsMax = 0.0, cpuAtStart = -1.0, pmCpuAtStart = -1.0;
   double ovMsAtStart = 0.0;
   long long ovDrawsAtStart = 0;
+  double ovFullAtStart = 0.0, winMsAtStart = 0.0;
+  long long winDrawsAtStart = 0;
+  double mainCpuAtStart = 0.0, engCpuAtStart = 0.0, rdCpuAtStart = 0.0;
+  long long pmLinesAtStart = 0, pmOwnAtStart = 0;
   int engTicks = 0;
   // Ultimos minutos ordenados, recalculados como mucho cada 5 s (era cada segundo)
   std::vector<double> longSortedCache;
@@ -1957,9 +2032,15 @@ struct Session {
   size_t presN = 0, presOff = 0, dispN = 0, dispOff = 0;
   // Toda la partida (para decidir al cerrar el juego), separada por factor de generacion.
   std::map<int, std::vector<float>> sessionReal;
+  std::vector<float> sessionWork;  // trabajo (CPU o GPU, el mayor) de cada fotograma de sessionReal[1]
+  double closeSessionLow = 0.0;    // 1 % mas lento de toda la partida al cerrar (para el resumen)
   // Segundo a segundo con el limite funcionando (para la grafica de la comprobacion en Juegos): ritmo
   // real y 1 % mas lento causado por el juego en los ultimos 20 s (0 si no hay dato).
   std::vector<float> tlFps, tlLow;
+  double tlSecs = 0.0;  // segundos que cubren (cada vuelta del motor dura algo mas de 1 s)
+  // Ultimo calculo del 1 % mas lento causado por el juego (GameLowFps), para no repetirlo con el mismo lote.
+  mutable double glAt = -1.0, glCapMs = 0.0, glValue = 0.0;
+  mutable size_t glCount = 0;
   double gameSecs = 0.0, vrrSecs = 0.0, lastTick = 0.0;
   double ownCapSecs = 0.0, ownCapRateSum = 0.0;  // juego limitado por si mismo (sin limite nuestro)
   // Regla de fallos de un limite aceptado: mas de un 13 % por debajo, en tramos de al
@@ -2236,12 +2317,23 @@ static void PrintSessionSummary(const Session& s, double hz) {
     const double cpu = s.cpuAtStart >= 0 ? eco::ProcessCpuSec() - s.cpuAtStart : -1.0;
     Log("  Coste de FlatPace: motor %.1f ms por segundo de media (maximo %.0f ms)", s.engMsSum / s.engTicks, s.engMsMax);
     if (cpu >= 0) Log(" | proceso completo (con la ventana y el overlay): %.1f %% de un nucleo", 100.0 * cpu / wall);
-    const double pmCpu = s.pmCpuAtStart >= 0 ? eco::ProcessCpuSec(eco::presentMonProcess.load()) - s.pmCpuAtStart : -1.0;
+    const double pmCpu = s.pmCpuAtStart >= 0 ? eco::PresentMonCpuTotal() - s.pmCpuAtStart : -1.0;
     if (pmCpu >= 0) Log("\n                     PresentMon: %.1f %% de un nucleo", 100.0 * pmCpu / wall);
     const long long draws = eco::overlayDraws.load() - s.ovDrawsAtStart;
     if (draws > 0)
-      Log(" | overlay: %.2f ms por dibujo (%.0f dibujos por segundo)", (eco::overlayDrawMsSum.load() - s.ovMsAtStart) / draws,
+      Log(" | overlay: %.2f ms por dibujo, %.2f ms con la preparacion (%.0f dibujos por segundo)",
+          (eco::overlayDrawMsSum.load() - s.ovMsAtStart) / draws, (eco::overlayFullMsSum.load() - s.ovFullAtStart) / draws,
           draws / wall);
+    const long long wdraws = eco::windowDraws.load() - s.winDrawsAtStart;
+    if (wdraws > 0)
+      Log("\n                     ventana: %.2f ms por dibujo (%.1f dibujos por segundo)",
+          (eco::windowDrawMsSum.load() - s.winMsAtStart) / wdraws, wdraws / wall);
+    Log("\n                     por hilo: ventana y overlay %.1f %%, motor %.1f %%, lector de PresentMon %.1f %% de un nucleo",
+        100.0 * (eco::ThreadCpuSec(eco::mainThread.load()) - s.mainCpuAtStart) / wall,
+        100.0 * (eco::ThreadCpuSec(eco::engineThread.load()) - s.engCpuAtStart) / wall,
+        100.0 * (eco::ReaderCpuTotal() - s.rdCpuAtStart) / wall);
+    Log("\n                     PresentMon envia %.0f lineas por segundo (%.0f del propio FlatPace, descartadas)",
+        (eco::pmLines.load() - s.pmLinesAtStart) / wall, (eco::pmOwnLines.load() - s.pmOwnAtStart) / wall);
     Log("\n");
   }
   Log("  Generacion de fotogramas: %s\n", s.fgEverSeen ? T("detectada", "detected") : T("no detectada", "not detected"));
@@ -2277,8 +2369,10 @@ static void PrintSessionSummary(const Session& s, double hz) {
       if (gameP99 > 0) {
         std::vector<double> raw = msv;
         std::sort(raw.begin(), raw.end());
-        Log("  1 %% bajo con el limite: %.0f fps medidos | %.0f fps causados por el juego (sin los retrasos del limitador)\n",
+        Log("  1 %% bajo con el limite (ultimos 3 min): %.0f fps medidos | %.0f fps causados por el juego (sin los retrasos del limitador)\n",
             1000.0 / PercentileSorted(raw, 99), 1000.0 / gameP99);
+        if (s.closeSessionLow > 0)
+          Log("  1 %% bajo de toda la partida (el que usan las reglas): %.0f fps causados por el juego\n", s.closeSessionLow);
       }
     }
     if (ce.valid) {
@@ -2435,7 +2529,7 @@ static bool PlentyWholeSession(const Session& s) {
 // Como se decidio el limite: la regla, sus numeros y la curva de la partida que lo decidio. Solo explica:
 // ninguna decision lo lee.
 static void SaveLimitExplain(const Session& s, int kind, double from, double to, double pct,
-                             const std::vector<float>* secRates = nullptr) {
+                             const std::vector<float>* secRates = nullptr, double sessionLow = 0.0) {
   if (s.exe.empty()) return;
   LimitExplain e;
   e.kind = kind;
@@ -2469,11 +2563,14 @@ static void SaveLimitExplain(const Session& s, int kind, double from, double to,
   }
   // La regla de fallos baja al ritmo superado el 90 % de los segundos: su curva es la de esos segundos.
   if (kind == LimitExplain::FailMedian && secRates && secRates->size() >= 30) e.SetCurve(*secRates);
+  // Regla del 1 % mas lento (0.66): el 1 % mas lento causado por el juego en la partida, el de la regla.
+  if (sessionLow > 0) e.low1 = static_cast<float>(sessionLow);
   WriteKv(L"equipo.txt", "explica|" + s.exe, e.Serialize());
 }
 
 // La ultima partida con el limite: segundo a segundo y el resultado de cada regla.
-static void SaveSessionExplain(const Session& s, const FailureTracker& failT, const FailureTracker& tailT, bool fg) {
+static void SaveSessionExplain(const Session& s, const FailureTracker& failT, const FailureTracker& tailT, bool fg,
+                               double sessionLow) {
   if (s.exe.empty() || s.expectedFps <= 0) return;
   SessionExplain x;
   x.when = static_cast<long long>(std::time(nullptr));
@@ -2485,13 +2582,15 @@ static void SaveSessionExplain(const Session& s, const FailureTracker& failT, co
   x.failPct = static_cast<float>(failT.Percent());
   x.tailSecs = static_cast<float>(tailT.failSecs);
   x.tailPct = static_cast<float>(tailT.Percent());
-  x.trimSecs = static_cast<float>(kCloseTrimSec);
+  x.trimSecs = static_cast<float>(std::max(failT.trimmed, tailT.trimmed));
+  x.sessionLow = static_cast<float>(sessionLow);
   auto it = s.sessionReal.find(1);
   if (!fg && it != s.sessionReal.end() && it->second.size() >= 1000) {
     std::vector<double> ms(it->second.begin(), it->second.end());
     x.waitPct = static_cast<float>(100.0 * EstimateCapacity(ms, 1000.0 / s.expectedFps).censoredFraction);
   }
   x.SetSeries(s.tlFps, s.tlLow);
+  if (!s.tlFps.empty() && s.tlSecs > 0) x.secsPerPoint *= static_cast<float>(s.tlSecs / s.tlFps.size());
   WriteKv(L"equipo.txt", "partida|" + s.exe, x.Serialize());
 }
 
@@ -2500,6 +2599,13 @@ static double GameLowFps(const Session& ss) {
   if (FrameGenInvolved(ss)) return 0.0;
   const double capMs = ActiveCapMs(ss);
   if (capMs <= 0 || ss.samples.empty()) return 0.0;
+  // Cada segundo se pedia tres veces con los mismos fotogramas (registro, ventana y overlay): se guarda
+  // el resultado para el mismo lote (mismo ultimo fotograma, mismo numero de fotogramas y mismo limite).
+  if (ss.glAt == ss.samples.back().t && ss.glCount == ss.samples.size() && ss.glCapMs == capMs) return ss.glValue;
+  ss.glAt = ss.samples.back().t;
+  ss.glCount = ss.samples.size();
+  ss.glCapMs = capMs;
+  ss.glValue = 0.0;
   const double from = ss.samples.back().t - cfg::kWindowSec;
   std::vector<double> r, w;
   for (const auto& f : ss.samples)
@@ -2509,7 +2615,8 @@ static double GameLowFps(const Session& ss) {
     }
   if (r.size() < 100) return 0.0;
   const double p99 = GameCausedPercentileMs(r, w, capMs, 99);
-  return p99 > 0 ? 1000.0 / p99 : 0.0;
+  ss.glValue = p99 > 0 ? 1000.0 / p99 : 0.0;
+  return ss.glValue;
 }
 
 // Fases: un dato por segundo (mediana de los fotogramas reales de ese segundo).
@@ -2659,6 +2766,7 @@ static void ProcessSession(Session& ss, std::vector<FrameSample>& fresh, double 
       ss.longWork.push_back(static_cast<float>(std::max(s.cpuBusyMs, s.gpuBusyMs)));
       int kNow = ss.fgActive ? std::max(2, ss.lastStats.FgFactor()) : 1;
       ss.sessionReal[kNow].push_back(static_cast<float>(s.realMs));
+      if (kNow == 1) ss.sessionWork.push_back(static_cast<float>(std::max(s.cpuBusyMs, s.gpuBusyMs)));
     }
   }
   while (!ss.longReal.empty() && ss.longReal.front().first < now - 180.0) {
@@ -3013,13 +3121,26 @@ static bool ParseKvLine(std::string l, std::string& key, std::string& value) {
   return !key.empty();
 }
 
+// Una linea completa, sea cual sea su longitud. Hasta la 0.63.1 los ajustes se leian con un espacio fijo
+// de 512 caracteres: los registros del desplegable de Juegos (mas largos) se cortaban al leerlos, y
+// tambien al guardar cualquier otro ajuste, que reescribe el archivo con lo leido.
+static bool ReadFullLine(FILE* f, std::string& out) {
+  out.clear();
+  char buf[1024];
+  while (std::fgets(buf, sizeof(buf), f)) {
+    out += buf;
+    if (!out.empty() && out.back() == '\n') return true;
+  }
+  return !out.empty();
+}
+
 static std::string ReadKv(const std::wstring& file, const std::string& key) {
   std::lock_guard<std::recursive_mutex> kvLock(g_kvMutex);
   FILE* f = _wfopen((DataDirectory() + L"\\" + file).c_str(), L"r");
   if (!f) return {};
-  char line[512];
+  std::string line;
   std::string value;
-  while (std::fgets(line, sizeof(line), f)) {
+  while (ReadFullLine(f, line)) {
     std::string k, v;
     if (ParseKvLine(line, k, v) && k == key) value = v;
   }
@@ -3038,8 +3159,8 @@ static int CleanObsoleteKv() {
   static const char* kExact[] = {"prioridad-v2", "aprendizaje-generacion", "vrr"};
   std::map<std::string, std::string> keep;
   int removed = 0;
-  char line[512];
-  while (std::fgets(line, sizeof(line), f)) {
+  std::string line;
+  while (ReadFullLine(f, line)) {
     std::string k, v;
     if (!ParseKvLine(line, k, v)) continue;
     bool obsolete = false;
@@ -3062,8 +3183,8 @@ static void WriteKv(const std::wstring& file, const std::string& key, const std:
   std::wstring path = DataDirectory() + L"\\" + file;
   std::map<std::string, std::string> all;
   if (FILE* f = _wfopen(path.c_str(), L"r")) {
-    char line[512];
-    while (std::fgets(line, sizeof(line), f)) {
+    std::string line;
+    while (ReadFullLine(f, line)) {
       std::string k, v;
       if (ParseKvLine(line, k, v)) all[k] = v;  // las lineas "clave=valor" se reescriben con tabulacion
     }
@@ -3354,6 +3475,11 @@ class Window {
   bool Visible() const { return visible_; }
 
   // Se llama desde el bucle de la ventana principal; dibuja hasta 60 veces por segundo.
+  static constexpr double kDrawInterval = 1.0 / 60.0;
+  double statsAt_ = -1.0, sFps_ = 0.0, sLow_ = 0.0, sScreenFps_ = 0.0, sSwing_ = 0.0, topmostAt_ = -1.0;
+  // Momento del siguiente dibujo (para que el bucle de la ventana despierte justo a tiempo).
+  double NextDrawAt() const { return lastDraw_ + kDrawInterval; }
+
   void Update() {
     if (!hwnd_) return;
     if (!pendingNote_.empty() && g_log) {
@@ -3361,8 +3487,20 @@ class Window {
       pendingNote_.clear();
     }
     double now = NowSec();
-    if (now - lastDraw_ < 0.0155) return;
+    // 60 dibujos por segundo, espaciados por un temporizador de alta precision (0.65). En la 0.64 eran
+    // 30 en teoria, pero el temporizador normal de Windows (15,6 ms) los dejaba en ~18, irregulares.
+    if (now - lastDraw_ < kDrawInterval - 0.002) return;
     lastDraw_ = now;
+    const bool refreshStats = now - statsAt_ >= 0.25;  // las cifras, 4 veces por segundo
+    // Trabajo completo de este dibujo (con la preparacion de los datos), si llega a dibujar.
+    bool drew = false;
+    struct FullTimer {
+      double t0;
+      const bool& drew;
+      ~FullTimer() {
+        if (drew) eco::overlayFullMsSum = eco::overlayFullMsSum.load() + (NowSec() - t0) * 1000.0;
+      }
+    } fullTimer{now, drew};
 
     DWORD pid;
     double targetMs;
@@ -3384,27 +3522,34 @@ class Window {
       baseSwing = feed.baseSwingMs;
       gameLow = feed.gameLowFps;
       baseLat_ = feed.baseLatMs;
-      curLat_ = -1.0;
-      if (feed.latMs.size() >= 30) {
-        std::vector<float> lv(feed.latMs.end() - std::min<size_t>(feed.latMs.size(), 120), feed.latMs.end());
-        std::nth_element(lv.begin(), lv.begin() + lv.size() / 2, lv.end());
-        curLat_ = lv[lv.size() / 2];
+      if (refreshStats) {
+        curLat_ = -1.0;
+        if (feed.latMs.size() >= 30) {
+          std::vector<float> lv(feed.latMs.end() - std::min<size_t>(feed.latMs.size(), 120), feed.latMs.end());
+          std::nth_element(lv.begin(), lv.begin() + lv.size() / 2, lv.end());
+          curLat_ = lv[lv.size() / 2];
+        }
+        realMs.assign(feed.realOnly.begin(), feed.realOnly.end());
       }
       screenMode = feed.screenMode;
       screenMode_ = screenMode;
-      realMs.assign(feed.realOnly.begin(), feed.realOnly.end());
       display = GraphPlaybackLocked(now);
       generation_ = feed.generation;
       refAuto = GraphAutoRefLocked(now, display);
-      for (const auto& r : feed.real)
-        if (r.first >= display - 11.0) real.push_back(r);
+      // La grafica dibuja sus ultimos kPaceSpanSec (3,3 s): basta copiar 4 s; la oscilacion, que mira
+      // 10 s, solo al recalcular las cifras.
+      const double from = display - (refreshStats ? 11.0 : 4.0);
+      for (auto it = feed.real.rbegin(); it != feed.real.rend() && it->first >= from; ++it) real.push_back(*it);
+      std::reverse(real.begin(), real.end());
       // Imagenes en pantalla por segundo: las ultimas imagenes que suman 5 s de duracion real.
-      double sumMs = 0.0;
-      for (auto it = feed.presentMs.rbegin(); it != feed.presentMs.rend() && sumMs < 5000.0; ++it) {
-        sumMs += *it;
-        screenImages++;
+      if (refreshStats) {
+        double sumMs = 0.0;
+        for (auto it = feed.presentMs.rbegin(); it != feed.presentMs.rend() && sumMs < 5000.0; ++it) {
+          sumMs += *it;
+          screenImages++;
+        }
+        presentsSpanMs = sumMs;
       }
-      presentsSpanMs = sumMs;
     }
     HWND fg = GetForegroundWindow();
     DWORD fgPid = 0;
@@ -3418,23 +3563,32 @@ class Window {
       return;
     }
 
-    // Estadisticas de los ultimos 5 s (siempre de fotogramas reales: marcan la respuesta del juego)
-    std::vector<double> ms;
-    double sum = 0;
-    for (size_t i = realMs.size(); i-- > 0 && sum < 5000.0;) {
-      ms.push_back(realMs[i]);
-      sum += realMs[i];
+    // Estadisticas de los ultimos 5 s (siempre de fotogramas reales: marcan la respuesta del juego).
+    // Se recalculan 4 veces por segundo (antes, en cada dibujo): las cifras no cambian mas deprisa de
+    // lo que se pueden leer; la grafica si se dibuja en cada uno.
+    if (refreshStats) {
+      std::vector<double> ms;
+      double sum = 0;
+      for (size_t i = realMs.size(); i-- > 0 && sum < 5000.0;) {
+        ms.push_back(realMs[i]);
+        sum += realMs[i];
+      }
+      if (ms.empty()) return;
+      statsAt_ = now;
+      sFps_ = 1000.0 * ms.size() / sum;
+      std::sort(ms.begin(), ms.end());
+      sLow_ = 1000.0 / PercentileSorted(ms, 99);
+      sScreenFps_ = presentsSpanMs > 0 ? screenImages * 1000.0 / presentsSpanMs : 0.0;
+      sSwing_ = RecentSwing(real);
     }
-    if (ms.empty()) return;
-    double fps = 1000.0 * ms.size() / sum;
-    std::vector<double> sorted = ms;
-    std::sort(sorted.begin(), sorted.end());
-    double low = 1000.0 / PercentileSorted(sorted, 99);
+    if (sFps_ <= 0) return;
+    const double fps = sFps_;
+    double low = sLow_;
     if (gameLow > 0) low = gameLow;  // con un limite activo, sin los retrasos del limitador
-    double screenFps = presentsSpanMs > 0 ? screenImages * 1000.0 / presentsSpanMs : 0.0;
-    bool fg2 = screenFps > fps * 1.4;
-
-    double swing = RecentSwing(real);
+    const double screenFps = sScreenFps_;
+    const bool fg2 = screenFps > fps * 1.4;
+    const double swing = sSwing_;
+    drew = true;
     const double drawT0 = NowSec();
     struct DrawTimer {
       double t0;
@@ -3461,7 +3615,12 @@ class Window {
           ShowWindow(ghwnd_, SW_SHOWNOACTIVATE);
           visible_ = true;
         }
-        SetWindowPos(ghwnd_, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        // Reafirmar "siempre encima" una vez por segundo (hasta la 0.65, en cada dibujo): obliga a Windows a
+        // revisar el orden de las ventanas. Al aparecer o moverse ya se hace arriba.
+        if (now - topmostAt_ >= 1.0) {
+          SetWindowPos(ghwnd_, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+          topmostAt_ = now;
+        }
         return;
       }
       // La GPU fallo (por ejemplo, un reinicio del driver): vuelta al overlay clasico, ya en este dibujo.
@@ -4585,6 +4744,7 @@ static void PublishSession(const Session& ss, const ChangeStore& store, bool app
 
 
 static void RunEngine(std::wstring presentMonPath) {
+  eco::engineThread = eco::OpenCurrentThread();
   CpuPerfMeter cpuPerf;
   cpuPerf.Init();
   std::wstring logPath = OpenLog();
@@ -5153,7 +5313,7 @@ static void RunEngine(std::wstring presentMonPath) {
       }
     } else if (known->second.manual) {
       // Limite manual: no se cambia nunca; solo se informa si no se sostuvo.
-      const FailureTracker failT = session.fail.WithoutLast(kCloseTrimSec, session.expectedFps);
+      const FailureTracker failT = session.fail.WithoutClosing(session.expectedFps);
       if (failT.Failed())
         Log("\n  Al cerrar: el juego no sostuvo su limite manual durante %.0f s (%.0f%% de la partida).\n"
             "  No lo cambio porque es manual; si quieres, ajustalo o deshazlo.\n",
@@ -5161,13 +5321,12 @@ static void RunEngine(std::wstring presentMonPath) {
       return;
     } else if (known->second.verified || session.accepted) {
       const AppliedChange& c = known->second;
-      // Sin el ultimo minuto: el cierre del juego (menus, salida o un cuelgue) no cuenta como fallo.
-      const FailureTracker failT = session.fail.WithoutLast(kCloseTrimSec, session.expectedFps);
-      const FailureTracker tailT = session.tailFail.WithoutLast(kCloseTrimSec, session.expectedFps);
+      // Sin el cierre del juego (los ultimos 15 s y un cuelgue o menu lento al salir): no cuenta como fallo.
+      const FailureTracker failT = session.fail.WithoutClosing(session.expectedFps);
+      const FailureTracker tailT = session.tailFail.WithoutClosing(session.expectedFps);
       // Subida automatica (con G-SYNC/FreeSync y sin generacion de fotogramas): su estado por juego.
       // Ajustes de limites (incluida la subida automatica) en ambos modos; las sugerencias, segun el modo.
       const bool climbOk = !c.manual && c.vrr && c.fgFactor <= 1 && !FrameGenInvolved(session);
-      SaveSessionExplain(session, failT, tailT, c.fgFactor > 1 || FrameGenInvolved(session));
       // Con Estabilidad, tambien falla si el 1 % bajo causado por el juego se hunde de forma sostenida:
       // es lo que promete esa prioridad (sostener el limite incluso en los peores momentos). Con Fluidez
       // solo cuenta la mediana: acepta caidas en los momentos mas exigentes (en Greylock a 125, la
@@ -5178,17 +5337,27 @@ static void RunEngine(std::wstring presentMonPath) {
       // puede parecer peor de lo que es (la espiral de las primeras versiones). Hasta tener datos de esas
       // graficas, la regla del 1 % bajo no baja limites ni cambia la prioridad; la de la mediana, si.
       const bool tailRuleOk = g_limiterKind == 0;
+      // El 1 % mas lento causado por el juego en toda la partida (0.66): la misma medida con la que decide
+      // Ritmo constante (antes, el de cada 20 s, que exageraba los tropiezos cortos y creaba una espiral).
+      double sessionLow = 0.0;
+      if (auto sr = session.sessionReal.find(1); sr != session.sessionReal.end() && session.expectedFps > 0)
+        sessionLow = SessionGameLowFps(sr->second, session.sessionWork, 1000.0 / session.expectedFps,
+                                       static_cast<double>(failT.trimmed));
+      const SteadyCheck steady = CheckSteady(sessionLow, session.expectedFps);
+      session.closeSessionLow = sessionLow;
+      SaveSessionExplain(session, failT, tailT, c.fgFactor > 1 || FrameGenInvolved(session), sessionLow);
       if (climbOk && tailRuleOk && session.fluid && (actsAlone || g_prioMode == 2 || session.prioFixed)) {
         const AutoPriority before = AutoPriority::Parse(ReadKv(L"equipo.txt", "prioridad|" + session.exe));
-        const AutoPriority after = UpdateAutoPriority(before, true, tailT);
+        const AutoPriority after =
+            UpdateAutoPriority(before, true, SessionSank(sessionLow, session.expectedFps), failT.limPlaySecs);
         WriteKv(L"equipo.txt", "prioridad|" + session.exe, after.Serialize());
         if (after.stability && !actsAlone) {
           // Prioridad elegida a mano: no se cambia; se recomienda en la fila del juego.
           if (!before.stability) {
             WriteKv(L"equipo.txt", "prioridad-sugerida|" + session.exe, "si");
-            Log("\n  Al cerrar: el 1 %% bajo se hundio en %d partidas seguidas (en esta, %.0f %% del tiempo): %s es\n"
+            Log("\n  Al cerrar: el 1 %% bajo se hundio en %d partidas seguidas (en esta, %.0f fps con un limite de %.0f): %s es\n"
                 "  inestable con su limite. Te recomiendo Ritmo constante (prioridad elegida por ti: no la cambio).\n",
-                kUnstableSessions, tailT.Percent(), session.label.c_str());
+                kUnstableSessions, sessionLow, session.expectedFps, session.label.c_str());
             std::lock_guard<std::mutex> lock(g_ui.m);
             g_ui.prioSuggest.insert(session.exe);
             if (!g_ui.warnings.count(session.exe)) g_ui.warnings[session.exe] = T(kPrioSuggestText_es, kPrioSuggestText_en);
@@ -5198,19 +5367,20 @@ static void RunEngine(std::wstring presentMonPath) {
           }
         } else if (after.stability) {
           session.fluid = false;
-          Log("\n  Al cerrar: el 1 %% bajo se hundio en %d partidas seguidas (en esta, %.0f %% del tiempo): %s es\n"
+          Log("\n  Al cerrar: el 1 %% bajo se hundio en %d partidas seguidas (en esta, %.0f fps con un limite de %.0f): %s es\n"
               "  inestable con su limite. En adelante uso Ritmo constante para este juego.\n",
-              kUnstableSessions, tailT.Percent(), session.label.c_str());
+              kUnstableSessions, sessionLow, session.expectedFps, session.label.c_str());
           std::lock_guard<std::mutex> lock(g_ui.m);
           g_ui.notice = Fmt(T("%s es inestable con su límite: desde ahora uso «Ritmo constante» para este juego.",
                               "%s is unstable with its limit: from now on I'll use “Steady pace” for this game."),
                             session.label.c_str());
         } else if (after.unstableStreak > 0) {
-          Log("\n  Al cerrar: el 1 %% bajo se hundio el %.0f %% del tiempo (%d de %d partidas seguidas para pasar\n"
-              "  este juego a Estabilidad).\n", tailT.Percent(), after.unstableStreak, kUnstableSessions);
+          Log("\n  Al cerrar: el 1 %% bajo de la partida fue de %.0f fps, mas de un 13 %% por debajo del limite (%.0f)\n"
+              "  (%d de %d partidas seguidas para pasar este juego a Ritmo constante).\n",
+              sessionLow, session.expectedFps, after.unstableStreak, kUnstableSessions);
         }
       }
-      const bool tailFailed = climbOk && tailRuleOk && !session.fluid && !failT.Failed() && tailT.Failed();
+      const bool tailFailed = climbOk && tailRuleOk && !session.fluid && !failT.Failed() && !steady.holds;
       const bool failed = failT.Failed() || tailFailed;
       ClimbResult cr;
       const double limitBefore = session.expectedFps;
@@ -5233,15 +5403,16 @@ static void RunEngine(std::wstring presentMonPath) {
         // Una recomendacion de subida pendiente deja de tener sentido si el limite actual ya no se sostiene.
         ClearRecommendation(session.exe);
         const bool revert = climbOk && cr.action == ClimbAction::RevertToPrev;
-        // Si solo se hundio el 1 % bajo (la mediana se mantuvo), el ritmo superado el 90 % del tiempo
-        // seria el propio limite: se baja un escalon (un 13 %).
+        // Si solo se hundio el 1 % bajo (la mediana se mantuvo), Ritmo constante baja a lo que dicta su
+        // formula con esta partida, como mucho un escalon (un 13 %) por partida: una partida anomala (una
+        // carga, la compilacion de shaders) no hunde el limite de golpe; si sigue mal, baja otro escalon.
         Recommendation lower = revert       ? VrrRec(cr.newLimit)
-                               : tailFailed ? VrrRec(std::floor(limitBefore / (1.0 + cfg::kJnd)))
+                               : tailFailed ? VrrRec(std::max(steady.target, std::floor(limitBefore / (1.0 + cfg::kJnd))))
                                             : LowerAfterFailure(failT.secRates, c.vrr, c.fgFactor, session.expectedFps, hz);
         if (tailFailed)
-          Log("\n  Al cerrar: el 1 %% bajo del juego quedo mas de un 13 %% por debajo del limite durante %.0f s\n"
-              "  (%.0f %% de la partida), aunque la mediana se mantuvo.\n",
-              tailT.failSecs, tailT.Percent());
+          Log("\n  Al cerrar: el 1 %% bajo de la partida fue de %.0f fps: 1,13 x %.0f = %.0f, mas de un 5 %% por debajo\n"
+              "  del limite (%.0f), aunque la mediana se mantuvo.\n",
+              sessionLow, sessionLow, steady.target, limitBefore);
         else
           Log("\n  Al cerrar: el limite no se sostuvo durante %.0f s (%.0f %% de la partida).\n",
               failT.failSecs, failT.Percent());
@@ -5271,14 +5442,17 @@ static void RunEngine(std::wstring presentMonPath) {
             auto nc = store.items.find(session.exe);
             SaveLimitExplain(session, revert ? LimitExplain::Revert : tailFailed ? LimitExplain::FailTail : LimitExplain::FailMedian,
                              limitBefore, nc->second.newValue / static_cast<double>(std::max(1, nc->second.fgFactor)),
-                             tailFailed ? tailT.Percent() : failT.Percent(), &failT.secRates);
+                             tailFailed ? 0.0 : failT.Percent(), &failT.secRates, tailFailed ? sessionLow : 0.0);
             result = revert
                 ? Fmt(T("%s no sostuvo %.0f FPS: vuelvo a %.0f, que sí sostenía.", "%s didn't hold %.0f FPS: back to %.0f, which it did hold."),
                       session.label.c_str(), limitBefore, cr.newLimit)
+                : tailFailed
+                ? Fmt(T("El 1 %% más lento de %s fue de %.0f FPS: su límite con «Ritmo constante» es más bajo. En la próxima usaré: %s.",
+                        "%s's slowest 1 %% was %.0f FPS: its “Steady pace” limit is lower. Next time I'll use: %s."),
+                      session.label.c_str(), sessionLow, DescribeChange(nc->second).c_str())
                 : Fmt(T("%s no sostuvo su límite durante el %.0f %% de la partida. En la próxima usaré: %s.",
                         "%s didn't hold its limit for %.0f %% of the session. Next time I'll use: %s."),
-                      session.label.c_str(), tailFailed ? tailT.Percent() : failT.Percent(),
-                      DescribeChange(nc->second).c_str());
+                      session.label.c_str(), failT.Percent(), DescribeChange(nc->second).c_str());
           }
         }
       } else {
@@ -5365,7 +5539,9 @@ static void RunEngine(std::wstring presentMonPath) {
     if (!fresh.empty()) {
       lastAnySampleAt = now;
     } else if (pm.HeaderSeen() && !session.exe.empty() && session.seenForeground && !session.background &&
-               now - lastAnySampleAt > 6.0 && now - lastPmRestartAt > 60.0) {
+               now - std::max(lastAnySampleAt, eco::pmLastLineAt.load()) > 6.0 && now - lastPmRestartAt > 60.0) {
+      // Desde la 0.65.2 las lineas del propio FlatPace se descartan antes de dar muestras: sin la marca de
+      // la ultima linea, una carga de mas de 6 s parecia un PresentMon colgado y se reiniciaba (0.66).
       Log("[%5.0f s] PresentMon dejo de entregar datos con el juego en primer plano: lo reinicio.\n", session.T(now));
       pm.Stop();
       if (!pm.Start(presentMonPath, std::wstring())) Log("  No pude reiniciar PresentMon.\n");
@@ -5773,9 +5949,17 @@ static void RunEngine(std::wstring presentMonPath) {
         PublishChanges(store);
         session.start = now;
         session.cpuAtStart = eco::ProcessCpuSec();
-        session.pmCpuAtStart = eco::ProcessCpuSec(eco::presentMonProcess.load());
+        session.pmCpuAtStart = eco::PresentMonCpuTotal();
+      session.mainCpuAtStart = eco::ThreadCpuSec(eco::mainThread.load());
+      session.engCpuAtStart = eco::ThreadCpuSec(eco::engineThread.load());
+      session.rdCpuAtStart = eco::ReaderCpuTotal();
+      session.pmLinesAtStart = eco::pmLines.load();
+      session.pmOwnAtStart = eco::pmOwnLines.load();
         session.ovMsAtStart = eco::overlayDrawMsSum.load();
         session.ovDrawsAtStart = eco::overlayDraws.load();
+        session.ovFullAtStart = eco::overlayFullMsSum.load();
+        session.winMsAtStart = eco::windowDrawMsSum.load();
+        session.winDrawsAtStart = eco::windowDraws.load();
         session.phaseStart = now;
         session.lastFrameArrival = now;
         gamesSeen++;
@@ -5853,9 +6037,17 @@ static void RunEngine(std::wstring presentMonPath) {
       Log("[%5.0f s] El juego esta en primer plano: empiezo a medir.\n", session.T(now));
       session.start = now;
       session.cpuAtStart = eco::ProcessCpuSec();
-      session.pmCpuAtStart = eco::ProcessCpuSec(eco::presentMonProcess.load());
+      session.pmCpuAtStart = eco::PresentMonCpuTotal();
+      session.mainCpuAtStart = eco::ThreadCpuSec(eco::mainThread.load());
+      session.engCpuAtStart = eco::ThreadCpuSec(eco::engineThread.load());
+      session.rdCpuAtStart = eco::ReaderCpuTotal();
+      session.pmLinesAtStart = eco::pmLines.load();
+      session.pmOwnAtStart = eco::pmOwnLines.load();
       session.ovMsAtStart = eco::overlayDrawMsSum.load();
       session.ovDrawsAtStart = eco::overlayDraws.load();
+        session.ovFullAtStart = eco::overlayFullMsSum.load();
+        session.winMsAtStart = eco::windowDrawMsSum.load();
+        session.winDrawsAtStart = eco::windowDraws.load();
       session.ResetPhase(now);
     }
     // G-SYNC actuando con el juego (se consulta cada 2 s; cambia tras 3 lecturas iguales).
@@ -6083,6 +6275,7 @@ static void RunEngine(std::wstring presentMonPath) {
           if (session.tlFps.size() < 20000) {
             session.tlFps.push_back(static_cast<float>(1000.0 / st.medianMs));
             session.tlLow.push_back(static_cast<float>(gl));
+            session.tlSecs += dt;
           }
         }
       }
@@ -6387,7 +6580,7 @@ struct View {
   double hz;
 };
 
-static View Snapshot() {
+static View Snapshot(bool withLog) {
   std::lock_guard<std::mutex> lock(g_ui.m);
   View v;
   v.status = g_ui.status;
@@ -6429,7 +6622,8 @@ static View Snapshot() {
     auto w = g_ui.warnings.find(g_ui.exe);
     if (g_ui.haveGame && w != g_ui.warnings.end()) v.currentWarning = w->second;
   }
-  v.log.assign(g_ui.log.begin(), g_ui.log.end());
+  // Hasta 600 lineas: solo se copian si se van a mostrar (antes, en cada dibujo de la ventana).
+  if (withLog) v.log.assign(g_ui.log.begin(), g_ui.log.end());
   v.logPath = g_ui.logPath;
   v.hz = g_ui.hz;
   return v;
@@ -7251,13 +7445,15 @@ static void DrawCurveChart(const LimitExplain& e, double limitReal, float w) {
     dl->AddText(ImVec2(L - ts.x - 8 * scale, sy(yv) - ts.y * 0.5f), Col(kDim), lab.c_str());
   }
   const double span = x1 - x0, stepT = span > 160 ? 40 : span > 80 ? 20 : span > 40 ? 10 : 5;
+  const char* unit = "FPS";
+  const float unitX = R - ImGui::CalcTextSize(unit).x;
   for (double xv = std::ceil(x0 / stepT) * stepT; xv <= x1; xv += stepT) {
     const std::string lab = Fmt("%.0f", xv);
     const ImVec2 ts = ImGui::CalcTextSize(lab.c_str());
+    if (sx(xv) + ts.x * 0.5f > unitX - 10 * scale) break;  // no montarlo sobre la unidad
     dl->AddText(ImVec2(sx(xv) - ts.x * 0.5f, B + 6 * scale), Col(kDim), lab.c_str());
   }
-  const char* unit = "FPS";
-  dl->AddText(ImVec2(R - ImGui::CalcTextSize(unit).x, B + 6 * scale), Col(kDim), unit);
+  dl->AddText(ImVec2(unitX, B + 6 * scale), Col(kDim), unit);
   if (e.fluid || e.curveSeconds)
     DashedLine(dl, ImVec2(L, sy(90)), ImVec2(R, sy(90)), Col(kDim), 1.5f * scale, 4 * scale, 4 * scale);
   for (size_t i = 1; i < e.curve.size(); ++i)
@@ -7268,7 +7464,7 @@ static void DrawCurveChart(const LimitExplain& e, double limitReal, float w) {
     if (dashed) DashedLine(dl, ImVec2(sx(x), Tp), ImVec2(sx(x), B), Col(col), 2.0f * scale, 5 * scale, 4 * scale);
     else dl->AddLine(ImVec2(sx(x), Tp), ImVec2(sx(x), B), Col(col), 2.0f * scale);
     const ImVec2 ts = ImGui::CalcTextSize(lab.c_str());
-    const ImVec2 at(right ? sx(x) + 8 * scale : sx(x) - ts.x - 8 * scale, Tp + (B - Tp) * 0.32f);
+    const ImVec2 at(right ? sx(x) + 8 * scale : sx(x) - ts.x - 8 * scale, B - ts.y - 10 * scale);
     dl->AddRectFilled(ImVec2(at.x - 5 * scale, at.y - 3 * scale), ImVec2(at.x + ts.x + 5 * scale, at.y + ts.y + 3 * scale),
                       Col(kCard), 4 * scale);
     dl->AddText(at, Col(col), lab.c_str());
@@ -7392,11 +7588,28 @@ static void DrawLimitExplain(const UiChange& c, float w) {
                   "Lowered to the pace the game exceeded in 90 %% of the seconds of the %s session."), when.c_str());
       break;
     case LimitExplain::FailTail:
-      rule = Fmt(T("Regla del 1 %% más lento: con %.0f, se hundió más de un 13 %% el %.0f %% de la partida",
-                   "Slowest 1 %% rule: with %.0f, it sank more than 13 %% for %.0f %% of the session"), e.from, e.pct);
-      formula = Fmt(T("%.0f ÷ 1,13 = %.0f FPS", "%.0f ÷ 1.13 = %.0f FPS"), e.from, e.to);
-      why = Fmt(T("Bajó un escalón del 13 %%, la diferencia perceptible, al cerrar la partida del %s.",
-                  "Lowered one 13 %% step, the perceptible difference, when the %s session closed."), when.c_str());
+      if (e.version >= 3 && e.low1 > 0) {
+        // 0.66: la formula de Ritmo constante con la partida, como mucho un escalon por partida
+        const double t = std::floor(1.13 * e.low1 + 1e-9);
+        rule = Fmt(T("Ritmo constante: con %.0f, el 1 %% más lento de la partida fue de %.0f FPS",
+                     "Steady pace: with %.0f, the session's slowest 1 %% was %.0f FPS"), e.from, e.low1);
+        if (std::fabs(t - e.to) < 1.0) {
+          formula = Fmt(T("1,13 × %.0f = %.0f FPS", "1.13 × %.0f = %.0f FPS"), e.low1, e.to);
+          why = Fmt(T("Bajó a lo que dice la fórmula de «Ritmo constante» con la partida del %s.",
+                      "Lowered to what the “Steady pace” formula gives with the %s session."), when.c_str());
+        } else {
+          formula = Fmt(T("%.0f ÷ 1,13 = %.0f FPS", "%.0f ÷ 1.13 = %.0f FPS"), e.from, e.to);
+          why = Fmt(T("La fórmula daba %.0f (1,13 × %.0f), pero el límite baja como mucho un escalón del 13 %% por partida, por si fue una partida anómala (partida del %s).",
+                      "The formula gave %.0f (1.13 × %.0f), but the limit drops at most one 13 %% step per session, in case it was an unusual session (the %s session)."),
+                    t, e.low1, when.c_str());
+        }
+      } else {
+        rule = Fmt(T("Regla del 1 %% más lento: con %.0f, se hundió más de un 13 %% el %.0f %% de la partida",
+                     "Slowest 1 %% rule: with %.0f, it sank more than 13 %% for %.0f %% of the session"), e.from, e.pct);
+        formula = Fmt(T("%.0f ÷ 1,13 = %.0f FPS", "%.0f ÷ 1.13 = %.0f FPS"), e.from, e.to);
+        why = Fmt(T("Bajó un escalón del 13 %%, la diferencia perceptible, al cerrar la partida del %s.",
+                    "Lowered one 13 %% step, the perceptible difference, when the %s session closed."), when.c_str());
+      }
       break;
     case LimitExplain::Raise:
       rule = T("Iba sobrado: más del 98 % de los fotogramas esperando al limitador", "It had headroom: over 98 % of frames waiting on the limiter");
@@ -7462,8 +7675,8 @@ static void DrawLimitExplain(const UiChange& c, float w) {
     ImGui::TextUnformatted(Fmt(T("Comprobación: la última partida (%s, %.0f min), con %.0f", "Check: the last session (%s, %.0f min), with %.0f"),
                                ShortDate(x.when).c_str(), x.minutes, x.limit).c_str());
     ImGui::PopFont();
-    ImGui::TextColored(kDim, "%s", T("Ritmo de cada segundo (gris) y 1 % más lento de los últimos 20 segundos (azul; rojo bajo el umbral), frente al umbral del 13 %.",
-                                     "Each second's pace (gray) and the slowest 1 % of the last 20 seconds (blue; red below the threshold), against the 13 % threshold."));
+    ImGui::TextColored(kDim, "%s", T("Ritmo de cada segundo (gris) y 1 % más lento de los últimos 20 segundos (azul; rojo bajo el umbral), frente al umbral del 13 %. La línea azul muestra dónde están los tropiezos; la regla usa el 1 % más lento de toda la partida (abajo).",
+                                     "Each second's pace (gray) and the slowest 1 % of the last 20 seconds (blue; red below the threshold), against the 13 % threshold. The blue line shows where the dips are; the rule uses the whole session's slowest 1 % (below)."));
     VSpace(6);
     DrawSessionChart(x, inner);
   }
@@ -7483,12 +7696,30 @@ static void DrawLimitExplain(const UiChange& c, float w) {
       const bool mFail = x.failSecs >= 60 && x.failPct >= 10;
       RuleLine(mFail ? 0 : 1, Fmt(T("Ritmo por debajo del umbral: %.0f s, el %.0f %% de la partida (falla con 60 s y el 10 %%).",
                                     "Pace below the threshold: %.0f s, %.0f %% of the session (it fails at 60 s and 10 %%)."), x.failSecs, x.failPct), inner);
-      const bool tFail = x.tailSecs >= 60 && x.tailPct >= 10;
-      RuleLine(tFail ? 0 : 1, Fmt(T("1 %% más lento bajo el umbral: %.0f s, el %.0f %% de la partida%s.",
-                                    "Slowest 1 %% below the threshold: %.0f s, %.0f %% of the session%s."), x.tailSecs, x.tailPct,
-                                  c.usesFluid ? T(" (con «Más FPS» no baja el límite: si se repite dos partidas, pasa a «Ritmo constante»)",
-                                                  " (with “More FPS” it doesn't lower the limit: if it repeats for two sessions, it moves to “Steady pace”)")
-                                              : T(" (falla con 60 s y el 10 %)", " (it fails at 60 s and 10 %)")), inner);
+      if (x.sessionLow > 0) {
+        // 0.66: el 1 % mas lento de toda la partida, la medida de la regla
+        if (c.usesFluid) {
+          const bool sank = x.sessionLow < x.limit * 0.87;
+          RuleLine(sank ? 0 : 1, Fmt(T("1 %% más lento de la partida: %.0f FPS (umbral: %.0f)%s.",
+                                       "Session's slowest 1 %%: %.0f FPS (threshold: %.0f)%s."), x.sessionLow, x.limit * 0.87,
+                                     sank ? T(": con «Más FPS» no baja el límite, pero si se repite dos partidas seguidas, el juego pasa a «Ritmo constante»",
+                                              ": with “More FPS” it doesn't lower the limit, but if it repeats for two sessions in a row, the game moves to “Steady pace”")
+                                          : ""), inner);
+        } else {
+          const double t = std::floor(1.13 * x.sessionLow + 1e-9);
+          const bool holds = t >= x.limit * 0.95;
+          RuleLine(holds ? 1 : 0, Fmt(T("1 %% más lento de la partida: %.0f FPS. 1,13 × %.0f = %.0f: %s (se sostiene si llega al 95 %% del límite).",
+                                        "Session's slowest 1 %%: %.0f FPS. 1.13 × %.0f = %.0f: %s (it holds if it reaches 95 %% of the limit)."),
+                                      x.sessionLow, x.sessionLow, t,
+                                      holds ? T("el límite se sostiene", "the limit holds") : T("el límite no se sostiene", "the limit doesn't hold")),
+                   inner);
+        }
+      } else {
+        const bool tFail = x.tailSecs >= 60 && x.tailPct >= 10;
+        RuleLine(tFail ? 0 : 1, Fmt(T("1 %% más lento bajo el umbral: %.0f s, el %.0f %% de la partida (regla hasta la 0.65).",
+                                      "Slowest 1 %% below the threshold: %.0f s, %.0f %% of the session (rule up to 0.65)."),
+                                    x.tailSecs, x.tailPct), inner);
+      }
       if (x.waitPct >= 0)
         RuleLine(x.waitPct > 98 ? 1 : -1, x.waitPct > 98 ? Fmt(T("Va sobrado: el %.0f %% de los fotogramas esperó al limitador.", "It has headroom: %.0f %% of frames waited on the limiter."), x.waitPct)
                                                          : Fmt(T("No va sobrado: el %.0f %% de los fotogramas esperó al limitador (para subir hace falta más del 98 %%).",
@@ -7882,7 +8113,7 @@ static void PageLog(const View& v) {
 }
 
 static void Draw() {
-  View v = Snapshot();
+  View v = Snapshot(page == 3);
   ImGuiIO& io = ImGui::GetIO();
   ImGui::SetNextWindowPos(ImVec2(0, 0));
   ImGui::SetNextWindowSize(io.DisplaySize);
@@ -8069,9 +8300,23 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
 
   bool running = true;
   double lastUiDraw = 0.0;
+  double lastInput = NowSec();
+  // Temporizador de alta precision (Windows 10 1803 o posterior; si no, uno normal): el normal despierta
+  // cada 15,6 ms y dejaba el overlay a ~18 dibujos por segundo, irregulares.
+#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
+#endif
+  HANDLE waitTimer = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+  if (!waitTimer) waitTimer = CreateWaitableTimerW(nullptr, FALSE, nullptr);
+  eco::mainThread = eco::OpenCurrentThread();
   while (running) {
     MSG msg;
     while (PeekMessageW(&msg, nullptr, 0U, 0U, PM_REMOVE)) {
+      // Raton, teclado, cambios de tamano o de foco: hay que redibujar enseguida.
+      if ((msg.message >= WM_MOUSEFIRST && msg.message <= WM_MOUSELAST) ||
+          (msg.message >= WM_KEYFIRST && msg.message <= WM_KEYLAST) || msg.message == WM_MOUSELEAVE ||
+          msg.message == WM_NCMOUSEMOVE)
+        lastInput = NowSec();
       TranslateMessage(&msg);
       DispatchMessageW(&msg);
       if (msg.message == WM_QUIT) running = false;
@@ -8079,15 +8324,56 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
     if (!running) break;
     ov.Update();
     ImGui::SetCurrentContext(mainCtx);
-    // La ventana se dibuja a ~60 fps en primer plano y a ~10 fps detras; el overlay, siempre a
-    // 60 fps aunque la ventana este minimizada o detras del juego.
+    // La ventana se dibuja solo cuando hace falta (hasta la 0.63: unas 60 veces por segundo en primer
+    // plano y 10 detras, aunque no cambiara nada ni se viera):
+    //  - justo despues de mover el raton o pulsar algo (medio segundo a ~60 fps, para que los botones
+    //    respondan y se vean los cambios);
+    //  - en Ahora con un juego en marcha, a ~30 fps (la grafica de ritmo avanza);
+    //  - si no, una vez por segundo, para recoger lo que publica el motor (que lo hace una vez por
+    //    segundo);
+    //  - detras de un juego a pantalla completa que la tapa, cada 2 segundos.
+    // El overlay se sigue dibujando a su ritmo aunque la ventana este minimizada o tapada.
     const bool mineFront = GetForegroundWindow() == hwnd;
     const double tNow = NowSec();
-    if (IsIconic(hwnd) || (!mineFront && tNow - lastUiDraw < 0.1)) {
-      Sleep(ov.Visible() ? 4 : 30);
+    {
+      static bool wasFront = false;
+      if (mineFront && !wasFront) lastInput = tNow;  // al volver a la ventana, redibujar enseguida
+      wasFront = mineFront;
+    }
+    if (gui::resizeW != 0 && gui::resizeH != 0) lastInput = tNow;  // cambio de tamano: redibujar ya
+    bool haveGame = false;
+    {
+      std::lock_guard<std::mutex> lock(g_ui.m);
+      haveGame = g_ui.haveGame;
+    }
+    double interval;
+    if (mineFront && tNow - lastInput < 0.5) interval = 1.0 / 60.0;
+    else if (gui::page == 0 && haveGame) interval = mineFront ? 1.0 / 30.0 : 0.1;
+    else interval = 1.0;
+    if (!mineFront) {
+      HWND fg = GetForegroundWindow();
+      if (fg && fg != hwnd && WindowCoversMonitor(fg) &&
+          MonitorFromWindow(fg, MONITOR_DEFAULTTONULL) == MonitorFromWindow(hwnd, MONITOR_DEFAULTTONULL))
+        interval = 2.0;
+    }
+    if (IsIconic(hwnd) || tNow - lastUiDraw < interval) {
+      // Esperar a la siguiente cosa que hacer: un mensaje (raton, teclado...), el overlay o el siguiente
+      // dibujo de la ventana. Antes se despertaba cada 4 ms con el overlay visible.
+      double wait = IsIconic(hwnd) ? 0.25 : interval - (tNow - lastUiDraw);
+      if (ov.Visible()) wait = std::min(wait, std::max(0.0, ov.NextDrawAt() - NowSec()));
+      wait = std::clamp(wait, 0.0005, 0.25);
+      if (waitTimer) {
+        LARGE_INTEGER due;
+        due.QuadPart = -static_cast<LONGLONG>(wait * 1e7);  // relativo, en unidades de 100 ns
+        SetWaitableTimer(waitTimer, &due, 0, nullptr, nullptr, FALSE);
+        MsgWaitForMultipleObjects(1, &waitTimer, FALSE, static_cast<DWORD>(wait * 1000.0) + 20, QS_ALLINPUT);
+      } else {
+        MsgWaitForMultipleObjects(0, nullptr, FALSE, static_cast<DWORD>(wait * 1000.0) + 1, QS_ALLINPUT);
+      }
       continue;
     }
     lastUiDraw = tNow;
+    const double winT0 = NowSec();
     if (gui::resizeW != 0 && gui::resizeH != 0) {
       gui::CleanupRenderTarget();
       gui::swap->ResizeBuffers(0, gui::resizeW, gui::resizeH, DXGI_FORMAT_UNKNOWN, 0);
@@ -8103,10 +8389,13 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
     gui::ctx->OMSetRenderTargets(1, &gui::rtv, nullptr);
     gui::ctx->ClearRenderTargetView(gui::rtv, clear);
     ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+    // Sin la espera de la sincronizacion vertical (Present con 1 espera al refresco de la pantalla).
+    eco::windowDrawMsSum = eco::windowDrawMsSum.load() + (NowSec() - winT0) * 1000.0;
+    ++eco::windowDraws;
     gui::swap->Present(mineFront ? 1 : 0, 0);
-    Sleep(ov.Visible() ? 4 : (mineFront ? 12 : 30));
   }
 
+  if (waitTimer) CloseHandle(waitTimer);
   g_quit = true;
   ov.Destroy();
   engine.join();

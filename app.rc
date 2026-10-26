@@ -3,17 +3,17 @@
 1 ICON "flatpace.ico"
 
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION 0,63,1,0
-PRODUCTVERSION 0,63,1,0
+FILEVERSION 0,66,1,0
+PRODUCTVERSION 0,66,1,0
 BEGIN
   BLOCK "StringFileInfo"
   BEGIN
     BLOCK "040904B0"
     BEGIN
       VALUE "FileDescription", "FlatPace - estabilidad de FPS"
-      VALUE "FileVersion", "0.63.1"
+      VALUE "FileVersion", "0.66.1"
       VALUE "ProductName", "FlatPace"
-      VALUE "ProductVersion", "0.63.1"
+      VALUE "ProductVersion", "0.66.1"
     END
   END
   BLOCK "VarFileInfo"

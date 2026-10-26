@@ -2,7 +2,7 @@
 
 **FlatPace mide tus juegos y aplica el límite de FPS que hace que vayan lo más estables posible.** La idea de fondo: un ritmo constante se siente más fluido que unos FPS más altos pero irregulares.
 
-Versión actual: **0.63.1** · Windows 10 (1803 o posterior) y Windows 11 · [Guía de uso](GUIA.md) · [Documentación técnica](TECNICO.md) · [Historial de cambios](CHANGELOG.md) · [Licencia](LICENSE) · [English](README.md)
+Versión actual: **0.66.1** · Windows 10 (1803 o posterior) y Windows 11 · [Guía de uso](GUIA.md) · [Documentación técnica](TECNICO.md) · [Historial de cambios](CHANGELOG.md) · [Licencia](LICENSE) · [English](README.md)
 
 ![El overlay de FlatPace en Greylock, sin límite y con el límite que eligió la app](docs/img/overlay-antes-despues.png)
 
@@ -78,8 +78,8 @@ La ley de Weber (Weber, 1846) dice que la diferencia mínima que percibimos en u
 
 **Cómo la aplica FlatPace.** La app nunca compara milisegundos fijos: cada umbral de *"se nota / no se nota"* es **un 13 % del ritmo de ese momento**, el extremo más estricto del estudio. Así, la misma regla vale a cualquier velocidad: un fotograma 1 ms más lento es una diferencia perceptible a 240 FPS (un 24 % de los 4,2 ms que dura), pero no a 60 FPS (un 6 % de 16,7 ms). Y como un 13 % menos de FPS equivale a fotogramas un 15 % más largos, el umbral cae dentro del rango del estudio tanto si se mide en FPS como en duración. Se usa en:
 - **La regla de fallos:** un límite falla si el juego queda más de un 13 % por debajo de él de forma sostenida (en tramos de al menos 5 segundos, que sumen un minuto y el 10 % de la partida). Las caídas más cortas se consideran tropiezos aislados y no cuentan.
-- **Las subidas, y las bajadas cuando se hunde el 1 % más lento:** un escalón del 13 %, lo justo para que se note.
-- ***Ritmo constante*:** el 1 % de fotogramas más lentos puede llegar como mucho un 13 % tarde, así que el límite es 1,13 veces los FPS de ese 1 % más lento. Y si, con *Más FPS*, ese 1 % se hunde más de un 13 % en dos partidas seguidas, el juego pasa a *Ritmo constante*.
+- **Las subidas:** un escalón del 13 %, lo justo para que se note. Las bajadas de *Ritmo constante* tampoco pasan de un escalón por partida.
+- ***Ritmo constante*:** el 1 % de fotogramas más lentos puede llegar como mucho un 13 % tarde, así que el límite es 1,13 veces los FPS de ese 1 % más lento. Al cerrar cada partida se aplica la misma fórmula al 1 % más lento de toda la partida para comprobar el límite. Y si, con *Más FPS*, ese 1 % queda más de un 13 % por debajo del límite en dos partidas seguidas, el juego pasa a *Ritmo constante*.
 - **El movimiento descompasado:** un fotograma lo está si se dibuja con un error de animación mayor que el 13 % de su duración.
 - **La gráfica de ritmo:** su banda marca ±13 % del tiempo de fotograma (con un mínimo de 0,5 ms y un máximo de 6 ms, que solo actúan por encima de unos 260 FPS o por debajo de unos 22).
 
@@ -106,10 +106,10 @@ El mismo estudio (Naylor-Lovell, Chalmers y Debattista, 2025) encontró otra cos
 **Cómo comprueba que funciona.** En la partida siguiente, el límite se da por bueno (*"Límite funcionando"*) si el juego va a su ritmo con un margen de ±1,5 % y menos del 10 % de los fotogramas llegan más de un 7 % antes de tiempo. Esta comprobación se hace midiendo el juego, así que sirve con cualquier gráfica.
 
 **Cómo lo ajusta después.** Al cerrar cada partida:
-- **Si el límite falla** (la regla del 13 %), lo baja al ritmo que el juego sí sostuvo: con G-SYNC/FreeSync, el que superó en el 90 % de los segundos de la partida; sin VRR, el divisor siguiente de los Hz. Si lo que se hundió fue el 1 % más lento (con *Ritmo constante*), baja un escalón del 13 %.
+- **Si el límite falla** (la regla del 13 %), lo baja al ritmo que el juego sí sostuvo: con G-SYNC/FreeSync, el que superó en el 90 % de los segundos de la partida; sin VRR, el divisor siguiente de los Hz. Con *Ritmo constante*, además, se aplica su fórmula a toda la partida (1,13 × su 1 % más lento): si no llega al límite (con un 5 % de margen), lo baja a lo que dice, como mucho un escalón del 13 % por partida, por si fue una partida anómala.
 - **Si el juego va sobrado toda la partida** (al menos 3 minutos con el límite, ningún tramo por debajo y más del 98 % de los fotogramas esperando al limitador), lo sube un escalón: tras una partida así con *Más FPS*, o dos seguidas con *Ritmo constante*. Si la subida no se sostiene, vuelve al límite anterior y no lo intenta de nuevo en 30 días. Para saberlo usa los datos censurados (ver más abajo).
-- **Si con *Más FPS* los fotogramas más lentos se hunden más de un 13 % en dos partidas seguidas,** el juego es inestable con su límite y pasa a *Ritmo constante*. Solo en esa dirección, para no alternar entre las dos.
-- **El último minuto antes de cerrar el juego no cuenta:** suele ser de menús, salida o algún cuelgue.
+- **Si con *Más FPS* el 1 % más lento de la partida queda más de un 13 % por debajo del límite en dos partidas seguidas,** el juego es inestable con su límite y pasa a *Ritmo constante*. Una partida limpia de al menos 3 minutos borra la racha (una más corta no cuenta), así que una sola partida por una zona pesada no basta: tiene que repetirse. Por ejemplo, con un límite de 126 (umbral: 110), una partida con el 1 % más lento en 103 cuenta como *"1 de 2"*, y si la siguiente da 114 durante 12 minutos, la racha vuelve a cero. Solo actúa con la prioridad *Automática* (si eliges la prioridad del juego a mano, la app te lo recomienda en su fila, sin cambiarla), y solo en esa dirección, para no alternar entre las dos; *Deshacer* lo olvida.
+- **El cierre del juego no cuenta:** ni los últimos 15 segundos (salir del juego suele llevar menos de 8) ni, antes de ellos, un tramo final muy por debajo del límite (menos del 70 %), que es un cuelgue o un menú lento al salir. Una zona pesada va algo por debajo y sí cuenta, aunque dure hasta el cierre.
 
 Con la prioridad *Automática*, la app hace estos cambios por su cuenta. Si eliges tú la prioridad, no cambia nada: te los recomienda en la fila de cada juego, con un botón para aplicarlos. Los detalles de cada regla están en la [guía de uso](GUIA.md) y en la [documentación técnica](TECNICO.md).
 

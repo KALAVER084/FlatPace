@@ -64,6 +64,10 @@ struct LimitExplain {
   // La curva cuenta segundos: la regla de fallos, o un registro de la 0.63 (version 1 del formato), que
   // contaba segundos para todas las reglas.
   bool curveSeconds = false;
+  // Version del registro: 1 (0.63), 2 (0.63.1) o 3 (0.66: la regla del 1 % mas lento baja con la formula de
+  // Ritmo constante aplicada a la partida, y low1 es el 1 % mas lento causado por el juego; antes bajaba un
+  // escalon del 13 %).
+  int version = 3;
 
   void SetCurve(std::vector<float> rates) {
     curve.clear();
@@ -82,7 +86,7 @@ struct LimitExplain {
 
   std::string Serialize() const {
     char buf[200];
-    std::snprintf(buf, sizeof(buf), "2|%d|%lld|%.1f|%.1f|%.1f|%d|%.2f|%.1f|%.1f|%.2f|%.3f|", kind, when, from, to, pct,
+    std::snprintf(buf, sizeof(buf), "3|%d|%lld|%.1f|%.1f|%.1f|%d|%.2f|%.1f|%.1f|%.2f|%.3f|", kind, when, from, to, pct,
                   fluid ? 1 : 0, minutes, low1, p90, curveLo, curveStep);
     std::string s = buf;
     for (size_t i = 0; i < curve.size(); ++i) {
@@ -94,11 +98,12 @@ struct LimitExplain {
   static LimitExplain Parse(const std::string& s) {
     LimitExplain e;
     int ver = 0, fl = 1;
-    if (s.empty() || std::sscanf(s.c_str(), "%d|", &ver) != 1 || (ver != 1 && ver != 2)) return e;
+    if (s.empty() || std::sscanf(s.c_str(), "%d|", &ver) != 1 || ver < 1 || ver > 3) return e;
     if (std::sscanf(s.c_str() + s.find('|') + 1, "%d|%lld|%f|%f|%f|%d|%f|%f|%f|%f|%f|", &e.kind, &e.when, &e.from, &e.to, &e.pct, &fl,
                     &e.minutes, &e.low1, &e.p90, &e.curveLo, &e.curveStep) != 11)
       return LimitExplain();
     e.fluid = fl != 0;
+    e.version = ver;
     e.curveSeconds = ver == 1 || e.kind == FailMedian;
     size_t pos = 0;
     for (int i = 0; i < 12 && pos != std::string::npos; ++i) pos = s.find('|', pos + 1);
@@ -125,6 +130,7 @@ struct SessionExplain {
   float tailSecs = 0, tailPct = 0;  // regla del 1 % mas lento (sin el ultimo minuto)
   float waitPct = -1;       // % de fotogramas esperando al limitador (-1: no medido)
   float trimSecs = 60;      // segundos finales que no cuentan
+  float sessionLow = 0;     // 1 % mas lento causado por el juego en la partida (0.66; 0 en registros antiguos)
   float secsPerPoint = 1;   // segundos que representa cada punto
   std::vector<float> fps, low;  // ritmo y 1 % mas lento (ultimos 20 s); 0 = sin dato
 
@@ -152,8 +158,9 @@ struct SessionExplain {
 
   std::string Serialize() const {
     char buf[220];
-    std::snprintf(buf, sizeof(buf), "1|%lld|%.2f|%.1f|%d|%d|%.0f|%.1f|%.0f|%.1f|%.1f|%.0f|%.0f|", when, minutes, limit,
-                  verified ? 1 : 0, fg ? 1 : 0, failSecs, failPct, tailSecs, tailPct, waitPct, trimSecs, secsPerPoint);
+    std::snprintf(buf, sizeof(buf), "2|%lld|%.2f|%.1f|%d|%d|%.0f|%.1f|%.0f|%.1f|%.1f|%.0f|%.3f|%.1f|", when, minutes, limit,
+                  verified ? 1 : 0, fg ? 1 : 0, failSecs, failPct, tailSecs, tailPct, waitPct, trimSecs, secsPerPoint,
+                  sessionLow);
     std::string s = buf;
     for (size_t i = 0; i < fps.size(); ++i) {
       std::snprintf(buf, sizeof(buf), "%s%.0f:%.0f", i ? "," : "", fps[i], i < low.size() ? low[i] : 0.0f);
@@ -164,14 +171,16 @@ struct SessionExplain {
   static SessionExplain Parse(const std::string& s) {
     SessionExplain e;
     int ver = 0, v = 0, g = 0;
-    if (s.empty() || std::sscanf(s.c_str(), "%d|", &ver) != 1 || ver != 1) return e;
-    if (std::sscanf(s.c_str(), "1|%lld|%f|%f|%d|%d|%f|%f|%f|%f|%f|%f|%f|", &e.when, &e.minutes, &e.limit, &v, &g,
-                    &e.failSecs, &e.failPct, &e.tailSecs, &e.tailPct, &e.waitPct, &e.trimSecs, &e.secsPerPoint) != 12)
-      return SessionExplain();
+    if (s.empty() || std::sscanf(s.c_str(), "%d|", &ver) != 1 || (ver != 1 && ver != 2)) return e;
+    const int got = std::sscanf(s.c_str() + s.find('|') + 1, "%lld|%f|%f|%d|%d|%f|%f|%f|%f|%f|%f|%f|%f|", &e.when,
+                                &e.minutes, &e.limit, &v, &g, &e.failSecs, &e.failPct, &e.tailSecs, &e.tailPct,
+                                &e.waitPct, &e.trimSecs, &e.secsPerPoint, &e.sessionLow);
+    if (got < 12) return SessionExplain();
+    if (ver == 1) e.sessionLow = 0;
     e.verified = v != 0;
     e.fg = g != 0;
     size_t pos = 0;
-    for (int i = 0; i < 13 && pos != std::string::npos; ++i) pos = s.find('|', pos + 1);
+    for (int i = 0; i < (ver == 1 ? 13 : 14) && pos != std::string::npos; ++i) pos = s.find('|', pos + 1);
     if (pos == std::string::npos) return e;
     for (size_t p = pos + 1; p < s.size();) {
       size_t end = s.find(',', p);

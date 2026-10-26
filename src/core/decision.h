@@ -41,7 +41,13 @@ static bool LimitVerified(const VerifyInput& v) {
 // debajo" si el ritmo queda mas de un 13 % (la diferencia perceptible) por debajo del limite; solo
 // cuentan los tramos de al menos 5 s seguidos (los primeros 5 s se suman al llegar al quinto).
 // El limite fallo si esos tramos suman al menos 60 s y al menos el 10 % del tiempo con el limite.
-constexpr size_t kCloseTrimSec = 60;  // segundos finales que no cuentan para la regla de fallos
+// Al cerrar la partida no cuentan los ultimos 15 s (salir del juego: 8 s o menos en 9 de cada 10 de
+// 41 grabaciones), ni el tramo final que vaya muy por debajo del limite (menos del 70 %), dure lo que
+// dure: un cuelgue o un menu lento al salir (Greylock llego a quedarse 70 s presentando a 52 fps con un
+// limite de 110). Una zona pesada va algo por debajo (un 75-87 % del limite) y si cuenta, aunque dure
+// hasta el cierre. Hasta la 0.64 se quitaba siempre el ultimo minuto: casi siempre era juego real.
+constexpr size_t kCloseTrimSec = 15;
+constexpr double kClosingAnomaly = 0.70;  // por debajo de esta fraccion del limite, el final es el cierre
 struct FailureTracker {
   double limPlaySecs = 0.0;  // tiempo de juego con el limite funcionando
   double failSecs = 0.0;     // tiempo en tramos por debajo
@@ -66,6 +72,17 @@ struct FailureTracker {
     FailureTracker t;
     const size_t m = secRates.size() > n ? secRates.size() - n : 0;
     for (size_t i = 0; i < m; ++i) t.Add(secRates[i], expectedFps, 1.0);
+    return t;
+  }
+  // Copia sin el cierre: los ultimos kCloseTrimSec segundos y, antes de ellos, el tramo final que vaya
+  // por debajo de kClosingAnomaly del limite. trimmed: segundos quitados.
+  size_t trimmed = 0;
+  FailureTracker WithoutClosing(double expectedFps) const {
+    size_t m = secRates.size() > kCloseTrimSec ? secRates.size() - kCloseTrimSec : 0;
+    while (m > 0 && secRates[m - 1] < expectedFps * kClosingAnomaly) --m;
+    FailureTracker t;
+    for (size_t i = 0; i < m; ++i) t.Add(secRates[i], expectedFps, 1.0);
+    t.trimmed = secRates.size() - m;
     return t;
   }
   double Percent() const { return 100.0 * failSecs / std::max(1.0, limPlaySecs); }
@@ -250,7 +267,81 @@ struct AutoPriority {
 constexpr int kUnstableSessions = 2;
 
 // tail: el 1 % bajo de la partida (sin el ultimo minuto). Una partida corta (< 3 min) no cuenta.
-static AutoPriority UpdateAutoPriority(AutoPriority a, bool fluidNow, const FailureTracker& tail) {
+// ---------------------------------------------------------------------------
+// El 1 % mas lento de la partida (desde la 0.66)
+// ---------------------------------------------------------------------------
+// Hasta la 0.65, la regla del 1 % mas lento contaba los segundos en los que el 1 % mas lento de los
+// ultimos 20 s quedaba mas de un 13 % por debajo del limite. La ventana exageraba los tropiezos cortos:
+// unos segundos lentos en una zona pesada dejaban el 1 % mas lento hundido 20 s. En Greylock, con un
+// limite de 107, el juego estuvo bajo el umbral 36 s de 497 (un 7 %: no fallaba), pero la ventana los
+// convirtio en 79 y la regla lo bajo a 94; con 94 volveria a pasar, y asi hasta perseguir los peores
+// segundos del juego (129 -> 114 -> 121 -> 107 -> 94). Y contradecia a la propia formula de Ritmo
+// constante, que con esa misma partida daba 109: es decir, que 107 se sostenia.
+// Ahora se comprueba con la misma medida con la que se decide: el 1 % mas lento causado por el juego en
+// toda la partida (sin el cierre ni los tirones, como DecideFromSession).
+constexpr double kSteadyHoldMargin = 0.05;  // el limite se sostiene si la formula llega al 95 % de el
+
+// 1 % mas lento (fps reales) causado por el juego en la partida: los fotogramas reales y el trabajo de
+// cada uno (el mayor de CPU y GPU), con el limite capMs. Sin los ultimos trimSec segundos (el cierre del
+// juego, FailureTracker::WithoutClosing) ni los tirones (mas de 2,5 veces la mediana). 0 si hay pocos datos.
+static double SessionGameLowFps(const std::vector<float>& realMs, const std::vector<float>& workMs, double capMs,
+                                double trimSec) {
+  size_t n = std::min(realMs.size(), workMs.size());
+  double tail = 0.0;
+  while (n > 0 && tail < trimSec * 1000.0) tail += realMs[--n];
+  if (n < 1000 || capMs <= 0) return 0.0;
+  std::vector<double> sorted(realMs.begin(), realMs.begin() + n);
+  std::sort(sorted.begin(), sorted.end());
+  const double med = PercentileSorted(sorted, 50);
+  std::vector<double> r, w;
+  r.reserve(n);
+  w.reserve(n);
+  for (size_t i = 0; i < n; ++i)
+    if (realMs[i] <= med * 2.5) {
+      r.push_back(realMs[i]);
+      w.push_back(workMs[i]);
+    }
+  if (r.size() < 1000) return 0.0;
+  const double p99 = GameCausedPercentileMs(r, w, capMs, 99);
+  return p99 > 0 ? 1000.0 / p99 : 0.0;
+}
+
+// Ritmo constante: la formula (1,13 x el 1 % mas lento) con la partida, frente al limite que tenia.
+struct SteadyCheck {
+  bool holds = true;
+  double target = 0.0;  // limite que dicta la formula con esta partida (fps reales)
+};
+static SteadyCheck CheckSteady(double sessionLow, double limit) {
+  SteadyCheck c;
+  if (sessionLow <= 0 || limit <= 0) return c;
+  c.target = std::floor((1.0 + cfg::kJnd) * sessionLow + 1e-9);
+  c.holds = c.target >= limit * (1.0 - kSteadyHoldMargin);
+  return c;
+}
+
+// Mas FPS: la partida se hundio si su 1 % mas lento quedo mas de un 13 % por debajo del limite (mas del
+// 1 % de los fotogramas llego tarde de forma perceptible).
+static bool SessionSank(double sessionLow, double limit) {
+  return sessionLow > 0 && limit > 0 && sessionLow < limit * (1.0 - cfg::kJnd);
+}
+
+// Cambio de prioridad con la medida de la partida (0.66): sank = SessionSank; playSecs, segundos de juego
+// con el limite (una partida larga y limpia, de al menos 3 minutos, corta la racha).
+static AutoPriority UpdateAutoPriority(AutoPriority a, bool fluidNow, bool sank, double playSecs) {
+  if (!fluidNow || a.stability) return a;
+  if (sank) {
+    if (++a.unstableStreak >= kUnstableSessions) {
+      a.stability = true;
+      a.unstableStreak = 0;
+    }
+  } else if (playSecs >= 180.0) {
+    a.unstableStreak = 0;
+  }
+  return a;
+}
+
+// Version hasta la 0.65 (con la ventana de 20 s); solo la usan las pruebas antiguas.
+inline AutoPriority UpdateAutoPriority(AutoPriority a, bool fluidNow, const FailureTracker& tail) {
   if (!fluidNow || a.stability) return a;
   if (tail.Failed()) {
     if (++a.unstableStreak >= kUnstableSessions) {
