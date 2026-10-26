@@ -42,7 +42,7 @@ Screenshots with the English interface.
 
 **Games** brings together the priority and each game with its limit, described in words, and its buttons (its own priority, manual limit and undo). Unfolding a game shows where its limit comes from: the rule and the formula with its numbers, the curve of the session that decided it, the last session second by second against the 13 % threshold and each rule's result:
 
-![The Games section: priority and games with a limit](docs/img/juegos.png)
+![The Games section with Greylock unfolded: the limit's formula, the curve of the deciding session, the check of the last session and the rules](docs/img/juegos.png)
 
 ## Requirements and compatibility
 
@@ -63,6 +63,7 @@ Screenshots with the English interface.
 - It doesn't remove the game's own stutters (shader compilation, loading): it detects and shows them.
 - Frame generation can make motion uneven even when the pace is steady: FlatPace measures and explains it, but no limit fixes it.
 - PC latency only appears if the game provides the necessary data; it hasn't in the games tested so far.
+- Without a limit (a game's first session, or after *Undo*), the game keeps the GPU fully busy and the overlay may stutter: its images wait behind the game's. With the limit applied it's smooth.
 - It uses PresentMon 2.6.0, which has known bugs; if it stops sending data mid-session, FlatPace restarts it.
 - With FlatPace in front, the *Print Screen* key doesn't open the Windows 11 snipping tool: FlatPace runs as administrator, and Windows doesn't let the tool see the keyboard while an administrator window has the focus. *Win + Print Screen* (full screen) and *Win + Shift + S* do work.
 - Tested mostly on a laptop with an RTX 4080 and a 240 Hz G-SYNC display, with a few games (Greylock, Megabonk, Metal Eden, Space Marine 2 and Control Resonant). RTSS limits and guided mode haven't been tested on AMD or Intel GPUs yet: reports are welcome.
@@ -78,7 +79,7 @@ Weber's law (Weber, 1846) says that the smallest difference we perceive in a sti
 
 **How FlatPace applies it.** The app never compares fixed milliseconds: every *"noticeable / not noticeable"* threshold is **13 % of the current pace**, the strictest end of the study. That way the same rule works at any speed: a frame 1 ms slower is a perceptible difference at 240 FPS (24 % of the 4.2 ms it lasts), but not at 60 FPS (6 % of 16.7 ms). And since 13 % fewer FPS means frames 15 % longer, the threshold falls within the study's range whether it's measured in FPS or in duration. It's used in:
 - **The failure rule:** a limit fails if the game stays more than 13 % below it in a sustained way (in stretches of at least 5 seconds, adding up to a minute and 10 % of the session). Shorter drops count as isolated dips and are ignored.
-- **Raises:** one 13 % step, just enough to be noticeable. *Steady pace* lowerings don't go beyond one step per session either.
+- **Raises:** one 13 % step, just enough to be noticeable. Lowerings by the *Steady pace* formula don't go beyond one step per session either.
 - ***Steady pace*:** the slowest 1 % of frames can arrive at most 13 % late, so the limit is 1.13 times the FPS of that slowest 1 %. When each session closes, the same formula is applied to the whole session's slowest 1 % to check the limit. And if, with *More FPS*, that 1 % stays more than 13 % below the limit in two sessions in a row, the game moves to *Steady pace*.
 - **Out-of-step motion:** a frame is out of step if it's drawn with an animation error larger than 13 % of its duration.
 - **The pacing graph:** its band marks ±13 % of the frame time (with a minimum of 0.5 ms and a maximum of 6 ms, which only kick in above about 260 FPS or below about 22).
@@ -97,7 +98,7 @@ The same study (Naylor-Lovell, Chalmers and Debattista, 2025) found something el
 <details>
 <summary><b>How it chooses, checks and adjusts the limit</b></summary>
 
-**How it chooses the limit.** When you close the game, with the data from the whole session (leaving out stutters, frames more than 2.5 times the usual and at least 8 ms longer, which no limit fixes):
+**How it chooses the limit.** When you close the game, with the data from the whole session (leaving out stutters, frames more than 2.5 times the usual, which no limit fixes):
 - **More FPS:** the pace 90 % of the session's frames reach (not counting stutters).
 - **Steady pace:** a limit the game holds in its worst moments too.
 - **With G-SYNC/FreeSync,** the limit can be any value, always below the display's maximum so it stays in range (for example, at most 225 FPS on a 240 Hz display).
@@ -135,7 +136,7 @@ With a limit, most frames wait on the limiter, so they all seem to last the same
 - **Fully reversible:** each game can be undone separately, and goes back exactly to how it was.
 - **Diagnostics:** stutters, what limits the slow moments (CPU or GPU) with the matching advice, CPU performance, motion judder caused by frame generation, presentation mode, VRR state, an in-game overlay with the pacing graph, and optional per-frame recording to analyze sessions.
 - **Why each limit:** in *Games*, unfolding a game shows the rule and the formula its limit was decided with, the curve of the deciding session (what share of frames reached each pace), the last session second by second against the 13 % threshold and each rule's result.
-- **Lightweight:** it runs at low priority and in Windows 11 efficiency mode, so it doesn't compete with the game.
+- **Lightweight:** it runs at low priority and in Windows 11 efficiency mode, so it doesn't compete with the game. The overlay is what uses the most, since it draws 60 times per second; to save more, turn it off.
 - **In English and Spanish:** the interface and the log, in the language you choose.
 
 </details>

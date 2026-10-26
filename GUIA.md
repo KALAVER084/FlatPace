@@ -58,7 +58,7 @@ La prioridad general tiene tres opciones:
 
 Cada juego puede tener la suya con el botón de prioridad de su fila, que muestra la que se aplica (*"Auto · Ritmo constante"*, por ejemplo) y permite elegir entre la general, **Siempre ritmo constante** o **Siempre más FPS**. Con una prioridad propia, ese juego queda también bajo tu control: la app solo te recomienda.
 
-Con G-SYNC/FreeSync, ninguna cuenta los **tirones** (fotogramas de más de 2,5 veces lo normal y al menos 8 ms más largos): ningún límite los arregla. Sin VRR, por ahora se mantienen las reglas anteriores.
+Con G-SYNC/FreeSync, ninguna cuenta los **tirones** (al decidir, los fotogramas de más de 2,5 veces lo normal): ningún límite los arregla. Sin VRR, por ahora se mantienen las reglas anteriores.
 
 Los límites ya aceptados no cambian al cambiar la prioridad: deshaz el juego para recalcularlo con el criterio nuevo.
 

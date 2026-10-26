@@ -42,7 +42,7 @@ Capturas con la interfaz en inglés.
 
 **Juegos** reúne la prioridad y cada juego con su límite, descrito con palabras, y sus botones (prioridad propia, límite manual y deshacer). Al desplegar un juego se ve de dónde sale su límite: la regla y la fórmula con sus números, la curva de la partida que lo decidió, la última partida segundo a segundo frente al umbral del 13 % y el resultado de cada regla:
 
-![La sección Juegos: prioridad y juegos con límite](docs/img/juegos.png)
+![La sección Juegos con Greylock desplegado: la fórmula del límite, la curva de la partida que lo decidió, la comprobación de la última partida y las reglas](docs/img/juegos.png)
 
 ## Requisitos y compatibilidad
 
@@ -63,6 +63,7 @@ Capturas con la interfaz en inglés.
 - No elimina los tirones propios del juego (compilación de shaders, cargas): los detecta y los muestra.
 - La generación de fotogramas puede descompasar el movimiento aunque el ritmo sea constante: FlatPace lo mide y lo explica, pero ningún límite lo corrige.
 - La latencia del PC solo aparece si el juego entrega los datos necesarios; en los juegos probados aún no lo ha hecho.
+- Sin límite (la primera partida de un juego, o tras *Deshacer*), el juego ocupa la GPU al máximo y el overlay puede ir a tirones: sus imágenes esperan detrás de las del juego. Con el límite puesto va fluido.
 - Usa PresentMon 2.6.0, que tiene fallos conocidos; si deja de enviar datos a mitad de partida, FlatPace lo reinicia.
 - Con FlatPace en primer plano, la tecla *Impr Pant* no abre la herramienta de recortes de Windows 11: FlatPace se ejecuta como administrador, y Windows no deja que la herramienta vea el teclado mientras una ventana de administrador tiene el foco. *Win + Impr Pant* (pantalla completa) y *Win + Shift + S* sí funcionan.
 - Probado sobre todo en un portátil con RTX 4080 y pantalla de 240 Hz con G-SYNC, con unos pocos juegos (Greylock, Megabonk, Metal Eden, Space Marine 2 y Control Resonant). Los límites con RTSS y el modo guiado aún no se han probado en gráficas AMD ni Intel: se agradecen informes.
@@ -78,7 +79,7 @@ La ley de Weber (Weber, 1846) dice que la diferencia mínima que percibimos en u
 
 **Cómo la aplica FlatPace.** La app nunca compara milisegundos fijos: cada umbral de *"se nota / no se nota"* es **un 13 % del ritmo de ese momento**, el extremo más estricto del estudio. Así, la misma regla vale a cualquier velocidad: un fotograma 1 ms más lento es una diferencia perceptible a 240 FPS (un 24 % de los 4,2 ms que dura), pero no a 60 FPS (un 6 % de 16,7 ms). Y como un 13 % menos de FPS equivale a fotogramas un 15 % más largos, el umbral cae dentro del rango del estudio tanto si se mide en FPS como en duración. Se usa en:
 - **La regla de fallos:** un límite falla si el juego queda más de un 13 % por debajo de él de forma sostenida (en tramos de al menos 5 segundos, que sumen un minuto y el 10 % de la partida). Las caídas más cortas se consideran tropiezos aislados y no cuentan.
-- **Las subidas:** un escalón del 13 %, lo justo para que se note. Las bajadas de *Ritmo constante* tampoco pasan de un escalón por partida.
+- **Las subidas:** un escalón del 13 %, lo justo para que se note. Las bajadas por la fórmula de *Ritmo constante* tampoco pasan de un escalón por partida.
 - ***Ritmo constante*:** el 1 % de fotogramas más lentos puede llegar como mucho un 13 % tarde, así que el límite es 1,13 veces los FPS de ese 1 % más lento. Al cerrar cada partida se aplica la misma fórmula al 1 % más lento de toda la partida para comprobar el límite. Y si, con *Más FPS*, ese 1 % queda más de un 13 % por debajo del límite en dos partidas seguidas, el juego pasa a *Ritmo constante*.
 - **El movimiento descompasado:** un fotograma lo está si se dibuja con un error de animación mayor que el 13 % de su duración.
 - **La gráfica de ritmo:** su banda marca ±13 % del tiempo de fotograma (con un mínimo de 0,5 ms y un máximo de 6 ms, que solo actúan por encima de unos 260 FPS o por debajo de unos 22).
@@ -97,7 +98,7 @@ El mismo estudio (Naylor-Lovell, Chalmers y Debattista, 2025) encontró otra cos
 <details>
 <summary><b>Cómo elige, comprueba y ajusta el límite</b></summary>
 
-**Cómo elige el límite.** Al cerrar el juego, con los datos de toda la partida (sin contar los tirones, fotogramas de más de 2,5 veces lo normal y al menos 8 ms más largos, que ningún límite arregla):
+**Cómo elige el límite.** Al cerrar el juego, con los datos de toda la partida (sin contar los tirones, fotogramas de más de 2,5 veces lo normal, que ningún límite arregla):
 - **Más FPS:** el ritmo que alcanzan el 90 % de los fotogramas de la partida (sin contar los tirones).
 - **Ritmo constante:** un límite que el juego sostiene también en sus peores momentos.
 - **Con G-SYNC/FreeSync,** el límite puede ser cualquier valor, siempre por debajo del máximo de la pantalla para no salirse de su rango (por ejemplo, como mucho 225 FPS en una de 240 Hz).
@@ -135,7 +136,7 @@ Con un límite, la mayoría de los fotogramas esperan al limitador, así que tod
 - **Todo es reversible:** cada juego se puede deshacer por separado, y vuelve exactamente a como estaba.
 - **Diagnóstico:** tirones, qué limita los momentos lentos (la CPU o la GPU) con el consejo que corresponde, rendimiento de la CPU, movimiento descompasado por la generación de fotogramas, modo de presentación, VRR activo, overlay en el juego con la gráfica de ritmo y grabación opcional de cada fotograma para analizar partidas.
 - **El porqué de cada límite:** en *Juegos*, al desplegar un juego, la regla y la fórmula con las que se decidió su límite, la curva de la partida que lo decidió (qué porcentaje de los fotogramas alcanzó cada ritmo), la última partida segundo a segundo frente al umbral del 13 % y el resultado de cada regla.
-- **Ligero:** funciona con prioridad baja y en el modo de eficiencia de Windows 11, para no competir con el juego.
+- **Ligero:** funciona con prioridad baja y en el modo de eficiencia de Windows 11, para no competir con el juego. Lo que más consume es el overlay, que se dibuja 60 veces por segundo; si quieres ahorrar, desactívalo.
 - **En español y en inglés:** la interfaz y el registro, en el idioma que elijas.
 
 </details>

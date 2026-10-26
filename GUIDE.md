@@ -58,7 +58,7 @@ The general priority has three options:
 
 Each game can have its own with the priority button on its row, which shows the one being applied (*"Auto · Steady pace"*, for example) and lets you choose between the general one, **Always steady pace** or **Always more FPS**. With its own priority, that game is also under your control: the app only recommends.
 
-With G-SYNC/FreeSync, neither counts **stutters** (frames more than 2.5 times the usual and at least 8 ms longer): no limit fixes them. Without VRR, the previous rules still apply for now.
+With G-SYNC/FreeSync, neither counts **stutters** (when deciding, frames more than 2.5 times the usual): no limit fixes them. Without VRR, the previous rules still apply for now.
 
 Limits already accepted don't change when you switch priority: undo the game to recalculate it with the new criterion.
 
