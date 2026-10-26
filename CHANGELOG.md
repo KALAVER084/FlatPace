@@ -3,6 +3,7 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). La versión más reciente va primero.
 
 ## 0.67.3
+- **README:** captura nueva del desplegable de *Juegos*, con las leyendas y la escala fija de la comprobación.
 - **La gráfica de la comprobación ya no exagera las caídas.** Su escala vertical se ajustaba a la caída más profunda de cada partida y empezaba cerca de ella: una bajada del 1 % más lento ocupaba casi toda la altura y parecía peor de lo que era, y una partida no se podía comparar con otra. Ahora la escala es fija respecto al límite, del 50 % al 110 % (con 126, de 63 a 139): el umbral del 13 % queda siempre a la misma altura, y a la derecha se lee cuánto cae cada tramo (*"−13 %"*, *"−30 %"*, *"−50 %"*). No se empieza en 0 para no aplastar la zona entre el límite y el umbral, que es la que deciden las reglas.
 - **La línea gris (el ritmo de cada segundo, lo habitual) es más gruesa,** y la del 1 % más lento (lo peor de cada momento), algo más fina, para que la vista no se vaya solo a lo peor.
 

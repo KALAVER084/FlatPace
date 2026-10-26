@@ -42,7 +42,7 @@ Screenshots with the English interface.
 
 **Games** brings together the priority and each game with its limit, described in words, and its buttons (its own priority, manual limit and undo). Unfolding a game shows where its limit comes from: the rule and the formula with its numbers, the curve of the session that decided it, the last session second by second against the 13 % threshold and each rule's result:
 
-![The Games section with Greylock unfolded: the limit's formula, the curve of the deciding session, the check of the last session and the rules](docs/img/juegos.png)
+![Greylock's dropdown in Games: the limit's formula, the curve of the deciding session and the check of the last session, with their legends](docs/img/juegos.png)
 
 ## Requirements and compatibility
 

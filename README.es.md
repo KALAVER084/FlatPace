@@ -42,7 +42,7 @@ Capturas con la interfaz en inglés.
 
 **Juegos** reúne la prioridad y cada juego con su límite, descrito con palabras, y sus botones (prioridad propia, límite manual y deshacer). Al desplegar un juego se ve de dónde sale su límite: la regla y la fórmula con sus números, la curva de la partida que lo decidió, la última partida segundo a segundo frente al umbral del 13 % y el resultado de cada regla:
 
-![La sección Juegos con Greylock desplegado: la fórmula del límite, la curva de la partida que lo decidió, la comprobación de la última partida y las reglas](docs/img/juegos.png)
+![El desplegable de Greylock en Juegos: la fórmula del límite, la curva de la partida que lo decidió y la comprobación de la última partida, con sus leyendas](docs/img/juegos.png)
 
 ## Requisitos y compatibilidad
 
