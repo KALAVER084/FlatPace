@@ -1,4 +1,4 @@
-# FlatPace 0.66.1 user guide
+# FlatPace 0.67.3 user guide
 
 This guide describes the current version. Changes between versions are listed in the [changelog](CHANGELOG.md) (in Spanish). The app has an English interface: switch it with **ES | EN** at the bottom of the sidebar.
 
@@ -85,9 +85,9 @@ The app **never changes** a manual limit: it only checks that it works (the over
 
 ## 8. Frame generation (DLSS Frame Generation)
 
-- The app separates real frames from generated ones. The limit is shown as *"122 on screen (61 real)"*.
+- The app separates real frames from generated ones, and **applies the formulas to the real ones** (the ones the game computes), from the stretches with the session's most common frame generation. The limit is shown as *"122 on screen (61 real)"*. Applying them to the images on screen doesn't give the same result: the game hands over the real and the generated frame almost together, and without a limit they show up on screen unevenly, so the formulas would measure that unevenness, not what the game sustains (in Control Resonant, 45 on screen instead of 63).
 - Real frames never go below 30: below that, latency is poor.
-- If frame generation turns on or off (many games do this in menus), the app measures again. If the game turns it on and off by itself frequently (a dynamic or automatic mode), the app warns once on *Games* and stops logging each change: setting that mode in the game gives a steadier pace.
+- If frame generation turns on or off (many games do this in menus), the app measures again. If it changes often, the app warns once on *Games* and stops logging each change: most likely it's the menus, and then there's nothing to do; if it happens while playing and the game has an automatic or dynamic frame generation mode, setting it gives a steadier pace.
 - With frame generation, the graph shows the images **on screen** (section 9), and the app doesn't estimate the game's capacity or suggest raising the limit, because real frames change pace with frame generation.
 - The first time, it learns what the driver's limiter acts on in your PC (what you see on screen or the real frames).
 - **Frame generation can make motion uneven even when the graph is flat:** in Space Marine 2, more than a third of the frames with a perfect pace had uneven motion with frame generation, and almost none without it. No limit fixes it. Each session summary measures it (*"Motion with a flat pace"*) and, if it's high, explains it; if motion looks uneven to you, try the game without frame generation.
@@ -97,7 +97,7 @@ The app **never changes** a manual limit: it only checks that it works (the over
 In a corner of the game: FPS, 1 % low, a tag with the limit status and the pacing graph of the last 3 seconds.
 
 - **Blue ("LOCKED 225 fps"):** the limit is confirmed; the game runs at its pace.
-- If the game provides the necessary data (some games with Reflex; none of those tested so far), the numbers row includes **PC latency** (*"latency 24 ms"*). With a locked limit and no frame generation, it compares it with the game's latency without a limit: *"latency 18 ms (before 22)"*. If the row doesn't fit, secondary data is dropped first.
+- If the game provides the necessary data (some games with Reflex; among those tested, Control Resonant), the numbers row includes **PC latency** (*"latency 24 ms"*). With a locked limit and no frame generation, it compares it with the game's latency without a limit: *"latency 18 ms (before 22)"*. If the row doesn't fit, secondary data is dropped first.
 - **Red ("UNCONFIRMED" or "NO LIMIT"):** the game has no limit yet, or has one that hasn't been checked yet.
 - The graph shows pace **deviations**: while frame times stay within the tolerance (±13 % of the target, shown in the label: *"target 8.3 ms ±1.1"*), the line is straight; only what goes outside is drawn. The same rule applies with and without a limit, so the difference you see is real. **Stutters** appear in amber.
 - **With frame generation**, the graph draws the images **on screen** (what you see), and the label says so (*"on screen 13.9 ms ±1.8"*). If the game turns frame generation on and off by itself, the app warns about it on *Games*.

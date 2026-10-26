@@ -132,7 +132,7 @@ static std::atomic<bool> g_quit{false};
 static std::atomic<int> g_lang{0};
 static const char* T(const char* es, const char* en) { return g_lang == 1 ? en : es; }
 
-static constexpr const char* kVersion = "0.66.1";
+static constexpr const char* kVersion = "0.67.3";
 
 // Carpeta donde esta este .exe.
 static std::wstring ExeDirectory() {
@@ -2539,8 +2539,13 @@ static void SaveLimitExplain(const Session& s, int kind, double from, double to,
   e.pct = static_cast<float>(pct);
   e.fluid = s.fluid;
   e.minutes = static_cast<float>(s.gameSecs / 60.0);
-  auto it = s.sessionReal.find(1);
-  if (!FrameGenInvolved(s) && it != s.sessionReal.end() && it->second.size() >= 1000) {
+  // Los fotogramas reales del tipo de generacion mas habitual en la partida (sin generacion, x2, x3...),
+  // como DecideFromSession: con generacion (0.67), la curva tambien es la de la decision, y los menus,
+  // que muchos juegos muestran sin generacion, quedan fuera.
+  auto it = s.sessionReal.end();
+  for (auto g = s.sessionReal.begin(); g != s.sessionReal.end(); ++g)
+    if (it == s.sessionReal.end() || g->second.size() > it->second.size()) it = g;
+  if (it != s.sessionReal.end() && it->second.size() >= 1000) {
     // Los mismos datos que la decision con la partida completa (DecideFromSession): los fotogramas
     // reales de la partida sin los tirones (mas de 2,5 veces la mediana). Mas FPS toma el ritmo que
     // alcanza el 90 % de ellos; Ritmo constante, 1,13 x el de su 1 % mas lento. Hasta la 0.63 la
@@ -2809,18 +2814,19 @@ static void ProcessSession(Session& ss, std::vector<FrameSample>& fresh, double 
   auto NoteFgToggle = [&]() {
     ++ss.fgToggles;
     if (ss.fgToggles == 4) {
-      Log("[%5.0f s] La generacion de fotogramas se activa y desactiva sola (4 cambios): probablemente\n"
-          "          un modo dinamico del juego o del driver. Los fotogramas reales cambian de ritmo en\n"
-          "          cada cambio; la grafica muestra las imagenes en pantalla. Ya no anoto cada cambio.\n",
+      Log("[%5.0f s] La generacion de fotogramas se activa y desactiva sola (4 cambios): lo mas probable es que\n"
+          "          el juego la quite en los menus, o un modo dinamico del juego o del driver. Las decisiones\n"
+          "          usan solo la generacion mas habitual de la partida. Ya no anoto cada cambio.\n",
           ss.T(now));
       std::lock_guard<std::mutex> lock(g_ui.m);
       g_ui.warnings[ss.exe] =
-          T("La generación de fotogramas se activa y desactiva sola: los fotogramas reales cambian de ritmo cada vez, "
-            "aunque en pantalla apenas se note. Si el juego tiene un modo de generación automático o dinámico, "
-            "fijarlo (activado o desactivado) da un ritmo más constante.",
-            "Frame generation turns itself on and off: real frames change pace each time, even if it's barely "
-            "visible on screen. If the game has an automatic or dynamic frame generation mode, setting it "
-            "(on or off) gives a steadier pace.");
+          T("La generación de fotogramas se activa y desactiva sola. Lo más probable es que el juego la quite en los menús, "
+            "y entonces no hay que hacer nada: las decisiones usan solo la generación más habitual de la partida. Si ocurre "
+            "jugando y el juego tiene un modo de generación automático o dinámico, fijarlo (activado o desactivado) da un ritmo más constante.",
+            "Frame generation turns itself on and off. Most likely the game turns it off in its menus, and then there's "
+            "nothing to do: decisions only use the session's most common frame generation. If it happens while "
+            "playing and the game has an automatic or dynamic frame generation mode, setting it (on or off) gives "
+            "a steadier pace.");
     }
     return ss.fgToggles < 4;  // anotar en el registro solo los primeros cambios
   };
@@ -6522,8 +6528,10 @@ static void ApplyTheme() {
 
 static void LoadFontsInto(ImFont*& body, ImFont*& strong, ImFont*& big) {
   ImGuiIO& io = ImGui::GetIO();
+  // Latin-1, puntuacion tipografica, flechas, la vineta y el signo menos (U+2212, el de la leyenda del
+  // umbral: sin el salia como "?", 0.67.2).
   static const ImWchar ranges[] = {0x0020, 0x00FF, 0x2010, 0x2027,
-                                   0x2190, 0x2193, 0x2022, 0x2022, 0};
+                                   0x2190, 0x2193, 0x2022, 0x2022, 0x2212, 0x2212, 0};
   wchar_t winDir[MAX_PATH];
   GetWindowsDirectoryW(winDir, MAX_PATH);
   std::string fonts = Narrow(std::wstring(winDir)) + "\\Fonts\\";
@@ -6546,7 +6554,7 @@ static void LoadFonts() {
   wchar_t winDir[MAX_PATH];
   GetWindowsDirectoryW(winDir, MAX_PATH);
   std::string path = Narrow(std::wstring(winDir)) + "\\Fonts\\bahnschrift.ttf";
-  static const ImWchar ranges[] = {0x0020, 0x00FF, 0x2010, 0x2027, 0x2190, 0x2193, 0x2713, 0x2713, 0};
+  static const ImWchar ranges[] = {0x0020, 0x00FF, 0x2010, 0x2027, 0x2190, 0x2193, 0x2212, 0x2212, 0x2713, 0x2713, 0};
   if (GetFileAttributesA(path.c_str()) != INVALID_FILE_ATTRIBUTES) {
     fontHead = io.Fonts->AddFontFromFileTTF(path.c_str(), 24.0f * scale, nullptr, ranges);
     fontNum = io.Fonts->AddFontFromFileTTF(path.c_str(), 32.0f * scale, nullptr, ranges);
@@ -7270,7 +7278,7 @@ static void PageNow(const View& v) {
   VSpace(6);
   LegendItem(locked ? kBlue : Hex(0xAEB6C3), locked ? T("Al ritmo del límite", "At the limit's pace") : T("Ritmo del juego", "Game's pace"));
   ImGui::SameLine(0, 28 * scale);
-  LegendItem(kAmber, T("Tirón: un fotograma de más de 2,5 veces lo normal", "Stutter: a frame more than 2.5 times the usual"));
+  LegendItem(kAmber, T("Tirón: un fotograma de más de 2,5 veces lo normal y al menos 8 ms más largo", "Stutter: a frame more than 2.5 times the usual and at least 8 ms longer"));
   VSpace(24);
 
   // Tres cifras con nombres claros. En pausa, el motor deja los FPS reales a cero: se muestra el ultimo
@@ -7428,6 +7436,35 @@ static void DashedLine(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 col, float th, 
   }
 }
 
+// Leyenda debajo de una grafica (0.67.1): una muestra de cada linea y su significado; pasa a otra linea si
+// no cabe.
+struct ChartKey {
+  int kind;  // 0 linea continua, 1 punteada, 2 zona sombreada
+  ImVec4 col;
+  std::string text;
+};
+static void DrawChartKey(const std::vector<ChartKey>& items, float w) {
+  const ImVec2 p = ImGui::GetCursorScreenPos();
+  ImDrawList* dl = ImGui::GetWindowDrawList();
+  const float lh = ImGui::GetTextLineHeight(), sw = 24 * scale;
+  float x = p.x + 8 * scale, y = p.y;
+  for (const ChartKey& it : items) {
+    const float tw = ImGui::CalcTextSize(it.text.c_str()).x;
+    const float iw = sw + 8 * scale + tw + 22 * scale;
+    if (x > p.x + 8 * scale && x + iw > p.x + w) {
+      x = p.x + 8 * scale;
+      y += lh + 6 * scale;
+    }
+    const float cy = y + lh * 0.5f;
+    if (it.kind == 0) dl->AddLine(ImVec2(x, cy), ImVec2(x + sw, cy), Col(it.col), 2.5f * scale);
+    else if (it.kind == 1) DashedLine(dl, ImVec2(x, cy), ImVec2(x + sw, cy), Col(it.col), 2.0f * scale, 5 * scale, 3 * scale);
+    else dl->AddRectFilled(ImVec2(x, y + 2 * scale), ImVec2(x + sw, y + lh - 2 * scale), Col(it.col, 0.12f), 3 * scale);
+    dl->AddText(ImVec2(x + sw + 8 * scale, y), Col(kDim), it.text.c_str());
+    x += iw;
+  }
+  ImGui::Dummy(ImVec2(w, y - p.y + lh + 2 * scale));
+}
+
 // Curva de la partida que decidio el limite: % de los segundos en que el juego alcanzo cada ritmo.
 static void DrawCurveChart(const LimitExplain& e, double limitReal, float w) {
   const float h = 190 * scale;
@@ -7473,6 +7510,14 @@ static void DrawCurveChart(const LimitExplain& e, double limitReal, float w) {
     VMark(e.low1, kDim, true, Fmt(T("1 %% más lento: %.0f", "slowest 1 %%: %.0f"), e.low1), false);
   VMark(limitReal, kAmber, false, Fmt(T("límite: %.0f", "limit: %.0f"), limitReal), true);
   ImGui::Dummy(ImVec2(w, h));
+  VSpace(6);
+  std::vector<ChartKey> leg;
+  leg.push_back({0, kBlue, e.curveSeconds ? T("% de los segundos que alcanzaron cada ritmo", "% of seconds that reached each pace")
+                                          : T("% de los fotogramas que alcanzaron cada ritmo", "% of frames that reached each pace")});
+  if (e.fluid || e.curveSeconds) leg.push_back({1, kDim, T("90 %", "90 %")});
+  if (!e.fluid && e.low1 > 0) leg.push_back({1, kDim, T("1 % más lento de la partida", "session's slowest 1 %")});
+  leg.push_back({0, kAmber, T("límite", "limit")});
+  DrawChartKey(leg, w);
 }
 
 // La ultima partida, segundo a segundo, frente al umbral del 13 %.
@@ -7481,37 +7526,58 @@ static void DrawSessionChart(const SessionExplain& x, float w) {
   const ImVec2 p = ImGui::GetCursorScreenPos();
   ImDrawList* dl = ImGui::GetWindowDrawList();
   dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), Col(kCardHi), 8 * scale);
-  const float L = p.x + 52 * scale, R = p.x + w - 16 * scale, Tp = p.y + 14 * scale, B = p.y + h - 28 * scale;
+  const float L = p.x + 52 * scale, R = p.x + w - 58 * scale, Tp = p.y + 14 * scale, B = p.y + h - 28 * scale;
   const double thr = x.limit * (1.0 - cfg::kJnd);
-  double lo = thr * 0.85, hi = x.limit * 1.08;
-  for (float v : x.low)
-    if (v > 0) lo = std::min(lo, static_cast<double>(v) * 0.95);
-  lo = std::max(0.0, std::floor(lo / 10) * 10);
+  // Escala fija relativa al limite, del 50 % al 110 % (0.67.3). Antes se ajustaba a la caida mas profunda
+  // de cada partida y empezaba cerca de ella: una caida pequena llenaba la grafica y parecia peor de lo que
+  // era, y una partida no se podia comparar con otra. Asi el umbral queda siempre a la misma altura; una
+  // caida por debajo de la mitad del limite se dibuja en el borde inferior.
+  const double lo = x.limit * 0.5, hi = x.limit * 1.10;
   const size_t n = x.fps.size();
   auto sx = [&](double i) { return L + static_cast<float>(i / std::max<double>(1, n - 1)) * (R - L); };
   auto sy = [&](double y) { return B - static_cast<float>((std::clamp(y, lo, hi) - lo) / (hi - lo)) * (B - Tp); };
-  for (double yv : {lo, std::round(thr), static_cast<double>(x.limit)}) {
+  // Izquierda, FPS; derecha, cuanto por debajo del limite.
+  const double marks[] = {1.0, 1.0 - cfg::kJnd, 0.7, 0.5};
+  for (double f : marks) {
+    const double yv = x.limit * f;
+    if (f < 1.0 - cfg::kJnd - 1e-9)
+      dl->AddLine(ImVec2(L, sy(yv)), ImVec2(R, sy(yv)), Col(kLine), 1.0f);
     const std::string lab = Fmt("%.0f", yv);
     const ImVec2 ts = ImGui::CalcTextSize(lab.c_str());
     dl->AddText(ImVec2(L - ts.x - 8 * scale, sy(yv) - ts.y * 0.5f), Col(kDim), lab.c_str());
+    const std::string pc = f >= 1.0 ? std::string(T("límite", "limit")) : Fmt("−%.0f %%", 100.0 * (1.0 - f));
+    dl->AddText(ImVec2(R + 8 * scale, sy(yv) - ts.y * 0.5f), Col(kDim), pc.c_str());
   }
-  dl->AddLine(ImVec2(L, sy(lo)), ImVec2(R, sy(lo)), Col(kLine), 1.0f);
   // Ultimo minuto: no cuenta para las reglas.
   const double trimPts = x.trimSecs / std::max(1.0f, x.secsPerPoint);
   if (n > trimPts + 2) {
     const float a = sx(n - 1 - trimPts);
     dl->AddRectFilled(ImVec2(a, Tp), ImVec2(R, B), Col(kText, 0.05f));
     const char* lab = T("no cuenta", "doesn't count");
-    dl->AddText(ImVec2((a + R - ImGui::CalcTextSize(lab).x) * 0.5f, B - ImGui::GetTextLineHeight() - 4 * scale), Col(kDim), lab);
+    // Centrada en la zona, pero sin salirse de la grafica (con 15 s la zona es estrecha).
+    const float lw = ImGui::CalcTextSize(lab).x;
+    const float lx = std::min((a + R - lw) * 0.5f, R - lw - 4 * scale);
+    dl->AddText(ImVec2(lx, B - ImGui::GetTextLineHeight() - 4 * scale), Col(kDim), lab);
   }
   DashedLine(dl, ImVec2(L, sy(thr)), ImVec2(R, sy(thr)), Col(kAmber), 2.0f * scale, 6 * scale, 4 * scale);
   for (size_t i = 1; i < n; ++i)
     if (x.fps[i - 1] > 0 && x.fps[i] > 0)
-      dl->AddLine(ImVec2(sx(i - 1), sy(x.fps[i - 1])), ImVec2(sx(i), sy(x.fps[i])), Col(kGray), 1.5f * scale);
-  for (size_t i = 1; i < n && i < x.low.size(); ++i)
-    if (x.low[i - 1] > 0 && x.low[i] > 0)
-      dl->AddLine(ImVec2(sx(i - 1), sy(x.low[i - 1])), ImVec2(sx(i), sy(x.low[i])),
-                  Col(x.low[i - 1] < thr && x.low[i] < thr ? kRed : kBlue), 2.5f * scale);
+      dl->AddLine(ImVec2(sx(i - 1), sy(x.fps[i - 1])), ImVec2(sx(i), sy(x.fps[i])), Col(kGray), 2.5f * scale);
+  for (size_t i = 1; i < n && i < x.low.size(); ++i) {
+    if (!(x.low[i - 1] > 0 && x.low[i] > 0)) continue;
+    const double y0 = x.low[i - 1], y1 = x.low[i];
+    const ImVec2 a(sx(i - 1), sy(y0)), b(sx(i), sy(y1));
+    const bool below0 = y0 < thr, below1 = y1 < thr;
+    if (below0 == below1) {
+      dl->AddLine(a, b, Col(below0 ? kRed : kBlue), 2.0f * scale);
+    } else {
+      // El tramo cruza el umbral: rojo solo la parte de abajo (0.67.1; antes, todo el tramo en azul).
+      const double t = (thr - y0) / (y1 - y0);
+      const ImVec2 m(a.x + static_cast<float>(t) * (b.x - a.x), sy(thr));
+      dl->AddLine(a, m, Col(below0 ? kRed : kBlue), 2.0f * scale);
+      dl->AddLine(m, b, Col(below1 ? kRed : kBlue), 2.0f * scale);
+    }
+  }
   const double totalMin = n * x.secsPerPoint / 60.0;
   for (int k = 0; k <= 4; ++k) {
     const double m = totalMin * k / 4.0;
@@ -7521,6 +7587,16 @@ static void DrawSessionChart(const SessionExplain& x, float w) {
     dl->AddText(ImVec2(std::clamp(px - ts.x * 0.5f, L, R - ts.x), B + 6 * scale), Col(kDim), lab.c_str());
   }
   ImGui::Dummy(ImVec2(w, h));
+  VSpace(6);
+  std::vector<ChartKey> leg;
+  leg.push_back({0, kGray, x.fg ? T("ritmo real de cada segundo", "each second's real pace") : T("ritmo de cada segundo", "each second's pace")});
+  if (!x.fg) {
+    leg.push_back({0, kBlue, T("1 % más lento de los últimos 20 s", "slowest 1 % of the last 20 s")});
+    leg.push_back({0, kRed, T("por debajo del umbral", "below the threshold")});
+  }
+  leg.push_back({1, kAmber, Fmt(T("umbral: límite − 13 %% (%.0f)", "threshold: limit − 13 %% (%.0f)"), thr)});
+  if (n > trimPts + 2) leg.push_back({2, kText, T("cierre del juego: no cuenta", "game closing: doesn't count")});
+  DrawChartKey(leg, w);
 }
 
 // Una regla con su resultado: 1 = se cumple, 0 = no, -1 = informativa.
@@ -7665,18 +7741,23 @@ static void DrawLimitExplain(const UiChange& c, float w) {
     if (bySeconds && e.kind != LimitExplain::FailMedian)
       ImGui::TextColored(kDim, "%s", T("Gráfica guardada con la 0.63, por segundos: la app decide con los fotogramas, así que el límite puede quedar un poco a la izquierda del cruce. Desde la próxima decisión será por fotogramas.",
                                        "Chart saved with 0.63, by seconds: the app decides with frames, so the limit can sit a little left of the crossing. From the next decision it will be by frames."));
+    if (fg > 1)
+      ImGui::TextColored(kDim, "%s", T("Con generación de fotogramas, la curva es de los fotogramas reales (los que calcula el juego), solo de los tramos con la generación más habitual: los menús, que muchos juegos muestran sin generación, quedan fuera.",
+                                       "With frame generation, the curve is of the real frames (the ones the game computes), only from the stretches with the most common frame generation: menus, which many games show without it, are left out."));
     VSpace(6);
     DrawCurveChart(e, e.to > 0 ? e.to : limitReal, inner);
   }
   // 3. Comprobacion: la ultima partida.
-  if (x.limit > 0 && x.fps.size() >= 10 && !x.fg) {
+  if (x.limit > 0 && x.fps.size() >= 10) {
     VSpace(14);
     ImGui::PushFont(fontStrong);
     ImGui::TextUnformatted(Fmt(T("Comprobación: la última partida (%s, %.0f min), con %.0f", "Check: the last session (%s, %.0f min), with %.0f"),
                                ShortDate(x.when).c_str(), x.minutes, x.limit).c_str());
     ImGui::PopFont();
-    ImGui::TextColored(kDim, "%s", T("Ritmo de cada segundo (gris) y 1 % más lento de los últimos 20 segundos (azul; rojo bajo el umbral), frente al umbral del 13 %. La línea azul muestra dónde están los tropiezos; la regla usa el 1 % más lento de toda la partida (abajo).",
-                                     "Each second's pace (gray) and the slowest 1 % of the last 20 seconds (blue; red below the threshold), against the 13 % threshold. The blue line shows where the dips are; the rule uses the whole session's slowest 1 % (below)."));
+    ImGui::TextColored(kDim, "%s", x.fg ? T("Ritmo real de cada segundo (gris), frente al umbral del 13 %. Con generación de fotogramas las reglas no ajustan el límite: la gráfica es solo informativa.",
+                                            "Each second's real pace (gray), against the 13 % threshold. With frame generation the rules don't adjust the limit: the chart is for information only.")
+                                       : T("Ritmo de cada segundo (gris) y 1 % más lento de los últimos 20 segundos (azul; rojo bajo el umbral), frente al umbral del 13 %. La línea azul muestra dónde están los tropiezos; la regla usa el 1 % más lento de toda la partida (abajo).",
+                                           "Each second's pace (gray) and the slowest 1 % of the last 20 seconds (blue; red below the threshold), against the 13 % threshold. The blue line shows where the dips are; the rule uses the whole session's slowest 1 % (below)."));
     VSpace(6);
     DrawSessionChart(x, inner);
   }

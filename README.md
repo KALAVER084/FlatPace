@@ -2,7 +2,7 @@
 
 **FlatPace measures your games and applies the frame-rate limit that makes them run as steadily as possible.** The idea behind it: a steady pace feels smoother than higher but uneven FPS.
 
-Current version: **0.66.1** · Windows 10 (1803 or later) and Windows 11. [User guide](GUIDE.md) · [Technical documentation](TECHNICAL.md) · [License](LICENSE) · [Español](README.es.md). The changelog ([CHANGELOG.md](CHANGELOG.md)) is in Spanish; the app has an English interface (ES | EN selector).
+Current version: **0.67.3** · Windows 10 (1803 or later) and Windows 11. [User guide](GUIDE.md) · [Technical documentation](TECHNICAL.md) · [License](LICENSE) · [Español](README.es.md). The changelog ([CHANGELOG.md](CHANGELOG.md)) is in Spanish; the app has an English interface (ES | EN selector).
 
 ![FlatPace's overlay in Greylock, without a limit and with the limit the app chose](docs/img/overlay-antes-despues.png)
 
@@ -62,7 +62,7 @@ Screenshots with the English interface.
 - With AMD and Intel, "GPU at max" and the driver's low latency mode aren't available, and you turn on the driver's VSync yourself; without RTSS, you also apply the limit yourself.
 - It doesn't remove the game's own stutters (shader compilation, loading): it detects and shows them.
 - Frame generation can make motion uneven even when the pace is steady: FlatPace measures and explains it, but no limit fixes it.
-- PC latency only appears if the game provides the necessary data; it hasn't in the games tested so far.
+- PC latency only appears if the game provides the necessary data (some games with Reflex; among those tested, Control Resonant).
 - Without a limit (a game's first session, or after *Undo*), the game keeps the GPU fully busy and the overlay may stutter: its images wait behind the game's. With the limit applied it's smooth.
 - It uses PresentMon 2.6.0, which has known bugs; if it stops sending data mid-session, FlatPace restarts it.
 - With FlatPace in front, the *Print Screen* key doesn't open the Windows 11 snipping tool: FlatPace runs as administrator, and Windows doesn't let the tool see the keyboard while an administrator window has the focus. *Win + Print Screen* (full screen) and *Win + Shift + S* do work.
@@ -103,6 +103,7 @@ The same study (Naylor-Lovell, Chalmers and Debattista, 2025) found something el
 - **Steady pace:** a limit the game holds in its worst moments too.
 - **With G-SYNC/FreeSync,** the limit can be any value, always below the display's maximum so it stays in range (for example, at most 225 FPS on a 240 Hz display).
 - **Without VRR,** the limit has to divide the display's real refresh rate exactly (240, 120, 80, 60… on a 240 Hz display), so every image always lasts the same number of refreshes.
+- **With frame generation** (DLSS Frame Generation and similar), the app separates real frames (the ones the game computes) from generated ones, and applies the formulas only to the real ones, from the stretches with the session's most common frame generation: menus, which many games show without it, are left out. The limit is set on screen: with ×2, 31 real are 62 on screen. Applying them to the images on screen wouldn't give the same result: the game hands over the real and the generated frame almost together (in Control Resonant, 0.4 ms apart) and, without a limit, they show up on screen very unevenly (some 5 ms after the previous one, others 22 ms). The formulas would measure that unevenness, not what the game sustains: in Control Resonant they would have given 45 on screen instead of 63. With frame generation, the adjustment rules don't change the limit on their own, because real frames change pace with it: the app only checks it.
 
 **How it checks that it works.** In the next session, the limit is confirmed (*"Limit working"*) if the game runs at its pace within ±1.5 % and fewer than 10 % of frames arrive more than 7 % early. This check is done by measuring the game, so it works with any GPU.
 

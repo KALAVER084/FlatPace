@@ -2,7 +2,7 @@
 
 **FlatPace mide tus juegos y aplica el límite de FPS que hace que vayan lo más estables posible.** La idea de fondo: un ritmo constante se siente más fluido que unos FPS más altos pero irregulares.
 
-Versión actual: **0.66.1** · Windows 10 (1803 o posterior) y Windows 11 · [Guía de uso](GUIA.md) · [Documentación técnica](TECNICO.md) · [Historial de cambios](CHANGELOG.md) · [Licencia](LICENSE) · [English](README.md)
+Versión actual: **0.67.3** · Windows 10 (1803 o posterior) y Windows 11 · [Guía de uso](GUIA.md) · [Documentación técnica](TECNICO.md) · [Historial de cambios](CHANGELOG.md) · [Licencia](LICENSE) · [English](README.md)
 
 ![El overlay de FlatPace en Greylock, sin límite y con el límite que eligió la app](docs/img/overlay-antes-despues.png)
 
@@ -62,7 +62,7 @@ Capturas con la interfaz en inglés.
 - Con AMD e Intel, "GPU al máximo" y el modo de baja latencia del driver no están disponibles, y el VSync del driver lo activas tú; sin RTSS, el límite también lo aplicas tú.
 - No elimina los tirones propios del juego (compilación de shaders, cargas): los detecta y los muestra.
 - La generación de fotogramas puede descompasar el movimiento aunque el ritmo sea constante: FlatPace lo mide y lo explica, pero ningún límite lo corrige.
-- La latencia del PC solo aparece si el juego entrega los datos necesarios; en los juegos probados aún no lo ha hecho.
+- La latencia del PC solo aparece si el juego entrega los datos necesarios (algunos juegos con Reflex; entre los probados, Control Resonant).
 - Sin límite (la primera partida de un juego, o tras *Deshacer*), el juego ocupa la GPU al máximo y el overlay puede ir a tirones: sus imágenes esperan detrás de las del juego. Con el límite puesto va fluido.
 - Usa PresentMon 2.6.0, que tiene fallos conocidos; si deja de enviar datos a mitad de partida, FlatPace lo reinicia.
 - Con FlatPace en primer plano, la tecla *Impr Pant* no abre la herramienta de recortes de Windows 11: FlatPace se ejecuta como administrador, y Windows no deja que la herramienta vea el teclado mientras una ventana de administrador tiene el foco. *Win + Impr Pant* (pantalla completa) y *Win + Shift + S* sí funcionan.
@@ -103,6 +103,7 @@ El mismo estudio (Naylor-Lovell, Chalmers y Debattista, 2025) encontró otra cos
 - **Ritmo constante:** un límite que el juego sostiene también en sus peores momentos.
 - **Con G-SYNC/FreeSync,** el límite puede ser cualquier valor, siempre por debajo del máximo de la pantalla para no salirse de su rango (por ejemplo, como mucho 225 FPS en una de 240 Hz).
 - **Sin VRR,** el límite tiene que dividir exactamente los Hz reales de la pantalla (240, 120, 80, 60… en una de 240 Hz), para que cada imagen dure siempre el mismo número de refrescos.
+- **Con generación de fotogramas** (DLSS Frame Generation y similares), la app separa los fotogramas reales (los que calcula el juego) de los generados, y aplica las fórmulas solo a los reales, de los tramos con la generación más habitual en la partida: los menús, que muchos juegos muestran sin generación, quedan fuera. El límite se pone en pantalla: con ×2, 31 reales son 62 en pantalla. Aplicarlas a las imágenes de la pantalla no daría lo mismo: el juego entrega el fotograma real y el generado casi a la vez (en Control Resonant, con 0,4 ms de separación) y, sin límite, aparecen en pantalla de forma muy irregular (unas a los 5 ms de la anterior, otras a los 22 ms). Las fórmulas medirían esa irregularidad, no lo que el juego sostiene: en Control Resonant habrían dado 45 en pantalla en lugar de 63. Con generación, las reglas de ajuste no cambian el límite por su cuenta, porque los fotogramas reales cambian de ritmo con ella: la app solo lo comprueba.
 
 **Cómo comprueba que funciona.** En la partida siguiente, el límite se da por bueno (*"Límite funcionando"*) si el juego va a su ritmo con un margen de ±1,5 % y menos del 10 % de los fotogramas llegan más de un 7 % antes de tiempo. Esta comprobación se hace midiendo el juego, así que sirve con cualquier gráfica.
 

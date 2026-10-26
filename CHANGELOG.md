@@ -2,6 +2,24 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). La versión más reciente va primero.
 
+## 0.67.3
+- **La gráfica de la comprobación ya no exagera las caídas.** Su escala vertical se ajustaba a la caída más profunda de cada partida y empezaba cerca de ella: una bajada del 1 % más lento ocupaba casi toda la altura y parecía peor de lo que era, y una partida no se podía comparar con otra. Ahora la escala es fija respecto al límite, del 50 % al 110 % (con 126, de 63 a 139): el umbral del 13 % queda siempre a la misma altura, y a la derecha se lee cuánto cae cada tramo (*"−13 %"*, *"−30 %"*, *"−50 %"*). No se empieza en 0 para no aplastar la zona entre el límite y el umbral, que es la que deciden las reglas.
+- **La línea gris (el ritmo de cada segundo, lo habitual) es más gruesa,** y la del 1 % más lento (lo peor de cada momento), algo más fina, para que la vista no se vaya solo a lo peor.
+
+## 0.67.2
+- **Corregido:** en la leyenda de la comprobación, el signo menos de *"umbral: límite − 13 %"* salía como *"?"*: la fuente de la ventana no cargaba ese carácter. Ahora sí.
+
+## 0.67.1
+- **Las gráficas del desplegable de *Juegos* llevan leyenda:** una muestra de cada línea (continua, punteada o zona sombreada) y lo que significa, para no tener que leer el texto de encima. En la curva: la curva de la partida, la línea del 90 % o del 1 % más lento y el límite. En la comprobación: el ritmo de cada segundo, el 1 % más lento de los últimos 20 s, su parte bajo el umbral, el umbral (con su valor) y el cierre del juego, que no cuenta.
+- **Corregido: el rojo de la comprobación empezaba tarde.** Un tramo de la línea solo se pintaba en rojo si sus dos extremos quedaban bajo el umbral, y el tramo que lo cruzaba salía entero en azul, también por debajo. Como la gráfica reduce la partida a unos 240 puntos, en las caídas bruscas ese tramo era largo. Ahora se parte en el punto de cruce.
+- **La leyenda de *Ahora*** define el tirón completo: un fotograma de más de 2,5 veces lo normal **y al menos 8 ms más largo**.
+
+## 0.67
+- **El desplegable de *Juegos*, también con generación de fotogramas.** Hasta ahora, en esos juegos solo mostraba la fórmula. Ahora muestra la curva de *"de dónde sale"*, con los fotogramas reales de los tramos con la generación más habitual en la partida (los mismos con los que se decide el límite; los menús, que muchos juegos muestran sin generación, quedan fuera), y la gráfica de la comprobación con el ritmo real de cada segundo, marcada como informativa: con generación, las reglas no ajustan el límite.
+- **El aviso de la generación que se activa y desactiva sola** dice ahora que lo más probable es que sean los menús (y que entonces no hay que hacer nada), antes que un modo dinámico del juego. En Control Resonant eran los menús, y el aviso anterior llevaba a pensar otra cosa.
+- **Corregido:** la etiqueta *"no cuenta"* de la gráfica de la comprobación se salía por la derecha cuando la zona del cierre era estrecha (15 s).
+- **README y guías:** cómo trata la app la generación de fotogramas y por qué aplica las fórmulas a los fotogramas reales. Aplicadas a las imágenes de la pantalla no darían lo mismo: el juego entrega el fotograma real y el generado casi a la vez (en Control Resonant, con 0,4 ms de separación) y, sin límite, aparecen en pantalla de forma muy irregular (unas a los 5 ms de la anterior, otras a los 22 ms); las fórmulas medirían esa irregularidad y habrían dado 45 en pantalla en lugar de 63. Y la latencia del PC ya no es *"aún sin ver en ningún juego"*: Control Resonant la entrega.
+
 ## 0.66.1
 - **Corregido: PresentMon se reiniciaba al empezar algunas partidas.** La vigilancia lo da por colgado si nadie le envía datos durante 6 s. Hasta la 0.65.1, las imágenes del propio overlay y de la ventana contaban como datos; desde la 0.65.2 esas líneas se descartan antes de analizarlas (para ahorrar), y dejaron de contar: una carga de más de 6 s parecía un PresentMon colgado. Ahora la vigilancia mira si PresentMon sigue enviando líneas, de cualquier programa. El reinicio era casi inofensivo (unos segundos de datos al empezar), pero no tenía que ocurrir.
 - **Corregido: el consumo del lector de PresentMon podía salir negativo** (y faltar el de PresentMon) si este se reiniciaba durante la partida: el hilo y el proceso nuevos restaban el tiempo de los antiguos. Ahora se suma lo que consumieron los anteriores.

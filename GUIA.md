@@ -1,4 +1,4 @@
-# Guía de uso de FlatPace 0.66.1
+# Guía de uso de FlatPace 0.67.3
 
 Esta guía describe la versión actual. Los cambios entre versiones están en el [historial](CHANGELOG.md).
 
@@ -85,9 +85,9 @@ La app **no cambiará nunca** un límite manual: solo comprobará que funciona (
 
 ## 8. Generación de fotogramas (DLSS Frame Generation)
 
-- La app separa los fotogramas reales de los generados. El límite se expresa como *"122 en pantalla (61 reales)"*.
+- La app separa los fotogramas reales de los generados, y **aplica las fórmulas a los reales** (los que calcula el juego), de los tramos con la generación más habitual en la partida. El límite se expresa como *"122 en pantalla (61 reales)"*. No da lo mismo aplicarlas a las imágenes de la pantalla: el juego entrega el fotograma real y el generado casi a la vez, y sin límite aparecen en pantalla de forma irregular, así que las fórmulas medirían esa irregularidad y no lo que el juego sostiene (en Control Resonant, 45 en pantalla en lugar de 63).
 - Los fotogramas reales nunca bajan de 30: por debajo, la latencia es mala.
-- Si la generación se activa o desactiva (muchos juegos lo hacen en menús), la app vuelve a medir. Si el juego la activa y desactiva solo con frecuencia (un modo dinámico o automático), la app lo avisa una vez en *Juegos* y deja de anotar cada cambio: fijar ese modo en el juego da un ritmo más constante.
+- Si la generación se activa o desactiva (muchos juegos lo hacen en menús), la app vuelve a medir. Si cambia con frecuencia, la app lo avisa una vez en *Juegos* y deja de anotar cada cambio: lo más probable es que sean los menús, y entonces no hay que hacer nada; si ocurre jugando y el juego tiene un modo de generación automático o dinámico, fijarlo da un ritmo más constante.
 - Con generación, la gráfica muestra las imágenes **en pantalla** (sección 9), y la app no calcula la capacidad del juego ni sugiere subir el límite, porque los fotogramas reales cambian de ritmo con la generación.
 - La primera vez, aprende sobre qué actúa el limitador del driver en tu equipo (lo que se ve en pantalla o los fotogramas reales).
 - **La generación puede descompasar el movimiento aunque la gráfica esté plana:** en Space Marine 2, más de un tercio de los fotogramas con ritmo perfecto tenían el movimiento descompasado con generación, y casi ninguno sin ella. Ningún límite lo corrige. El resumen de cada partida lo mide (*"Movimiento con ritmo plano"*) y, si es alto, lo explica; si notas el movimiento irregular, prueba el juego sin generación.
@@ -97,7 +97,7 @@ La app **no cambiará nunca** un límite manual: solo comprobará que funciona (
 En una esquina del juego: FPS, 1 % bajo, una etiqueta con el estado del límite y la gráfica de ritmo de los últimos 3 segundos.
 
 - **Azul ("FIJADO 225 fps"):** el límite está confirmado; el juego va a su ritmo.
-- Si el juego entrega los datos necesarios (algunos juegos con Reflex; en los probados hasta ahora, todavía no), la fila de cifras incluye la **latencia del PC** (*"latencia 24 ms"*). Con un límite fijado y sin generación de fotogramas, la compara con la del juego sin límite: *"latencia 18 ms (antes 22)"*. Si la fila no cabe, se quitan primero los datos secundarios.
+- Si el juego entrega los datos necesarios (algunos juegos con Reflex; entre los probados, Control Resonant), la fila de cifras incluye la **latencia del PC** (*"latencia 24 ms"*). Con un límite fijado y sin generación de fotogramas, la compara con la del juego sin límite: *"latencia 18 ms (antes 22)"*. Si la fila no cabe, se quitan primero los datos secundarios.
 - **Rojo ("SIN CONFIRMAR" o "SIN LÍMITE"):** el juego aún no tiene límite, o lo tiene pero todavía no se ha comprobado.
 - La gráfica muestra las **desviaciones** del ritmo: mientras el tiempo de los fotogramas está dentro de la tolerancia (±13 % del objetivo, indicada en la etiqueta: *"objetivo 8,3 ms ±1,1"*), la línea es recta; solo se dibuja lo que se sale. Se aplica igual con y sin límite, así que la diferencia que ves es real. Los **tirones** aparecen en ámbar.
 - **Con generación de fotogramas**, la gráfica dibuja las imágenes **en pantalla** (lo que ves), y la etiqueta lo indica (*"en pantalla 13,9 ms ±1,8"*). Si el juego activa y desactiva la generación por su cuenta, la app lo avisa en *Juegos*.
