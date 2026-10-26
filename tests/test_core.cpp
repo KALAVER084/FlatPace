@@ -34,6 +34,8 @@ static std::atomic<int> g_vrrMinHz{0}, g_vrrMaxHz{0};
 #include "../src/core/decision.h"
 #include "../src/core/limit_request.h"
 #include "../src/core/log_text.h"
+#include "../src/core/limit_memory.h"
+#include "../src/core/explain.h"
 namespace overlay {
 #include "../src/core/pace_basics.h"
 #include "../src/core/pace_series.h"
@@ -1086,6 +1088,196 @@ TEST(LogTranslationsKeepFormat) {
   CHECK(std::string(LogEnglish("mensaje sin traducir %d")) == "mensaje sin traducir %d");
 }
 
+
+// ---- Memoria de limites (0.63) ----
+static LimitMemory::Point MemPt(double low, double p90, double minutes, double limit = 0, bool lc = false, bool pc = false) {
+  LimitMemory::Point p;
+  p.low = static_cast<float>(low);
+  p.p90 = static_cast<float>(p90);
+  p.minutes = static_cast<float>(minutes);
+  p.limit = static_cast<float>(limit);
+  p.lowCens = lc;
+  p.p90Cens = pc;
+  return p;
+}
+TEST(LimitMemoryNeedsTwoSessions) {
+  LimitMemory m;
+  m.Add(MemPt(100, 120, 5));
+  CHECK(m.Limit(false, 0.13) == 0.0);
+  CHECK(m.Limit(true, 0.13) == 0.0);
+  m.Add(MemPt(100, 120, 5));
+  CHECK(m.Limit(false, 0.13) > 0.0);
+  CHECK(m.Limit(true, 0.13) == 120.0);
+}
+TEST(LimitMemoryPrudentForSteadyMeanForMoreFps) {
+  LimitMemory m;
+  m.Add(MemPt(101, 125, 5.0));
+  m.Add(MemPt(100, 122, 3.1));
+  m.Add(MemPt(100, 123, 3.6));
+  // Cota prudente por debajo de la media; Ritmo constante = 1,13 x cota.
+  CHECK(m.low.Lower() < m.low.Mean());
+  CHECK(m.Limit(false, 0.13) == std::floor(1.13 * m.low.Lower() + 1e-9));
+  CHECK(std::fabs(m.Limit(false, 0.13) - 109.0) < 1.5);  // el caso de Greylock de la maqueta
+  CHECK(m.Limit(true, 0.13) >= 122.0 && m.Limit(true, 0.13) <= 124.0);
+}
+TEST(LimitMemoryMoreSpreadIsMoreCautious) {
+  LimitMemory calm, rough;
+  for (double v : {100.0, 101.0, 100.0, 99.0}) calm.Add(MemPt(v, 120, 5));
+  for (double v : {85.0, 115.0, 90.0, 110.0}) rough.Add(MemPt(v, 120, 5));
+  CHECK(rough.low.Lower() < calm.low.Lower());
+}
+TEST(LimitMemoryCensoredOnlyRaises) {
+  LimitMemory m;
+  m.Add(MemPt(100, 120, 5));
+  m.Add(MemPt(100, 120, 5));
+  const double before = m.low.Mean();
+  // El juego no bajo de un limite de 90: "al menos 90" no dice nada nuevo y no baja la estimacion.
+  m.Add(MemPt(90, 90, 5, 90, true, true));
+  CHECK(std::fabs(m.low.Mean() - before) < 1e-9);
+  CHECK(m.sessions == 3);
+  // "Al menos 114", por encima de la estimacion: si la sube.
+  m.Add(MemPt(114, 114, 5, 114, true, true));
+  CHECK(m.low.Mean() > before);
+}
+TEST(LimitMemoryRecentWeighsMore) {
+  LimitMemory m;
+  for (int i = 0; i < 5; ++i) m.Add(MemPt(80, 100, 10));
+  for (int i = 0; i < 5; ++i) m.Add(MemPt(120, 140, 10));
+  CHECK(m.low.Mean() > 105.0);  // va hacia las recientes
+}
+TEST(LimitMemoryShortSessionsIgnored) {
+  LimitMemory m;
+  m.Add(MemPt(100, 120, 0.5));
+  CHECK(m.sessions == 0);
+}
+TEST(LimitMemoryKeepsLastEightPoints) {
+  LimitMemory m;
+  for (int i = 0; i < 12; ++i) m.Add(MemPt(100 + i, 120, 5));
+  CHECK(m.recent.size() == 8);
+  CHECK(std::fabs(m.recent.back().low - 111.0f) < 1e-3);
+}
+TEST(LimitMemoryRoundTrip) {
+  LimitMemory m;
+  m.Add(MemPt(101, 125, 5.0, 129));
+  m.Add(MemPt(114, 114, 3.6, 114, true, true));
+  const LimitMemory r = LimitMemory::Parse(m.Serialize());
+  CHECK(r.sessions == m.sessions);
+  CHECK(r.low.n == m.low.n && r.p90.n == m.p90.n);
+  CHECK(std::fabs(r.low.mean - m.low.mean) < 1e-5);
+  CHECK(r.recent.size() == 2 && r.recent[1].lowCens && r.recent[1].limit == 114.0f);
+  CHECK(LimitMemory::Parse("").sessions == 0);
+  CHECK(LimitMemory::Parse("basura").sessions == 0);
+}
+TEST(LimitMemoryChangeThreshold) {
+  CHECK(!LimitMemory::WorthChanging(109, 114));  // un 4,4 %: dentro del margen de error
+  CHECK(LimitMemory::WorthChanging(105, 114));
+  CHECK(LimitMemory::WorthChanging(120, 114));
+  CHECK(!LimitMemory::WorthChanging(0, 114));
+}
+TEST(SessionMemoryPointFromFrames) {
+  // Sin limite: 8 ms, con un 2 % de fotogramas a 12 ms, durante unos 3 minutos.
+  std::vector<float> real, work;
+  for (int i = 0; i < 25000; ++i) {
+    const float x = (i % 50 == 0) ? 12.0f : 8.0f;
+    real.push_back(x);
+    work.push_back(x);
+  }
+  LimitMemory::Point p = SessionMemoryPoint(real, work, 0, 48, 0);
+  CHECK(p.minutes > 2.0f);
+  CHECK(std::fabs(p.low - 1000.0f / 12.0f) < 2.0f);
+  CHECK(!p.lowCens && !p.p90Cens);
+  // Con un limite de 100 que el juego sostiene siempre (trabajo de 5 ms): censurado.
+  std::vector<float> r2(20000, 10.0f), w2(20000, 5.0f);
+  LimitMemory::Point q = SessionMemoryPoint(r2, w2, 100, 48, 0);
+  CHECK(q.lowCens && q.p90Cens);
+  CHECK(q.low == 100.0f && q.p90 == 100.0f);
+  // Pocos datos: no cuenta.
+  std::vector<float> few(500, 8.0f);
+  CHECK(SessionMemoryPoint(few, few, 0, 48, 0).minutes == 0.0f);
+}
+
+
+// ---- Explicacion de cada limite (desplegable de Juegos, 0.63) ----
+TEST(ExplainCurveCrossesNinetyAtP10) {
+  std::vector<float> rates;
+  for (int i = 0; i < 1000; ++i) rates.push_back(60.0f + 0.1f * i);  // 60..160
+  LimitExplain e;
+  e.SetCurve(rates);
+  CHECK(e.curve.size() == static_cast<size_t>(LimitExplain::kCurvePoints));
+  for (size_t i = 1; i < e.curve.size(); ++i) CHECK(e.curve[i] <= e.curve[i - 1]);  // nunca sube
+  CHECK(e.curve.front() >= 99.0f);
+  // Donde la curva cruza el 90 %: en torno al percentil 10 (70 fps).
+  float cross = 0;
+  for (size_t i = 0; i < e.curve.size(); ++i)
+    if (e.curve[i] < 90.0f) { cross = e.curveLo + i * e.curveStep; break; }
+  CHECK(cross > 66.0f && cross < 74.0f);
+  LimitExplain few;
+  few.SetCurve(std::vector<float>(10, 100.0f));
+  CHECK(few.curve.empty());
+}
+TEST(ExplainPerSecondRatesSkipMenus) {
+  std::vector<float> ms;
+  for (int i = 0; i < 1200; ++i) ms.push_back(10.0f);   // 12 s a 100 fps
+  for (int i = 0; i < 300; ++i) ms.push_back(33.4f);    // ~10 s a 30 fps (menu)
+  const std::vector<float> r = PerSecondRates(ms, 48.0);
+  CHECK(r.size() >= 11 && r.size() <= 12);
+  for (float x : r) CHECK(x >= 48.0f);
+}
+TEST(ExplainRoundTrip) {
+  LimitExplain e;
+  e.kind = LimitExplain::FailTail;
+  e.when = 1792957000;
+  e.from = 129;
+  e.to = 114;
+  e.pct = 60;
+  e.fluid = false;
+  e.minutes = 5.2f;
+  e.low1 = 87.0f;
+  e.p90 = 108.6f;
+  std::vector<float> rates;
+  for (int i = 0; i < 300; ++i) rates.push_back(90.0f + (i % 40));
+  e.SetCurve(rates);
+  const LimitExplain r = LimitExplain::Parse(e.Serialize());
+  CHECK(r.kind == LimitExplain::FailTail && r.when == e.when && r.to == 114.0f && !r.fluid);
+  CHECK(std::fabs(r.low1 - 87.0f) < 0.06f && std::fabs(r.pct - 60.0f) < 0.06f);
+  CHECK(r.curve.size() == e.curve.size());
+  CHECK(std::fabs(r.curveStep - e.curveStep) < 0.001f);
+  CHECK(LimitExplain::Parse("").kind == LimitExplain::None);
+  CHECK(LimitExplain::Parse("x|y").kind == LimitExplain::None);
+  CHECK(!r.curveSeconds);  // version 2 y regla del 1 %: la curva es de fotogramas
+  LimitExplain w;
+  w.kind = LimitExplain::WholeSession;
+  w.to = 118;
+  std::string v1 = w.Serialize();
+  v1[0] = '1';  // un registro guardado con la 0.63
+  const LimitExplain old = LimitExplain::Parse(v1);
+  CHECK(old.kind == LimitExplain::WholeSession && old.to == 118.0f && old.curveSeconds);
+  w.kind = LimitExplain::FailMedian;
+  CHECK(LimitExplain::Parse(w.Serialize()).curveSeconds);
+
+}
+TEST(ExplainSessionSeriesKeepDips) {
+  std::vector<float> f(1000, 114.0f), l(1000, 110.0f);
+  l[503] = 80.0f;  // una caida de un segundo
+  SessionExplain s;
+  s.SetSeries(f, l);
+  CHECK(s.fps.size() <= SessionExplain::kMaxPoints);
+  CHECK(s.secsPerPoint >= 4.0f);
+  float minLow = 1000;
+  for (float x : s.low) minLow = std::min(minLow, x);
+  CHECK(minLow == 80.0f);  // la reduccion no la esconde
+  s.when = 1792957000;
+  s.limit = 114;
+  s.verified = true;
+  s.tailSecs = 1;
+  s.tailPct = 0.6f;
+  s.waitPct = 97;
+  const SessionExplain r = SessionExplain::Parse(s.Serialize());
+  CHECK(r.verified && !r.fg && r.limit == 114.0f && r.fps.size() == s.fps.size());
+  CHECK(std::fabs(r.waitPct - 97.0f) < 0.06f && std::fabs(r.secsPerPoint - s.secsPerPoint) < 0.01f);
+  CHECK(SessionExplain::Parse("").limit == 0.0f);
+}
+
 int main() {
   std::printf("Pruebas de FlatPace (src/core)\n");
   RUN(Percentiles);
@@ -1132,6 +1324,20 @@ int main() {
   RUN(FailureRuleIgnoresClosingMinute);
   RUN(NvDesiredMatchesPreviousEngine);
   RUN(LogTranslationsKeepFormat);
+  RUN(LimitMemoryNeedsTwoSessions);
+  RUN(LimitMemoryPrudentForSteadyMeanForMoreFps);
+  RUN(LimitMemoryMoreSpreadIsMoreCautious);
+  RUN(LimitMemoryCensoredOnlyRaises);
+  RUN(LimitMemoryRecentWeighsMore);
+  RUN(LimitMemoryShortSessionsIgnored);
+  RUN(LimitMemoryKeepsLastEightPoints);
+  RUN(LimitMemoryRoundTrip);
+  RUN(LimitMemoryChangeThreshold);
+  RUN(SessionMemoryPointFromFrames);
+  RUN(ExplainCurveCrossesNinetyAtP10);
+  RUN(ExplainPerSecondRatesSkipMenus);
+  RUN(ExplainRoundTrip);
+  RUN(ExplainSessionSeriesKeepDips);
   RUN(AutoPriorityMovesUnstableGamesToStability);
   RUN(ClimbLadderToCeiling);
   RUN(ClimbRevertsAndRemembersCeiling);

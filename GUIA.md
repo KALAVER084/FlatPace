@@ -1,4 +1,4 @@
-# Guía de uso de FlatPace 0.62.2
+# Guía de uso de FlatPace 0.63.1
 
 Esta guía describe la versión actual. Los cambios entre versiones están en el [historial](CHANGELOG.md).
 
@@ -24,7 +24,7 @@ No hace falta instalar nada ni cambiar ajustes de Windows. Para desinstalar, bor
 La barra lateral tiene cuatro secciones:
 
 - **Ahora:** durante una partida, el juego y un **veredicto en una frase** (*"Va estable a 114 FPS."*, *"Midiendo sin límite."*, *"Comprobando el límite…"*), con el límite explicado debajo; la **gráfica de ritmo** a todo lo ancho (azul cuando el límite está comprobado, tirones en ámbar); tres cifras (FPS reales, FPS en el 1 % más lento y tirones); solo la acción que toca (una recomendación pendiente con su botón, o *Aplicar ya*); y los *Detalles* plegados (G-SYNC, presentación, qué limita al juego, variación del ritmo y pantalla). Sin juego abierto, qué hacer y un resumen de tu última partida. La gráfica se conserva cuando cambias a la app.
-- **Juegos:** con AMD o Intel, el limitador (*Solo recomendar* o RivaTuner, si está instalado; con NVIDIA todo es automático y no aparece), la prioridad general (sección 5), los juegos con límite, *Deshacer todos los cambios* y *Elegir juego*. Cada juego muestra su límite y sus botones: el de su **prioridad**, *Fijar…*, *Deshacer* y, si la app te recomienda algo, el botón para aplicarlo.
+- **Juegos:** con AMD o Intel, el limitador (*Solo recomendar* o RivaTuner, si está instalado; con NVIDIA todo es automático y no aparece), la prioridad general (sección 5), los juegos con límite, *Deshacer todos los cambios* y *Elegir juego*. Cada juego muestra su límite y sus botones: el de su **prioridad**, *Fijar…*, *Deshacer* y, si la app te recomienda algo, el botón para aplicarlo. **Pulsando el nombre de un juego se despliega el porqué de su límite:** la regla y la fórmula con sus números, una gráfica de cuánto tiempo alcanzó cada ritmo la partida que lo decidió, la última partida segundo a segundo frente al umbral del 13 % (el último minuto no cuenta) y el resultado de cada regla (si se comprobó, los tramos por debajo del umbral, si va sobrado y las subidas bloqueadas). Los límites decididos antes de la 0.63 lo muestran desde su próxima decisión.
 - **Equipo:** gráfica, pantalla, driver y estado del VRR con el rango de frecuencias del monitor.
 - **Registro:** todo lo que la app hace y mide, con el botón para abrir el archivo de registro y la casilla **Grabar los datos de cada fotograma**, que guarda un archivo CSV por partida en la carpeta `grabaciones` (botón *Abrir grabaciones*), útil para analizar el ritmo con detalle. Si el juego entrega los datos necesarios (algunos juegos con Reflex), el resumen de cada partida incluye además la **latencia del PC** (desde que el juego lee tu acción hasta que la imagen sale hacia la pantalla), con el límite y sin él. En los juegos probados hasta ahora todavía no ha aparecido. El resumen también dice **qué limita los momentos lentos** (la CPU o la GPU), con el consejo que corresponde: si es la CPU, bajar los gráficos no ayudará, pero sí los ajustes que la cargan (población, física, distancia de visión). Y avisa si la CPU baja de frecuencia justo en esos momentos, algo frecuente en portátiles por calor o energía.
 
@@ -48,7 +48,7 @@ Al pie de la barra: **Aplicar límites** (si está apagado, la app solo mide), *
 
 En *Juegos* hay dos formas de decidir el límite, y la prioridad elige entre ellas:
 
-- **Más FPS:** el límite que el juego alcanza **el 90 % del tiempo**, aceptando caídas breves en los momentos más exigentes. En las pruebas, las caídas perceptibles fueron de alrededor del 1 % del tiempo.
+- **Más FPS:** el límite que alcanzan **el 90 % de los fotogramas** (sin contar los tirones), aceptando caídas breves en los momentos más exigentes. En las pruebas, las caídas perceptibles fueron de alrededor del 1 % del tiempo.
 - **Ritmo constante:** un límite que el juego sostiene incluso en sus peores momentos **sin bajar de forma perceptible** (su 1 % más lento llega como mucho un 13 % tarde, una diferencia que no se nota). Es el ritmo más regular y la línea más plana en la gráfica, a veces con algunos FPS menos.
 
 La prioridad general tiene tres opciones:

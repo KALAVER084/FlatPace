@@ -2,7 +2,7 @@
 
 **FlatPace mide tus juegos y aplica el límite de FPS que hace que vayan lo más estables posible.** La idea de fondo: un ritmo constante se siente más fluido que unos FPS más altos pero irregulares.
 
-Versión actual: **0.62.2** · Windows 10 (1803 o posterior) y Windows 11 · [Guía de uso](GUIA.md) · [Documentación técnica](TECNICO.md) · [Historial de cambios](CHANGELOG.md) · [Licencia](LICENSE) · [English](README.md)
+Versión actual: **0.63.1** · Windows 10 (1803 o posterior) y Windows 11 · [Guía de uso](GUIA.md) · [Documentación técnica](TECNICO.md) · [Historial de cambios](CHANGELOG.md) · [Licencia](LICENSE) · [English](README.md)
 
 ![El overlay de FlatPace en Greylock, sin límite y con el límite que eligió la app](docs/img/overlay-antes-despues.png)
 
@@ -25,7 +25,7 @@ Si Windows muestra "Windows protegió su PC", pulsa *Más información* → *Eje
 - **Elige el límite que tu juego sostiene de verdad** al cerrarlo, con los datos de toda la partida.
 - **Lo aplica en el driver de NVIDIA,** sin tocar el juego, y comprueba que funciona.
 - **Lo sigue ajustando:** lo baja si el juego no lo sostiene y lo sube si va sobrado.
-- **Te explica el porqué:** los tirones, si frena al juego la CPU o la GPU, y un overlay en el juego con la gráfica de ritmo.
+- **Te explica el porqué:** los tirones, si frena al juego la CPU o la GPU, un overlay en el juego con la gráfica de ritmo y, en *Juegos*, de dónde sale cada límite, con su fórmula y sus gráficas.
 - **Todo es reversible y sin conexión,** en español y en inglés.
 
 ## Así se ve
@@ -40,7 +40,7 @@ Capturas con la interfaz en inglés.
 
 ![La sección Ahora: gráfica de ritmo y cifras de la partida](docs/img/ahora.png)
 
-**Juegos** reúne la prioridad y cada juego con su límite, descrito con palabras, y sus botones (prioridad propia, límite manual y deshacer):
+**Juegos** reúne la prioridad y cada juego con su límite, descrito con palabras, y sus botones (prioridad propia, límite manual y deshacer). Al desplegar un juego se ve de dónde sale su límite: la regla y la fórmula con sus números, la curva de la partida que lo decidió, la última partida segundo a segundo frente al umbral del 13 % y el resultado de cada regla:
 
 ![La sección Juegos: prioridad y juegos con límite](docs/img/juegos.png)
 
@@ -78,7 +78,7 @@ La ley de Weber (Weber, 1846) dice que la diferencia mínima que percibimos en u
 
 **Cómo la aplica FlatPace.** La app nunca compara milisegundos fijos: cada umbral de *"se nota / no se nota"* es **un 13 % del ritmo de ese momento**, el extremo más estricto del estudio. Así, la misma regla vale a cualquier velocidad: un fotograma 1 ms más lento es una diferencia perceptible a 240 FPS (un 24 % de los 4,2 ms que dura), pero no a 60 FPS (un 6 % de 16,7 ms). Y como un 13 % menos de FPS equivale a fotogramas un 15 % más largos, el umbral cae dentro del rango del estudio tanto si se mide en FPS como en duración. Se usa en:
 - **La regla de fallos:** un límite falla si el juego queda más de un 13 % por debajo de él de forma sostenida (en tramos de al menos 5 segundos, que sumen un minuto y el 10 % de la partida). Las caídas más cortas se consideran tropiezos aislados y no cuentan.
-- **Las subidas:** cada una es de un 13 %, lo justo para que se note.
+- **Las subidas, y las bajadas cuando se hunde el 1 % más lento:** un escalón del 13 %, lo justo para que se note.
 - ***Ritmo constante*:** el 1 % de fotogramas más lentos puede llegar como mucho un 13 % tarde, así que el límite es 1,13 veces los FPS de ese 1 % más lento. Y si, con *Más FPS*, ese 1 % se hunde más de un 13 % en dos partidas seguidas, el juego pasa a *Ritmo constante*.
 - **El movimiento descompasado:** un fotograma lo está si se dibuja con un error de animación mayor que el 13 % de su duración.
 - **La gráfica de ritmo:** su banda marca ±13 % del tiempo de fotograma (con un mínimo de 0,5 ms y un máximo de 6 ms, que solo actúan por encima de unos 260 FPS o por debajo de unos 22).
@@ -98,7 +98,7 @@ El mismo estudio (Naylor-Lovell, Chalmers y Debattista, 2025) encontró otra cos
 <summary><b>Cómo elige, comprueba y ajusta el límite</b></summary>
 
 **Cómo elige el límite.** Al cerrar el juego, con los datos de toda la partida (sin contar los tirones, fotogramas de más de 2,5 veces lo normal y al menos 8 ms más largos, que ningún límite arregla):
-- **Más FPS:** el ritmo que el juego alcanza el 90 % del tiempo.
+- **Más FPS:** el ritmo que alcanzan el 90 % de los fotogramas de la partida (sin contar los tirones).
 - **Ritmo constante:** un límite que el juego sostiene también en sus peores momentos.
 - **Con G-SYNC/FreeSync,** el límite puede ser cualquier valor, siempre por debajo del máximo de la pantalla para no salirse de su rango (por ejemplo, como mucho 225 FPS en una de 240 Hz).
 - **Sin VRR,** el límite tiene que dividir exactamente los Hz reales de la pantalla (240, 120, 80, 60… en una de 240 Hz), para que cada imagen dure siempre el mismo número de refrescos.
@@ -106,7 +106,7 @@ El mismo estudio (Naylor-Lovell, Chalmers y Debattista, 2025) encontró otra cos
 **Cómo comprueba que funciona.** En la partida siguiente, el límite se da por bueno (*"Límite funcionando"*) si el juego va a su ritmo con un margen de ±1,5 % y menos del 10 % de los fotogramas llegan más de un 7 % antes de tiempo. Esta comprobación se hace midiendo el juego, así que sirve con cualquier gráfica.
 
 **Cómo lo ajusta después.** Al cerrar cada partida:
-- **Si el límite falla** (la regla del 13 %), lo baja al ritmo que el juego sí sostuvo: con G-SYNC/FreeSync, el que superó en el 90 % de los segundos de la partida; sin VRR, el divisor siguiente de los Hz.
+- **Si el límite falla** (la regla del 13 %), lo baja al ritmo que el juego sí sostuvo: con G-SYNC/FreeSync, el que superó en el 90 % de los segundos de la partida; sin VRR, el divisor siguiente de los Hz. Si lo que se hundió fue el 1 % más lento (con *Ritmo constante*), baja un escalón del 13 %.
 - **Si el juego va sobrado toda la partida** (al menos 3 minutos con el límite, ningún tramo por debajo y más del 98 % de los fotogramas esperando al limitador), lo sube un escalón: tras una partida así con *Más FPS*, o dos seguidas con *Ritmo constante*. Si la subida no se sostiene, vuelve al límite anterior y no lo intenta de nuevo en 30 días. Para saberlo usa los datos censurados (ver más abajo).
 - **Si con *Más FPS* los fotogramas más lentos se hunden más de un 13 % en dos partidas seguidas,** el juego es inestable con su límite y pasa a *Ritmo constante*. Solo en esa dirección, para no alternar entre las dos.
 - **El último minuto antes de cerrar el juego no cuenta:** suele ser de menús, salida o algún cuelgue.
@@ -134,6 +134,7 @@ Con un límite, la mayoría de los fotogramas esperan al limitador, así que tod
 - **Una prioridad por juego, automática:** cada juego empieza con *Más FPS* y pasa solo a *Ritmo constante* si resulta inestable con su límite. También puedes elegir una para todos o fijarla a mano en cada juego.
 - **Todo es reversible:** cada juego se puede deshacer por separado, y vuelve exactamente a como estaba.
 - **Diagnóstico:** tirones, qué limita los momentos lentos (la CPU o la GPU) con el consejo que corresponde, rendimiento de la CPU, movimiento descompasado por la generación de fotogramas, modo de presentación, VRR activo, overlay en el juego con la gráfica de ritmo y grabación opcional de cada fotograma para analizar partidas.
+- **El porqué de cada límite:** en *Juegos*, al desplegar un juego, la regla y la fórmula con las que se decidió su límite, la curva de la partida que lo decidió (qué porcentaje de los fotogramas alcanzó cada ritmo), la última partida segundo a segundo frente al umbral del 13 % y el resultado de cada regla.
 - **Ligero:** funciona con prioridad baja y en el modo de eficiencia de Windows 11, para no competir con el juego.
 - **En español y en inglés:** la interfaz y el registro, en el idioma que elijas.
 

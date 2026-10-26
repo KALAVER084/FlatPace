@@ -1,4 +1,4 @@
-# Documentación técnica de FlatPace 0.62.2
+# Documentación técnica de FlatPace 0.63.1
 
 Este documento explica cómo funciona FlatPace por dentro: arquitectura, algoritmos, fórmulas, formatos de datos y las fuentes en que se basan sus decisiones.
 
@@ -109,6 +109,8 @@ Si el monitor ofrece otras frecuencias en la resolución actual y alguna permite
 | `registro-AAAAMMDD-HHMMSS.txt` | Carpeta del programa | Registro completo de cada ejecución |
 | `grabaciones/grabacion-juego.exe-AAAAMMDD-HHMMSS.csv` | Carpeta del programa | Opcional: un fotograma por fila (ver formato) |
 
+**Por qué cada juego tiene su límite (0.63):** en `equipo.txt`, `explica|<juego>` guarda cómo se decidió el límite actual (la regla, sus números y la curva de la partida que lo decidió: el porcentaje de los segundos que alcanzaron cada ritmo, sin los que quedan por debajo del rango del VRR) y `partida|<juego>`, la última partida con el límite (el ritmo y el 1 % más lento de cada segundo, reducidos a 240 puntos conservando las caídas, y el resultado de cada regla). Solo los lee el desplegable de *Juegos*: ninguna decisión. Formato y funciones en `src/core/explain.h`.
+
 **Formato de `cambios-aplicados.txt` (v2), separado por tabuladores:**
 `v2  exe  creado(0/1)  método(0 límite / 1 VSync)  divisor  fps  n  [id_hex  tenía(0/1)  original_hex]×n` seguido de campos opcionales: `fg k frl`, `hz frecuencia`, `ok 1` (aceptado), `base fps_reales`, `vrr 1`, `manual 1` (puesto por el usuario: la app no lo cambia).
 
@@ -170,6 +172,7 @@ El de datos censurados ya interviene en una decisión: decide si el juego va sob
 - **PresentMon 2.6.0** tiene fallos conocidos con las opciones que usa FlatPace (issue 695 de PresentMon): puede acumular datos internos y dejar de entregar fotogramas, por ejemplo al desactivar la generación de fotogramas en algunos juegos. Desde la 0.51.3, FlatPace lo reinicia si deja de entregar datos con el juego en primer plano durante más de 6 s. Conviene actualizarlo cuando Intel publique una versión corregida.
 - **Latencia del PC:** la medida está integrada, pero en los juegos probados PresentMon no la ha entregado (sección 2.5).
 - **Generación de fotogramas:** descompasa el movimiento aunque el ritmo sea plano (sección 2.3); ningún límite lo corrige, y FlatPace solo lo informa.
+- **Memoria de límites (preparada, sin usar):** `src/core/limit_memory.h` decide con varias partidas en lugar de una (la cota prudente del 1 % más lento para *Ritmo constante*, la media del ritmo del 90 % para *Más FPS*, con las partidas censuradas como cota inferior que solo puede subir la estimación), y `tools/replay_memory.cpp` la reproduce con grabaciones reales. En Greylock dio límites más estables (ningún salto de más de un 13 %, frente a 8 con una sola partida), pero con *Ritmo constante* bajaría el límite unos 12 FPS para cubrir las zonas más pesadas, una diferencia por debajo de lo perceptible. Con un solo juego medido no basta para cambiar el núcleo de las decisiones: se activará si lo confirman más juegos y equipos.
 - **Validar los modelos estadísticos con grabaciones reales** y, después, dejar que influyan en las decisiones (subir límites con la capacidad estimada, decidir con la memoria del juego y con la fase más exigente).
 - Validación en más equipos (sobremesa, sin VRR, AMD), monitores y juegos: todo lo medido procede de un portátil con RTX 4080 y pantalla de 240 Hz con G-SYNC, y el equipo puede cambiar las conclusiones (como pasó con "GPU al máximo").
 
@@ -187,7 +190,7 @@ Windows: `cmake -B build && cmake --build build --config Release`. Dear ImGui (c
 
 ## 13. Pruebas automáticas
 
-`tests/test_core.cpp` prueba la lógica de `src/core` sin necesitar Windows (417 comprobaciones, incluidas las de que cada traducción del registro conserva los huecos de su original; entre ellas, que la traducción a NVIDIA produce exactamente los ajustes de versiones anteriores): percentiles y variación del ritmo, consistencia, detector de límites, recomendaciones con y sin VRR (techo, rango VRR del monitor y LFC, Más FPS), lectura del EDID, gráfica de ritmo (tolerancia, escala, tirones, modo en pantalla y estabilidad de los tramos al desplazarse y en ambos bordes), los modelos estadísticos (recuperación de la capacidad con datos censurados, detección de fases y su resistencia a picos aislados, memoria por juego y reglas de sugerencia) y el ciclo de decisión (verificación, regla de fallos, bajada tras un fallo, decisión al cerrar y simulaciones de varias partidas seguidas que comprueban que no hay espiral descendente). Cada prueba fija un comportamiento ya validado con partidas reales o en simulación.
+`tests/test_core.cpp` prueba la lógica de `src/core` sin necesitar Windows (528 comprobaciones, entre ellas las de los registros del desplegable de *Juegos* y las de la memoria de límites; incluidas las de que cada traducción del registro conserva los huecos de su original; entre ellas, que la traducción a NVIDIA produce exactamente los ajustes de versiones anteriores): percentiles y variación del ritmo, consistencia, detector de límites, recomendaciones con y sin VRR (techo, rango VRR del monitor y LFC, Más FPS), lectura del EDID, gráfica de ritmo (tolerancia, escala, tirones, modo en pantalla y estabilidad de los tramos al desplazarse y en ambos bordes), los modelos estadísticos (recuperación de la capacidad con datos censurados, detección de fases y su resistencia a picos aislados, memoria por juego y reglas de sugerencia) y el ciclo de decisión (verificación, regla de fallos, bajada tras un fallo, decisión al cerrar y simulaciones de varias partidas seguidas que comprueban que no hay espiral descendente). Cada prueba fija un comportamiento ya validado con partidas reales o en simulación.
 
 - Linux/macOS: `sh tests/run_tests.sh`
 - Windows (MSVC): `tests\run_tests.bat`, o `ctest` tras compilar con CMake.

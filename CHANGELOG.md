@@ -2,6 +2,23 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). La versión más reciente va primero.
 
+## 0.63.1
+- **Corregido: la curva del desplegable no era el cálculo de la decisión.** Contaba segundos y quitaba los que quedan por debajo del rango de G-SYNC, pero la decisión con la partida completa usa los fotogramas reales sin los tirones (más de 2,5 veces lo normal): *Más FPS* toma el ritmo que alcanza el 90 % de ellos, y *Ritmo constante*, 1,13 veces el de su 1 % más lento. Por eso el límite no caía justo donde la curva cruzaba el 90 % (en Greylock, 118 frente a unos 121). Ahora la curva usa esos fotogramas y cruza el 90 % en el límite. Con la regla de fallos, que sí usa segundos, la curva es la de esos segundos. Los registros guardados con la 0.63 se siguen mostrando por segundos, con una nota.
+- **Corregido el texto que lo explicaba:** decía que no cuentan los segundos por debajo del rango de G-SYNC; lo que no cuenta son los tirones. La misma imprecisión estaba en el README y en las guías (*Más FPS*: *"el 90 % del tiempo"*): es el 90 % de los fotogramas, sin contar los tirones.
+- **Corregido:** el signo *≥* aparecía como *?* (la fuente de la ventana no lo tiene): ahora *"90 % de los fotogramas a 118 FPS o más"*. Las etiquetas de las líneas de la gráfica llevan fondo y no se montan sobre la curva. Y el apartado *Reglas* ya no sale vacío tras una decisión: dice que la comprobación aparecerá después de la próxima partida con ese límite.
+- **README:** el desplegable también aparece en la lista detallada de *Cómo funciona*.
+- 528 comprobaciones automáticas.
+
+## 0.63
+- **Nuevo: el porqué de cada límite, en *Juegos*.** Pulsando el nombre de un juego se despliega: la regla con la que se decidió su límite y la fórmula con sus números (por ejemplo, *"129 ÷ 1,13 = 114 FPS"* tras la regla del 1 % más lento); una gráfica de cuánto tiempo alcanzó cada ritmo la partida que lo decidió (el porcentaje de los segundos que llegaron a cada ritmo o más; con *Más FPS*, el límite está donde la curva cruza el 90 %); la última partida segundo a segundo, con el ritmo y el 1 % más lento frente al umbral del 13 % (el último minuto, que no cuenta, sombreado); y el resultado de cada regla (comprobado, tramos por debajo del umbral, si va sobrado, subidas bloqueadas 30 días). Con generación de fotogramas, sin G-SYNC o con un límite manual explica por qué las reglas de ajuste no actúan. Los límites decididos antes de esta versión muestran su detalle desde su próxima decisión.
+- El motor guarda dos registros por juego (`explica|` y `partida|` en `equipo.txt`; formato en `src/core/explain.h`) que solo lee el desplegable: **ninguna decisión cambia en esta versión.**
+- **Memoria de límites, preparada pero sin usar** (`src/core/limit_memory.h`, con sus pruebas, y `tools/replay_memory.cpp`, que la reproduce con grabaciones reales). Se estudió decidir cada límite con varias partidas en lugar de una: con las grabaciones de Greylock dio límites más estables, pero con *Ritmo constante* los bajaría unos 12 FPS para cubrir las zonas más pesadas, una diferencia por debajo de lo perceptible frente a unas caídas que la app actual ya corrige en una partida. Con un solo juego medido, no se cambia el núcleo de las decisiones; se activará si lo confirman más juegos.
+- **README:** las bajadas por el 1 % más lento son de un escalón del 13 % (el texto decía que bajaban al ritmo del 90 % de los segundos, que es la otra regla), y se describe el desplegable de *Juegos*.
+- 525 comprobaciones automáticas (antes 417).
+
+## 0.62.3
+- **Corregido: el aviso azul de la ventana no desaparecía nunca.** Por ejemplo, *"Greylock no sostuvo su límite el 60 % de la partida. La próxima vez usaré: 114 FPS…"* seguía visible dos partidas después de que el 114 quedara comprobado. Ningún sitio borraba el aviso; solo lo sustituía otro. Como todos hablan de la próxima partida (un límite nuevo, un cambio de prioridad, una instrucción para AMD o Intel), ahora se borra al empezar una partida.
+
 ## 0.62.2
 - **La portada de GitHub, en inglés:** `README.md` es ahora el README en inglés, y el español pasa a `README.es.md` (antes, `README.md` era el español y `README.en.md` el inglés). Enlaces actualizados en los dos README y en las guías.
 - **Fuentes citadas en el README:** la ley de Weber (Weber, 1846), el estudio del 13-15 % (Naylor-Lovell, Chalmers y Debattista, 2025) y el de la frecuencia de fotogramas (Denes, Jindal, Mikhailiuk y Mantiuk, 2020), con cita de autor y año donde se usa cada una y una lista de referencias con enlaces.

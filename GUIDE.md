@@ -1,4 +1,4 @@
-# FlatPace 0.62.2 user guide
+# FlatPace 0.63.1 user guide
 
 This guide describes the current version. Changes between versions are listed in the [changelog](CHANGELOG.md) (in Spanish). The app has an English interface: switch it with **ES | EN** at the bottom of the sidebar.
 
@@ -24,7 +24,7 @@ Nothing needs to be installed and no Windows settings need to change. To uninsta
 The sidebar has four sections:
 
 - **Now:** during a session, the game and a **one-sentence verdict** (*"Steady at 114 FPS."*, *"Measuring without a limit."*, *"Checking the limit…"*), with the limit explained below; the full-width **pacing graph** (blue once the limit is checked, stutters in amber); three numbers (real FPS, FPS in the slowest 1 % and stutters); only the action that matters (a pending recommendation with its button, or *Apply now*); and collapsed *Details* (G-SYNC, presentation, what limits the game, pace swing and display). With no game open, what to do and a summary of your last session. The graph stays visible when you switch to the app.
-- **Games:** with AMD or Intel, the limiter (*Recommend only* or RivaTuner, if installed; with NVIDIA everything is automatic and it doesn't appear), the general priority (section 5), the games with a limit, *Undo all changes* and *Choose game…*. Each game shows its limit and its buttons: its **priority**, *Set…*, *Undo* and, if the app recommends something, the button to apply it.
+- **Games:** with AMD or Intel, the limiter (*Recommend only* or RivaTuner, if installed; with NVIDIA everything is automatic and it doesn't appear), the general priority (section 5), the games with a limit, *Undo all changes* and *Choose game…*. Each game shows its limit and its buttons: its **priority**, *Set…*, *Undo* and, if the app recommends something, the button to apply it. **Clicking a game's name unfolds why it has its limit:** the rule and the formula with its numbers, a chart of how much of the time the deciding session reached each pace, the last session second by second against the 13 % threshold (the last minute doesn't count) and each rule's result (whether it was checked, the stretches below the threshold, whether it has headroom and blocked raises). Limits decided before 0.63 show it from their next decision.
 - **System:** GPU, display, driver and VRR status with the monitor's refresh range.
 - **Log:** everything the app does and measures, with a button to open the log file and the **Record per-frame data** checkbox, which saves a CSV file per session in the `grabaciones` folder (*Open recordings* button), useful for analyzing the pace in detail. If the game provides the necessary data (some games with Reflex), each session summary also includes **PC latency** (from when the game reads your input until the image is sent to the display), with and without the limit. In the games tested so far it hasn't appeared yet. The summary also says **what limits the slow moments** (the CPU or the GPU), with the matching advice: if it's the CPU, lowering graphics won't help, but the settings that load it will (population, physics, view distance). And it warns if the CPU lowers its frequency right in those moments, common on laptops due to heat or power.
 
@@ -48,7 +48,7 @@ At the bottom of the sidebar: **Apply limits** (when off, the app only measures)
 
 On *Games* there are two ways of deciding the limit, and the priority chooses between them:
 
-- **More FPS:** the limit the game reaches **90 % of the time**, accepting brief drops in the most demanding moments. In testing, perceptible drops were around 1 % of the time.
+- **More FPS:** the limit **90 % of frames** reach (not counting stutters), accepting brief drops in the most demanding moments. In testing, perceptible drops were around 1 % of the time.
 - **Steady pace:** a limit the game holds even in its worst moments **without perceptible drops** (its slowest 1 % arrives at most 13 % late, a difference you can't notice). It's the steadiest pace and the flattest line on the graph, sometimes with a few fewer FPS.
 
 The general priority has three options:

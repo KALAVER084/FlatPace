@@ -1,4 +1,4 @@
-# FlatPace 0.62.2 technical documentation
+# FlatPace 0.63.1 technical documentation
 
 This document explains how FlatPace works inside: architecture, algorithms, formulas, data formats and the sources behind its decisions. Some names (log lines, data files and keys) are in Spanish, as they appear in the program.
 
@@ -109,6 +109,8 @@ If the monitor offers other refresh rates at the current resolution and one of t
 | `registro-YYYYMMDD-HHMMSS.txt` | Program folder | Full log of each run (in Spanish) |
 | `grabaciones/grabacion-game.exe-YYYYMMDD-HHMMSS.csv` | Program folder | Optional: one frame per row (see format) |
 
+**Why each game has its limit (0.63):** in `equipo.txt`, `explica|<game>` stores how the current limit was decided (the rule, its numbers and the curve of the deciding session: the share of seconds that reached each pace, without those below the VRR range) and `partida|<game>`, the last session with the limit (each second's pace and slowest 1 %, reduced to 240 points keeping the dips, and each rule's result). Only the *Games* dropdown reads them: no decision does. Format and functions in `src/core/explain.h`.
+
 **`cambios-aplicados.txt` format (v2), tab-separated:**
 `v2  exe  created(0/1)  method(0 limit / 1 VSync)  divisor  fps  n  [id_hex  had(0/1)  original_hex]×n` followed by optional fields: `fg k frl`, `hz rate`, `ok 1` (accepted), `base real_fps`, `vrr 1`, `manual 1` (set by the user: the app doesn't change it).
 
@@ -170,6 +172,7 @@ The censored-data model already takes part in one decision: it decides whether t
 - **PresentMon 2.6.0** has known bugs with the options FlatPace uses (PresentMon issue 695): it can accumulate internal data and stop delivering frames, for example when frame generation is turned off in some games. Since 0.51.3, FlatPace restarts it if it stops delivering data for more than 6 s with the game in the foreground. It should be updated once Intel publishes a fixed version.
 - **PC latency:** the measurement is integrated, but PresentMon hasn't delivered it in the games tested (section 2.5).
 - **Frame generation:** it causes motion judder even when the pace is flat (section 2.3); no limit fixes it, and FlatPace only reports it.
+- **Limit memory (ready, not used):** `src/core/limit_memory.h` decides with several sessions instead of one (the cautious bound of the slowest 1 % for *Steady pace*, the mean of the 90 % pace for *More FPS*, with censored sessions as a lower bound that can only raise the estimate), and `tools/replay_memory.cpp` replays it with real recordings. In Greylock it gave steadier limits (no jump of more than 13 %, versus 8 with a single session), but with *Steady pace* it would lower the limit by about 12 FPS to cover the heaviest areas, a difference below what's perceptible. One measured game isn't enough to change the decision core: it will be turned on if more games and PCs confirm it.
 - **Validate the statistical models with real recordings** and then let them influence decisions (raise limits with the estimated capacity, decide with the game's memory and the most demanding phase).
 - Validation on more systems (desktops, no VRR, AMD), monitors and games: everything measured comes from a laptop with an RTX 4080 and a 240 Hz G-SYNC display, and the system can change the conclusions (as happened with "GPU at max").
 
@@ -187,7 +190,7 @@ Windows: `cmake -B build && cmake --build build --config Release`. Dear ImGui (w
 
 ## 13. Automated tests
 
-`tests/test_core.cpp` tests the logic in `src/core` without needing Windows (417 checks, including that each log translation keeps its original's slots; among them, that the translation to NVIDIA produces exactly the settings of previous versions): percentiles and pace swing, consistency, the limit detector, recommendations with and without VRR (ceiling, the monitor's VRR range and LFC, More FPS), EDID parsing, the pacing graph (tolerance, scale, stutters, on-screen mode and stability of stretches while scrolling and at both edges), the statistical models (capacity recovery from censored data, phase detection and its resistance to isolated spikes, per-game memory and suggestion rules) and the decision cycle (verification, failure rule, lowering after a failure, the decision on close and multi-session simulations that check there is no downward spiral). Each test pins a behavior already validated with real sessions or in simulation.
+`tests/test_core.cpp` tests the logic in `src/core` without needing Windows (528 checks, including those for the *Games* dropdown records and the limit memory; including that each log translation keeps its original's slots; among them, that the translation to NVIDIA produces exactly the settings of previous versions): percentiles and pace swing, consistency, the limit detector, recommendations with and without VRR (ceiling, the monitor's VRR range and LFC, More FPS), EDID parsing, the pacing graph (tolerance, scale, stutters, on-screen mode and stability of stretches while scrolling and at both edges), the statistical models (capacity recovery from censored data, phase detection and its resistance to isolated spikes, per-game memory and suggestion rules) and the decision cycle (verification, failure rule, lowering after a failure, the decision on close and multi-session simulations that check there is no downward spiral). Each test pins a behavior already validated with real sessions or in simulation.
 
 - Linux/macOS: `sh tests/run_tests.sh`
 - Windows (MSVC): `tests\run_tests.bat`, or `ctest` after building with CMake.

@@ -132,7 +132,7 @@ static std::atomic<bool> g_quit{false};
 static std::atomic<int> g_lang{0};
 static const char* T(const char* es, const char* en) { return g_lang == 1 ? en : es; }
 
-static constexpr const char* kVersion = "0.62.2";
+static constexpr const char* kVersion = "0.63.1";
 
 // Carpeta donde esta este .exe.
 static std::wstring ExeDirectory() {
@@ -741,6 +741,10 @@ struct UiChange {
   int prioMode = 0;        // 0 = automatica, 1 = siempre Fluidez, 2 = siempre Estabilidad
   bool usesFluid = true;   // prioridad que se aplica a este juego
   bool autoStability = false;  // la app paso este juego a Estabilidad
+  // Desplegable (0.63): como se decidio el limite, la ultima partida y el estado de las subidas.
+  std::string explain, lastSession, climb;
+  bool vrr = true;
+  int divisor = 0;
 };
 
 struct UiState {
@@ -911,6 +915,7 @@ static std::wstring OpenLog() {
 #include "src/core/analysis.h"
 #include "src/core/suggest.h"
 #include "src/core/decision.h"
+#include "src/core/explain.h"
 
 // Cuello de botella en el idioma de la app (el modulo compartido con las pruebas lo describe en espanol).
 static std::string BottleneckText(const WindowStats& st) {
@@ -1952,6 +1957,9 @@ struct Session {
   size_t presN = 0, presOff = 0, dispN = 0, dispOff = 0;
   // Toda la partida (para decidir al cerrar el juego), separada por factor de generacion.
   std::map<int, std::vector<float>> sessionReal;
+  // Segundo a segundo con el limite funcionando (para la grafica de la comprobacion en Juegos): ritmo
+  // real y 1 % mas lento causado por el juego en los ultimos 20 s (0 si no hay dato).
+  std::vector<float> tlFps, tlLow;
   double gameSecs = 0.0, vrrSecs = 0.0, lastTick = 0.0;
   double ownCapSecs = 0.0, ownCapRateSum = 0.0;  // juego limitado por si mismo (sin limite nuestro)
   // Regla de fallos de un limite aceptado: mas de un 13 % por debajo, en tramos de al
@@ -2421,6 +2429,70 @@ static bool PlentyWholeSession(const Session& s) {
   std::vector<double> ms(it->second.begin(), it->second.end());
   const CapacityEstimate ce = EstimateCapacity(ms, 1000.0 / s.expectedFps);
   return !ce.valid && ce.censoredFraction > 0.98;
+}
+
+// ---- Por que cada juego tiene su limite (desplegable de Juegos, 0.63) ----
+// Como se decidio el limite: la regla, sus numeros y la curva de la partida que lo decidio. Solo explica:
+// ninguna decision lo lee.
+static void SaveLimitExplain(const Session& s, int kind, double from, double to, double pct,
+                             const std::vector<float>* secRates = nullptr) {
+  if (s.exe.empty()) return;
+  LimitExplain e;
+  e.kind = kind;
+  e.when = static_cast<long long>(std::time(nullptr));
+  e.from = static_cast<float>(from);
+  e.to = static_cast<float>(to);
+  e.pct = static_cast<float>(pct);
+  e.fluid = s.fluid;
+  e.minutes = static_cast<float>(s.gameSecs / 60.0);
+  auto it = s.sessionReal.find(1);
+  if (!FrameGenInvolved(s) && it != s.sessionReal.end() && it->second.size() >= 1000) {
+    // Los mismos datos que la decision con la partida completa (DecideFromSession): los fotogramas
+    // reales de la partida sin los tirones (mas de 2,5 veces la mediana). Mas FPS toma el ritmo que
+    // alcanza el 90 % de ellos; Ritmo constante, 1,13 x el de su 1 % mas lento. Hasta la 0.63 la
+    // curva contaba segundos y quitaba los que quedan por debajo del rango del VRR: no era el calculo
+    // de la decision, y el limite no caia justo donde la curva cruza el 90 %.
+    std::vector<double> ms(it->second.begin(), it->second.end());
+    std::sort(ms.begin(), ms.end());
+    const double med = PercentileSorted(ms, 50);
+    std::vector<double> body;
+    for (double x : ms)
+      if (x <= med * 2.5) body.push_back(x);  // sin tirones
+    if (body.size() >= 600) {
+      e.low1 = static_cast<float>(1000.0 / PercentileSorted(body, 99));
+      e.p90 = static_cast<float>(1000.0 / PercentileSorted(body, 90));
+      std::vector<float> fps;
+      fps.reserve(body.size());
+      for (double x : body) fps.push_back(static_cast<float>(1000.0 / x));
+      e.SetCurve(std::move(fps));
+    }
+  }
+  // La regla de fallos baja al ritmo superado el 90 % de los segundos: su curva es la de esos segundos.
+  if (kind == LimitExplain::FailMedian && secRates && secRates->size() >= 30) e.SetCurve(*secRates);
+  WriteKv(L"equipo.txt", "explica|" + s.exe, e.Serialize());
+}
+
+// La ultima partida con el limite: segundo a segundo y el resultado de cada regla.
+static void SaveSessionExplain(const Session& s, const FailureTracker& failT, const FailureTracker& tailT, bool fg) {
+  if (s.exe.empty() || s.expectedFps <= 0) return;
+  SessionExplain x;
+  x.when = static_cast<long long>(std::time(nullptr));
+  x.minutes = static_cast<float>(s.gameSecs / 60.0);
+  x.limit = static_cast<float>(s.expectedFps);
+  x.verified = s.verified;
+  x.fg = fg;
+  x.failSecs = static_cast<float>(failT.failSecs);
+  x.failPct = static_cast<float>(failT.Percent());
+  x.tailSecs = static_cast<float>(tailT.failSecs);
+  x.tailPct = static_cast<float>(tailT.Percent());
+  x.trimSecs = static_cast<float>(kCloseTrimSec);
+  auto it = s.sessionReal.find(1);
+  if (!fg && it != s.sessionReal.end() && it->second.size() >= 1000) {
+    std::vector<double> ms(it->second.begin(), it->second.end());
+    x.waitPct = static_cast<float>(100.0 * EstimateCapacity(ms, 1000.0 / s.expectedFps).censoredFraction);
+  }
+  x.SetSeries(s.tlFps, s.tlLow);
+  WriteKv(L"equipo.txt", "partida|" + s.exe, x.Serialize());
 }
 
 // 1 % bajo (fps) causado por el juego en los ultimos 20 s, con un limite activo (0 si no hay limite).
@@ -4102,6 +4174,11 @@ static void PublishChanges(const ChangeStore& store) {
     u.value = static_cast<int>(c.newValue);
     u.fg = std::max(1, c.fgFactor);
     u.manual = c.manual;
+    u.vrr = c.vrr;
+    u.divisor = c.divisor;
+    u.explain = ReadKv(L"equipo.txt", "explica|" + exe);
+    u.lastSession = ReadKv(L"equipo.txt", "partida|" + exe);
+    u.climb = ReadKv(L"equipo.txt", "escalada|" + exe);
     auto sg = g_ui.suggestions.find(exe);
     if (sg != g_ui.suggestions.end() && !c.manual) {
       u.suggestFps = sg->second;
@@ -5069,6 +5146,8 @@ static void RunEngine(std::wstring presentMonPath) {
       std::string why = Fmt(T("toda la partida (%.1f min de juego)", "the whole session (%.1f min of play)"), session.gameSecs / 60.0);
       if (TryApply(now, st, true, why.c_str())) {
         auto c = store.items.find(session.exe);
+        SaveLimitExplain(session, LimitExplain::WholeSession, 0.0,
+                         c->second.newValue / static_cast<double>(std::max(1, c->second.fgFactor)), 0.0);
         result = Fmt(T("Límite para la próxima partida de %s: %s.", "Limit for the next session of %s: %s."),
                      session.label.c_str(), DescribeChange(c->second).c_str());
       }
@@ -5088,6 +5167,7 @@ static void RunEngine(std::wstring presentMonPath) {
       // Subida automatica (con G-SYNC/FreeSync y sin generacion de fotogramas): su estado por juego.
       // Ajustes de limites (incluida la subida automatica) en ambos modos; las sugerencias, segun el modo.
       const bool climbOk = !c.manual && c.vrr && c.fgFactor <= 1 && !FrameGenInvolved(session);
+      SaveSessionExplain(session, failT, tailT, c.fgFactor > 1 || FrameGenInvolved(session));
       // Con Estabilidad, tambien falla si el 1 % bajo causado por el juego se hunde de forma sostenida:
       // es lo que promete esa prioridad (sostener el limite incluso en los peores momentos). Con Fluidez
       // solo cuenta la mediana: acepta caidas en los momentos mas exigentes (en Greylock a 125, la
@@ -5189,6 +5269,9 @@ static void RunEngine(std::wstring presentMonPath) {
                                                  "going back to the previous limit (the raise didn't hold)")
                                              : T("la regla de fallos al cerrar el juego", "the failure rule when the game closed"))) {
             auto nc = store.items.find(session.exe);
+            SaveLimitExplain(session, revert ? LimitExplain::Revert : tailFailed ? LimitExplain::FailTail : LimitExplain::FailMedian,
+                             limitBefore, nc->second.newValue / static_cast<double>(std::max(1, nc->second.fgFactor)),
+                             tailFailed ? tailT.Percent() : failT.Percent(), &failT.secRates);
             result = revert
                 ? Fmt(T("%s no sostuvo %.0f FPS: vuelvo a %.0f, que sí sostenía.", "%s didn't hold %.0f FPS: back to %.0f, which it did hold."),
                       session.label.c_str(), limitBefore, cr.newLimit)
@@ -5229,10 +5312,12 @@ static void RunEngine(std::wstring presentMonPath) {
           session.current = VrrRec(cr.newLimit);
           session.lowerPending = true;  // permite cambiar un limite ya comprobado
           session.accepted = false;
-          if (TryApply(now, st, true, T("la subida automatica (el juego iba sobrado)", "the automatic raise (the game had headroom)")))
+          if (TryApply(now, st, true, T("la subida automatica (el juego iba sobrado)", "the automatic raise (the game had headroom)"))) {
+            SaveLimitExplain(session, LimitExplain::Raise, limitBefore, cr.newLimit, 0.0);
             result = Fmt(T("%s iba sobrado: subo su límite de %.0f a %.0f FPS para la próxima partida. Si no lo sostiene, volveré a %.0f.",
                            "%s had headroom: raising its limit from %.0f to %.0f FPS for the next session. If it can't hold it, I'll go back to %.0f."),
                          session.label.c_str(), limitBefore, cr.newLimit, limitBefore);
+          }
         } else if (climbOk && cr.action == ClimbAction::BlockedByCeiling) {
           Log("\n  Al cerrar: va sobrado, pero no subo: %.0f fps no se sostuvo hace menos de 30 dias.\n", cr.state.failedCeil);
         } else if (climbOk && cr.action == ClimbAction::AtTop) {
@@ -5243,6 +5328,7 @@ static void RunEngine(std::wstring presentMonPath) {
         }
       }
     }
+    PublishChanges(store);  // el desplegable de Juegos muestra la ultima partida y como se decidio el limite
     if (!result.empty()) {
       Log("  %s\n", result.c_str());
       std::lock_guard<std::mutex> lock(g_ui.m);
@@ -5419,6 +5505,14 @@ static void RunEngine(std::wstring presentMonPath) {
           change.manual = isManual;
           store.items[exe] = change;
           store.Save();
+          {
+            LimitExplain ex;
+            ex.kind = isManual ? LimitExplain::Manual : LimitExplain::Accepted;
+            ex.when = static_cast<long long>(std::time(nullptr));
+            ex.from = static_cast<float>(previousReal);
+            ex.to = static_cast<float>(screen / std::max(1, k));
+            WriteKv(L"equipo.txt", "explica|" + exe, ex.Serialize());
+          }
           const bool running = session.exe == exe && session.pid != 0;
           ClearRecommendation(exe);
           if (isManual) {
@@ -5507,6 +5601,8 @@ static void RunEngine(std::wstring presentMonPath) {
                        : Fmt(T("Deshecho: %s vuelve a como estaba. Si estaba abierto, reinícialo.",
                                "Undone: %s is back to how it was. If it was open, restart it."), name.c_str());
           Log("\n[%5.0f s] Deshecho %s (pedido desde la ventana).\n", session.T(now), exe.c_str());
+          WriteKv(L"equipo.txt", "explica|" + exe, "");
+          WriteKv(L"equipo.txt", "partida|" + exe, "");
           if (session.exe == exe) {
             session.expectedFps = 0;
             session.verified = session.restartNoted = session.keepNoted = false;
@@ -5534,6 +5630,8 @@ static void RunEngine(std::wstring presentMonPath) {
         WriteKv(L"equipo.txt", "sugerencia|" + exe, "");
         WriteKv(L"equipo.txt", "prioridad|" + exe, "");
         WriteKv(L"equipo.txt", "prioridad-sugerida|" + exe, "");
+        WriteKv(L"equipo.txt", "explica|" + exe, "");
+        WriteKv(L"equipo.txt", "partida|" + exe, "");
       }
       {
         std::lock_guard<std::mutex> lock(g_ui.m);
@@ -5681,6 +5779,12 @@ static void RunEngine(std::wstring presentMonPath) {
         session.phaseStart = now;
         session.lastFrameArrival = now;
         gamesSeen++;
+        {
+          // Los avisos de la ventana hablan de la proxima partida (un limite nuevo, un cambio de prioridad):
+          // al empezar una, dejan de tener sentido. Antes no se borraban nunca y quedaban partidas despues.
+          std::lock_guard<std::mutex> lock(g_ui.m);
+          g_ui.notice.clear();
+        }
         Log("\n[Juego detectado] %s  (%s)%s\n", label.c_str(), session.exe.c_str(),
             IsLibraryPath(path) ? T("  [biblioteca de juegos]", "  [game library]") : "");
         if (!foundInFront && !manual)
@@ -5974,7 +6078,12 @@ static void RunEngine(std::wstring presentMonPath) {
         bool fgSame = kc != store.items.end() && ((kc->second.fgFactor > 1) == (st.FgFactor() > 1));
         if (session.expectedFps > 0 && (session.verified || session.accepted) && fgSame && st.medianMs > 0) {
           session.fail.Add(1000.0 / st.medianMs, session.expectedFps, dt);
-          if (const double gl = GameLowFps(session); gl > 0) session.tailFail.Add(gl, session.expectedFps, dt);
+          const double gl = GameLowFps(session);
+          if (gl > 0) session.tailFail.Add(gl, session.expectedFps, dt);
+          if (session.tlFps.size() < 20000) {
+            session.tlFps.push_back(static_cast<float>(1000.0 / st.medianMs));
+            session.tlLow.push_back(static_cast<float>(gl));
+          }
         }
       }
     }
@@ -7101,6 +7210,316 @@ static void PageNow(const View& v) {
   }
 }
 
+// ---- Desplegable de cada juego en Juegos (0.63): por que tiene su limite ----
+static std::set<std::string> g_expandedGames;  // filas desplegadas (solo la ventana)
+
+static std::string ShortDate(long long t) {
+  if (t <= 0) return std::string();
+  time_t tt = static_cast<time_t>(t);
+  tm lt{};
+  localtime_s(&lt, &tt);
+  static const char* es[] = {"ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"};
+  static const char* en[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+  return g_lang == 1 ? Fmt("%s %d, %02d:%02d", en[lt.tm_mon], lt.tm_mday, lt.tm_hour, lt.tm_min)
+                     : Fmt("%d %s, %02d:%02d", lt.tm_mday, es[lt.tm_mon], lt.tm_hour, lt.tm_min);
+}
+
+static void DashedLine(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 col, float th, float dash, float gap) {
+  const float len = std::sqrt((b.x - a.x) * (b.x - a.x) + (b.y - a.y) * (b.y - a.y));
+  if (len <= 0) return;
+  const ImVec2 d((b.x - a.x) / len, (b.y - a.y) / len);
+  for (float t = 0; t < len; t += dash + gap) {
+    const float e = std::min(len, t + dash);
+    dl->AddLine(ImVec2(a.x + d.x * t, a.y + d.y * t), ImVec2(a.x + d.x * e, a.y + d.y * e), col, th);
+  }
+}
+
+// Curva de la partida que decidio el limite: % de los segundos en que el juego alcanzo cada ritmo.
+static void DrawCurveChart(const LimitExplain& e, double limitReal, float w) {
+  const float h = 190 * scale;
+  const ImVec2 p = ImGui::GetCursorScreenPos();
+  ImDrawList* dl = ImGui::GetWindowDrawList();
+  dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), Col(kCardHi), 8 * scale);
+  const float L = p.x + 52 * scale, R = p.x + w - 16 * scale, Tp = p.y + 14 * scale, B = p.y + h - 28 * scale;
+  const float x0 = e.curveLo, x1 = e.curveLo + e.curveStep * (e.curve.size() - 1);
+  auto sx = [&](double x) { return L + static_cast<float>((x - x0) / std::max(1e-6, static_cast<double>(x1 - x0))) * (R - L); };
+  auto sy = [&](double y) { return B - static_cast<float>(y / 100.0) * (B - Tp); };
+  for (int yv : {0, 50, 100}) {
+    dl->AddLine(ImVec2(L, sy(yv)), ImVec2(R, sy(yv)), Col(kLine), 1.0f);
+    const std::string lab = Fmt("%d %%", yv);
+    const ImVec2 ts = ImGui::CalcTextSize(lab.c_str());
+    dl->AddText(ImVec2(L - ts.x - 8 * scale, sy(yv) - ts.y * 0.5f), Col(kDim), lab.c_str());
+  }
+  const double span = x1 - x0, stepT = span > 160 ? 40 : span > 80 ? 20 : span > 40 ? 10 : 5;
+  for (double xv = std::ceil(x0 / stepT) * stepT; xv <= x1; xv += stepT) {
+    const std::string lab = Fmt("%.0f", xv);
+    const ImVec2 ts = ImGui::CalcTextSize(lab.c_str());
+    dl->AddText(ImVec2(sx(xv) - ts.x * 0.5f, B + 6 * scale), Col(kDim), lab.c_str());
+  }
+  const char* unit = "FPS";
+  dl->AddText(ImVec2(R - ImGui::CalcTextSize(unit).x, B + 6 * scale), Col(kDim), unit);
+  if (e.fluid || e.curveSeconds)
+    DashedLine(dl, ImVec2(L, sy(90)), ImVec2(R, sy(90)), Col(kDim), 1.5f * scale, 4 * scale, 4 * scale);
+  for (size_t i = 1; i < e.curve.size(); ++i)
+    dl->AddLine(ImVec2(sx(x0 + (i - 1) * e.curveStep), sy(e.curve[i - 1])), ImVec2(sx(x0 + i * e.curveStep), sy(e.curve[i])),
+                Col(kBlue), 2.5f * scale);
+  auto VMark = [&](double x, const ImVec4& col, bool dashed, const std::string& lab, bool right) {
+    if (x < x0 || x > x1) return;
+    if (dashed) DashedLine(dl, ImVec2(sx(x), Tp), ImVec2(sx(x), B), Col(col), 2.0f * scale, 5 * scale, 4 * scale);
+    else dl->AddLine(ImVec2(sx(x), Tp), ImVec2(sx(x), B), Col(col), 2.0f * scale);
+    const ImVec2 ts = ImGui::CalcTextSize(lab.c_str());
+    const ImVec2 at(right ? sx(x) + 8 * scale : sx(x) - ts.x - 8 * scale, Tp + (B - Tp) * 0.32f);
+    dl->AddRectFilled(ImVec2(at.x - 5 * scale, at.y - 3 * scale), ImVec2(at.x + ts.x + 5 * scale, at.y + ts.y + 3 * scale),
+                      Col(kCard), 4 * scale);
+    dl->AddText(at, Col(col), lab.c_str());
+  };
+  if (!e.fluid && e.low1 > 0)
+    VMark(e.low1, kDim, true, Fmt(T("1 %% más lento: %.0f", "slowest 1 %%: %.0f"), e.low1), false);
+  VMark(limitReal, kAmber, false, Fmt(T("límite: %.0f", "limit: %.0f"), limitReal), true);
+  ImGui::Dummy(ImVec2(w, h));
+}
+
+// La ultima partida, segundo a segundo, frente al umbral del 13 %.
+static void DrawSessionChart(const SessionExplain& x, float w) {
+  const float h = 180 * scale;
+  const ImVec2 p = ImGui::GetCursorScreenPos();
+  ImDrawList* dl = ImGui::GetWindowDrawList();
+  dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), Col(kCardHi), 8 * scale);
+  const float L = p.x + 52 * scale, R = p.x + w - 16 * scale, Tp = p.y + 14 * scale, B = p.y + h - 28 * scale;
+  const double thr = x.limit * (1.0 - cfg::kJnd);
+  double lo = thr * 0.85, hi = x.limit * 1.08;
+  for (float v : x.low)
+    if (v > 0) lo = std::min(lo, static_cast<double>(v) * 0.95);
+  lo = std::max(0.0, std::floor(lo / 10) * 10);
+  const size_t n = x.fps.size();
+  auto sx = [&](double i) { return L + static_cast<float>(i / std::max<double>(1, n - 1)) * (R - L); };
+  auto sy = [&](double y) { return B - static_cast<float>((std::clamp(y, lo, hi) - lo) / (hi - lo)) * (B - Tp); };
+  for (double yv : {lo, std::round(thr), static_cast<double>(x.limit)}) {
+    const std::string lab = Fmt("%.0f", yv);
+    const ImVec2 ts = ImGui::CalcTextSize(lab.c_str());
+    dl->AddText(ImVec2(L - ts.x - 8 * scale, sy(yv) - ts.y * 0.5f), Col(kDim), lab.c_str());
+  }
+  dl->AddLine(ImVec2(L, sy(lo)), ImVec2(R, sy(lo)), Col(kLine), 1.0f);
+  // Ultimo minuto: no cuenta para las reglas.
+  const double trimPts = x.trimSecs / std::max(1.0f, x.secsPerPoint);
+  if (n > trimPts + 2) {
+    const float a = sx(n - 1 - trimPts);
+    dl->AddRectFilled(ImVec2(a, Tp), ImVec2(R, B), Col(kText, 0.05f));
+    const char* lab = T("no cuenta", "doesn't count");
+    dl->AddText(ImVec2((a + R - ImGui::CalcTextSize(lab).x) * 0.5f, B - ImGui::GetTextLineHeight() - 4 * scale), Col(kDim), lab);
+  }
+  DashedLine(dl, ImVec2(L, sy(thr)), ImVec2(R, sy(thr)), Col(kAmber), 2.0f * scale, 6 * scale, 4 * scale);
+  for (size_t i = 1; i < n; ++i)
+    if (x.fps[i - 1] > 0 && x.fps[i] > 0)
+      dl->AddLine(ImVec2(sx(i - 1), sy(x.fps[i - 1])), ImVec2(sx(i), sy(x.fps[i])), Col(kGray), 1.5f * scale);
+  for (size_t i = 1; i < n && i < x.low.size(); ++i)
+    if (x.low[i - 1] > 0 && x.low[i] > 0)
+      dl->AddLine(ImVec2(sx(i - 1), sy(x.low[i - 1])), ImVec2(sx(i), sy(x.low[i])),
+                  Col(x.low[i - 1] < thr && x.low[i] < thr ? kRed : kBlue), 2.5f * scale);
+  const double totalMin = n * x.secsPerPoint / 60.0;
+  for (int k = 0; k <= 4; ++k) {
+    const double m = totalMin * k / 4.0;
+    const std::string lab = totalMin >= 4 ? Fmt("%.0f min", m) : Fmt("%.0f s", m * 60);
+    const ImVec2 ts = ImGui::CalcTextSize(lab.c_str());
+    const float px = sx((n - 1) * k / 4.0);
+    dl->AddText(ImVec2(std::clamp(px - ts.x * 0.5f, L, R - ts.x), B + 6 * scale), Col(kDim), lab.c_str());
+  }
+  ImGui::Dummy(ImVec2(w, h));
+}
+
+// Una regla con su resultado: 1 = se cumple, 0 = no, -1 = informativa.
+static void RuleLine(int state, const std::string& text, float w) {
+  const ImVec2 p = ImGui::GetCursorScreenPos();
+  ImDrawList* dl = ImGui::GetWindowDrawList();
+  const float lh = ImGui::GetTextLineHeight(), cx = p.x + 8 * scale, cy = p.y + lh * 0.5f;
+  if (state == 1) {
+    dl->AddLine(ImVec2(cx - 5 * scale, cy), ImVec2(cx - 1.5f * scale, cy + 4 * scale), Col(kBlue), 2.2f * scale);
+    dl->AddLine(ImVec2(cx - 1.5f * scale, cy + 4 * scale), ImVec2(cx + 6 * scale, cy - 5 * scale), Col(kBlue), 2.2f * scale);
+  } else if (state == 0) {
+    dl->AddLine(ImVec2(cx - 4.5f * scale, cy - 4.5f * scale), ImVec2(cx + 4.5f * scale, cy + 4.5f * scale), Col(kAmber), 2.2f * scale);
+    dl->AddLine(ImVec2(cx - 4.5f * scale, cy + 4.5f * scale), ImVec2(cx + 4.5f * scale, cy - 4.5f * scale), Col(kAmber), 2.2f * scale);
+  } else {
+    dl->AddCircleFilled(ImVec2(cx, cy), 2.8f * scale, Col(kDim));
+  }
+  ImGui::SetCursorScreenPos(ImVec2(p.x + 26 * scale, p.y));
+  ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + w - 26 * scale);
+  ImGui::TextUnformatted(text.c_str());
+  ImGui::PopTextWrapPos();
+}
+
+static void DrawLimitExplain(const UiChange& c, float w) {
+  const LimitExplain e = LimitExplain::Parse(c.explain);
+  const SessionExplain x = SessionExplain::Parse(c.lastSession);
+  const ClimbState cl = ClimbState::Parse(c.climb);
+  const int fg = std::max(1, c.fg);
+  const double limitReal = static_cast<double>(c.value) / fg;
+  const float inner = w - 2 * 22 * scale;
+  ImDrawList* dl = ImGui::GetWindowDrawList();
+  const ImVec2 p0 = ImGui::GetCursorScreenPos();
+  dl->ChannelsSplit(2);
+  dl->ChannelsSetCurrent(1);
+  ImGui::SetCursorScreenPos(ImVec2(p0.x + 22 * scale, p0.y + 18 * scale));
+  ImGui::BeginGroup();
+  ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + inner);
+  // 1. La formula.
+  std::string rule, formula, why;
+  const std::string when = ShortDate(e.when);
+  switch (e.kind) {
+    case LimitExplain::WholeSession:
+      if (!c.vrr && c.divisor > 0) {
+        rule = T("Sin G-SYNC: un divisor exacto de los Hz de la pantalla", "Without G-SYNC: an exact divisor of the display's Hz");
+        formula = Fmt(T("%.0f Hz ÷ %d = %.0f FPS", "%.0f Hz ÷ %d = %.0f FPS"), e.to * c.divisor, c.divisor, e.to);
+      } else if (e.fluid) {
+        rule = T("Más FPS: el ritmo que alcanza el 90 % de los fotogramas", "More FPS: the pace 90 % of frames reach");
+        formula = Fmt(T("90 %% de los fotogramas a %.0f FPS o más", "90 %% of frames at %.0f FPS or more"), e.to);
+      } else {
+        rule = T("Ritmo constante: el 1 % de fotogramas más lentos puede llegar como mucho un 13 % tarde",
+                 "Steady pace: the slowest 1 % of frames can arrive at most 13 % late");
+        formula = Fmt(T("1,13 × el 1 %% más lento → %.0f FPS", "1.13 × the slowest 1 %% → %.0f FPS"), e.to);
+      }
+      why = Fmt(T("Decidido al cerrar la partida del %s, con toda la partida (%.0f min de juego).",
+                  "Decided when the %s session closed, with the whole session (%.0f min of play)."), when.c_str(), e.minutes);
+      why += T(" No cuentan los tirones (fotogramas de más de 2,5 veces lo normal).",
+               " Stutters (frames more than 2.5 times the usual) don't count.");
+      if (!e.fluid && e.low1 > 0)
+        why += Fmt(T(" El 1 %% más lento medido en esa partida fue de %.0f FPS.", " The slowest 1 %% measured in that session was %.0f FPS."), e.low1);
+      break;
+    case LimitExplain::FailMedian:
+      rule = Fmt(T("Regla de fallos: con %.0f, el juego quedó más de un 13 %% por debajo el %.0f %% de la partida",
+                   "Failure rule: with %.0f, the game stayed more than 13 %% below it %.0f %% of the session"), e.from, e.pct);
+      formula = Fmt(T("90 %% de los segundos a %.0f FPS o más", "90 %% of the seconds at %.0f FPS or more"), e.to);
+      why = Fmt(T("Bajó al ritmo que el juego superó el 90 %% de los segundos de la partida del %s.",
+                  "Lowered to the pace the game exceeded in 90 %% of the seconds of the %s session."), when.c_str());
+      break;
+    case LimitExplain::FailTail:
+      rule = Fmt(T("Regla del 1 %% más lento: con %.0f, se hundió más de un 13 %% el %.0f %% de la partida",
+                   "Slowest 1 %% rule: with %.0f, it sank more than 13 %% for %.0f %% of the session"), e.from, e.pct);
+      formula = Fmt(T("%.0f ÷ 1,13 = %.0f FPS", "%.0f ÷ 1.13 = %.0f FPS"), e.from, e.to);
+      why = Fmt(T("Bajó un escalón del 13 %%, la diferencia perceptible, al cerrar la partida del %s.",
+                  "Lowered one 13 %% step, the perceptible difference, when the %s session closed."), when.c_str());
+      break;
+    case LimitExplain::Raise:
+      rule = T("Iba sobrado: más del 98 % de los fotogramas esperando al limitador", "It had headroom: over 98 % of frames waiting on the limiter");
+      formula = Fmt(T("%.0f × 1,13 = %.0f FPS", "%.0f × 1.13 = %.0f FPS"), e.from, e.to);
+      why = Fmt(T("Subió un escalón del 13 %% al cerrar la partida del %s. Si no lo sostiene, volverá a %.0f.",
+                  "Raised one 13 %% step when the %s session closed. If it can't hold it, it goes back to %.0f."), when.c_str(), e.from);
+      break;
+    case LimitExplain::Revert:
+      rule = Fmt(T("La subida a %.0f no se sostuvo", "The raise to %.0f didn't hold"), e.from);
+      formula = Fmt(T("vuelta a %.0f FPS", "back to %.0f FPS"), e.to);
+      why = Fmt(T("Volvió al límite que sí sostenía, al cerrar la partida del %s.", "Went back to the limit it did hold, when the %s session closed."), when.c_str());
+      break;
+    case LimitExplain::Manual:
+      rule = T("Límite puesto a mano", "Limit set by hand");
+      formula = Fmt("%.0f FPS", e.to);
+      why = T("La app no lo cambia: solo comprueba que funciona.", "The app doesn't change it: it only checks that it works.");
+      break;
+    case LimitExplain::Accepted:
+      rule = T("Recomendación aplicada con su botón", "Recommendation applied with its button");
+      formula = e.from > 0 ? Fmt("%.0f → %.0f FPS", e.from, e.to) : Fmt("%.0f FPS", e.to);
+      why = Fmt(T("Aplicada el %s.", "Applied on %s."), when.c_str());
+      break;
+    default:
+      rule = T("Límite actual", "Current limit");
+      formula = Fmt("%.0f FPS", limitReal);
+      why = T("Se decidió en una versión anterior: el detalle de su fórmula aparecerá en la próxima decisión.",
+              "It was decided in an earlier version: the details of its formula will appear with the next decision.");
+      break;
+  }
+  if (fg > 1)
+    why += Fmt(T(" Con generación de fotogramas: %d × %.0f reales = %d FPS en pantalla. La app no lo sube ni lo baja por su cuenta.",
+                 " With frame generation: %d × %.0f real = %d FPS on screen. The app doesn't raise or lower it on its own."),
+               fg, limitReal, c.value);
+  ImGui::TextColored(kDim, "%s", rule.c_str());
+  ImGui::PushFont(fontHead);
+  ImGui::TextUnformatted(formula.c_str());
+  ImGui::PopFont();
+  ImGui::TextColored(kDim, "%s", why.c_str());
+  // 2. De donde sale: la curva de la partida que lo decidio.
+  if (!e.curve.empty() && (e.kind == LimitExplain::WholeSession || e.kind == LimitExplain::FailMedian)) {
+    VSpace(14);
+    ImGui::PushFont(fontStrong);
+    const bool bySeconds = e.curveSeconds;
+    ImGui::TextUnformatted(bySeconds ? T("De dónde sale: cuántos segundos alcanzaron cada ritmo", "Where it comes from: how many seconds reached each pace")
+                                     : T("De dónde sale: cuántos fotogramas alcanzaron cada ritmo", "Where it comes from: how many frames reached each pace"));
+    ImGui::PopFont();
+    ImGui::TextColored(kDim, "%s", bySeconds ? T("Porcentaje de los segundos de esa partida en que el juego llegó a cada ritmo o más. Donde la curva cruza el 90 % está el límite.",
+                                                 "Share of that session's seconds in which the game reached each pace or more. The limit is where the curve crosses 90 %.")
+                                   : e.fluid ? T("Porcentaje de los fotogramas de esa partida (sin tirones) que llegaron a cada ritmo o más. Donde la curva cruza el 90 % está el límite.",
+                                                 "Share of that session's frames (without stutters) that reached each pace or more. The limit is where the curve crosses 90 %.")
+                                             : T("Porcentaje de los fotogramas de esa partida (sin tirones) que llegaron a cada ritmo o más. La línea punteada es su 1 % más lento; el límite, 1,13 veces ese ritmo.",
+                                                 "Share of that session's frames (without stutters) that reached each pace or more. The dotted line is their slowest 1 %; the limit, 1.13 times that pace."));
+    if (bySeconds && e.kind != LimitExplain::FailMedian)
+      ImGui::TextColored(kDim, "%s", T("Gráfica guardada con la 0.63, por segundos: la app decide con los fotogramas, así que el límite puede quedar un poco a la izquierda del cruce. Desde la próxima decisión será por fotogramas.",
+                                       "Chart saved with 0.63, by seconds: the app decides with frames, so the limit can sit a little left of the crossing. From the next decision it will be by frames."));
+    VSpace(6);
+    DrawCurveChart(e, e.to > 0 ? e.to : limitReal, inner);
+  }
+  // 3. Comprobacion: la ultima partida.
+  if (x.limit > 0 && x.fps.size() >= 10 && !x.fg) {
+    VSpace(14);
+    ImGui::PushFont(fontStrong);
+    ImGui::TextUnformatted(Fmt(T("Comprobación: la última partida (%s, %.0f min), con %.0f", "Check: the last session (%s, %.0f min), with %.0f"),
+                               ShortDate(x.when).c_str(), x.minutes, x.limit).c_str());
+    ImGui::PopFont();
+    ImGui::TextColored(kDim, "%s", T("Ritmo de cada segundo (gris) y 1 % más lento de los últimos 20 segundos (azul; rojo bajo el umbral), frente al umbral del 13 %.",
+                                     "Each second's pace (gray) and the slowest 1 % of the last 20 seconds (blue; red below the threshold), against the 13 % threshold."));
+    VSpace(6);
+    DrawSessionChart(x, inner);
+  }
+  // 4. Las reglas.
+  VSpace(14);
+  ImGui::PushFont(fontStrong);
+  ImGui::TextUnformatted(T("Reglas", "Rules"));
+  ImGui::PopFont();
+  VSpace(4);
+  if (x.limit <= 0 && !c.manual && fg <= 1)
+    RuleLine(-1, T("La comprobación aparecerá después de la próxima partida con este límite.",
+                   "The check will appear after the next session with this limit."), inner);
+  if (x.limit > 0) {
+    RuleLine(x.verified ? 1 : 0, x.verified ? Fmt(T("Límite comprobado en la última partida: %.0f FPS (tolerancia ±1,5 %%).", "Limit checked in the last session: %.0f FPS (±1.5 %% tolerance)."), x.limit)
+                                            : std::string(T("En la última partida no se pudo comprobar el límite.", "The limit couldn't be checked in the last session.")), inner);
+    if (!x.fg) {
+      const bool mFail = x.failSecs >= 60 && x.failPct >= 10;
+      RuleLine(mFail ? 0 : 1, Fmt(T("Ritmo por debajo del umbral: %.0f s, el %.0f %% de la partida (falla con 60 s y el 10 %%).",
+                                    "Pace below the threshold: %.0f s, %.0f %% of the session (it fails at 60 s and 10 %%)."), x.failSecs, x.failPct), inner);
+      const bool tFail = x.tailSecs >= 60 && x.tailPct >= 10;
+      RuleLine(tFail ? 0 : 1, Fmt(T("1 %% más lento bajo el umbral: %.0f s, el %.0f %% de la partida%s.",
+                                    "Slowest 1 %% below the threshold: %.0f s, %.0f %% of the session%s."), x.tailSecs, x.tailPct,
+                                  c.usesFluid ? T(" (con «Más FPS» no baja el límite: si se repite dos partidas, pasa a «Ritmo constante»)",
+                                                  " (with “More FPS” it doesn't lower the limit: if it repeats for two sessions, it moves to “Steady pace”)")
+                                              : T(" (falla con 60 s y el 10 %)", " (it fails at 60 s and 10 %)")), inner);
+      if (x.waitPct >= 0)
+        RuleLine(x.waitPct > 98 ? 1 : -1, x.waitPct > 98 ? Fmt(T("Va sobrado: el %.0f %% de los fotogramas esperó al limitador.", "It has headroom: %.0f %% of frames waited on the limiter."), x.waitPct)
+                                                         : Fmt(T("No va sobrado: el %.0f %% de los fotogramas esperó al limitador (para subir hace falta más del 98 %%).",
+                                                                 "No headroom: %.0f %% of frames waited on the limiter (raising needs more than 98 %%)."), x.waitPct), inner);
+    }
+  }
+  if (c.manual) {
+    RuleLine(-1, T("Límite manual: la app no lo sube ni lo baja.", "Manual limit: the app doesn't raise or lower it."), inner);
+  } else if (fg > 1 || x.fg) {
+    RuleLine(-1, T("Con generación de fotogramas, las reglas de ajuste no cambian este límite: los fotogramas reales cambian de ritmo con ella.",
+                   "With frame generation, the adjustment rules don't change this limit: real frames change pace with it."), inner);
+  } else if (!c.vrr) {
+    RuleLine(-1, T("Sin G-SYNC, el límite usa divisores de los Hz y no se sube solo.", "Without G-SYNC, the limit uses divisors of the Hz and isn't raised on its own."), inner);
+  } else {
+    if (!c.usesFluid)
+      RuleLine(-1, Fmt(T("Subida: %d de 2 partidas seguidas yendo sobrado.", "Raise: %d of 2 sessions in a row with headroom."), cl.plentyStreak), inner);
+    const long long today = static_cast<long long>(std::time(nullptr) / 86400);
+    if (cl.failedCeil > 0 && today - cl.failedDay < 30)
+      RuleLine(-1, Fmt(T("%.0f FPS bloqueado hasta el %s: no se sostuvo.", "%.0f FPS blocked until %s: it didn't hold."), cl.failedCeil,
+                       ShortDate((cl.failedDay + 30) * 86400).substr(0, ShortDate((cl.failedDay + 30) * 86400).find(',')).c_str()), inner);
+  }
+  ImGui::PopTextWrapPos();
+  ImGui::EndGroup();
+  const float bottom = ImGui::GetItemRectMax().y + 20 * scale;
+  dl->ChannelsSetCurrent(0);
+  dl->AddRectFilled(p0, ImVec2(p0.x + w, bottom), Col(kCard), 10 * scale);
+  dl->AddLine(ImVec2(p0.x + 16 * scale, p0.y), ImVec2(p0.x + w - 16 * scale, p0.y), Col(kLine), 1.0f);
+  dl->ChannelsMerge();
+  ImGui::SetCursorScreenPos(ImVec2(p0.x, bottom + 8 * scale));
+}
+
 static void PageGames(const View& v) {
   VrrAlertCard(v);
   // Limitador: como se aplican los limites. Solo se muestra si hay algo que elegir (AMD o Intel, o RTSS).
@@ -7233,7 +7652,7 @@ static void PageGames(const View& v) {
           : recPrio ? std::string(T("Usar «Ritmo constante»", "Use “Steady pace”"))
                     : std::string();
       const float sw = !sugLabel.empty() ? ImGui::CalcTextSize(sugLabel.c_str()).x + pad2 : 0.0f;
-      float wrapW = w - (bw + mw + prw + (sw > 0 ? sw + 8 * scale : 0.0f) + 70 * scale);
+      float wrapW = w - (bw + mw + prw + (sw > 0 ? sw + 8 * scale : 0.0f) + 92 * scale);
       float warnH = c.warning.empty() ? 0.0f
                     : ImGui::CalcTextSize(c.warning.c_str(), nullptr, false, wrapW).y + 6 * scale;
       // La descripcion tambien se ajusta al espacio que dejan los botones (con cuatro, una linea larga
@@ -7247,7 +7666,33 @@ static void PageGames(const View& v) {
       if (!c.warning.empty())
         dl->AddRectFilled(ImVec2(p.x, p.y + 10 * scale), ImVec2(p.x + 3 * scale, p.y + h - 10 * scale),
                           Col(urgent ? kRed : kAmber), 2 * scale);
-      ImGui::SetCursorScreenPos(ImVec2(p.x + 16 * scale, p.y + 11 * scale));
+      // Desplegable (0.63): la zona del nombre y la descripcion abre el porque del limite.
+      const bool expanded = g_expandedGames.count(c.exe) > 0;
+      ImGui::SetCursorScreenPos(p);
+      ImGui::InvisibleButton("expand", ImVec2(std::max(1.0f, wrapW + 44 * scale), h));
+      const bool rowHover = ImGui::IsItemHovered();
+      if (ImGui::IsItemClicked()) {
+        if (expanded) g_expandedGames.erase(c.exe);
+        else g_expandedGames.insert(c.exe);
+      }
+      if (rowHover) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        ImGui::SetTooltip("%s", expanded ? T("Ocultar el porqué de este límite", "Hide why this game has its limit")
+                                         : T("Ver de dónde sale este límite y cómo le fue en la última partida",
+                                             "See where this limit comes from and how the last session went"));
+      }
+      {
+        const float cx = p.x + 20 * scale, cy = p.y + 11 * scale + ImGui::GetTextLineHeight() * 0.5f + 2 * scale, r = 4.5f * scale;
+        const ImU32 cc = Col(rowHover ? kText : kDim);
+        if (expanded) {
+          dl->AddLine(ImVec2(cx - r, cy - r * 0.5f), ImVec2(cx, cy + r * 0.5f), cc, 2.0f * scale);
+          dl->AddLine(ImVec2(cx, cy + r * 0.5f), ImVec2(cx + r, cy - r * 0.5f), cc, 2.0f * scale);
+        } else {
+          dl->AddLine(ImVec2(cx - r * 0.5f, cy - r), ImVec2(cx + r * 0.5f, cy), cc, 2.0f * scale);
+          dl->AddLine(ImVec2(cx + r * 0.5f, cy), ImVec2(cx - r * 0.5f, cy + r), cc, 2.0f * scale);
+        }
+      }
+      ImGui::SetCursorScreenPos(ImVec2(p.x + 38 * scale, p.y + 11 * scale));
       ImGui::BeginGroup();
       ImGui::PushFont(fontStrong);
       ImGui::TextUnformatted(c.label.c_str());
@@ -7370,6 +7815,10 @@ static void PageGames(const View& v) {
                                   "Returns this game to how it was. If “Apply limits” is on,\n"
                                   "the app will recalculate it the next time you play."));
       ImGui::SetCursorScreenPos(ImVec2(p.x, p.y + h + 8 * scale));
+      if (expanded) {
+        ImGui::SetCursorScreenPos(ImVec2(p.x, p.y + h - 4 * scale));
+        DrawLimitExplain(c, w);
+      }
       ImGui::PopID();
     }
   }
